@@ -37,6 +37,13 @@ fn get_lib_dir() -> Option<PathBuf> {
 /// 创建带有正确环境变量的 Command（自动设置 DYLD_FALLBACK_LIBRARY_PATH）
 fn make_command(tool: &Path) -> Command {
     let mut cmd = Command::new(tool);
+    #[cfg(target_os = "windows")]
+    {
+        // CREATE_NO_WINDOW: 避免每个 CLI 工具弹出控制台黑框
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
     if cfg!(target_os = "macos") {
         if let Some(lib_dir) = get_lib_dir() {
         // macOS: 设置 DYLD_FALLBACK_LIBRARY_PATH 让工具找到内置动态库
@@ -204,7 +211,14 @@ fn find_tool(name: &str) -> Option<PathBuf> {
                 }
             }
         }
-        if let Ok(out) = std::process::Command::new("where").arg(&exe_name).output() {
+        let mut where_cmd = std::process::Command::new("where");
+        where_cmd.arg(&exe_name);
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            where_cmd.creation_flags(0x08000000);
+        }
+        if let Ok(out) = where_cmd.output() {
             if out.status.success() {
                 if let Some(line) = String::from_utf8_lossy(&out.stdout).lines().next() {
                     let s = line.trim();

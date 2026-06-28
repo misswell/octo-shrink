@@ -436,8 +436,11 @@ pub fn open_in_finder(file_path: String) -> bool {
     }
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
         let _ = std::process::Command::new("explorer")
             .arg(format!("/select,{}", file_path))
+            .creation_flags(CREATE_NO_WINDOW)
             .spawn();
     }
     #[cfg(target_os = "linux")]
