@@ -3,8 +3,17 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use tokio::process::Command;
 use serde::{Deserialize, Serialize};
+
+/// 全局存储应用资源目录路径（在 setup 时初始化）
+static RESOURCE_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// 初始化资源目录路径（由 lib.rs setup 调用）
+pub fn set_resource_dir(path: PathBuf) {
+    let _ = RESOURCE_DIR.set(path);
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -122,8 +131,21 @@ fn analyze_quality(path: &Path) -> u32 {
     else { 80 }
 }
 
-/// Locate a CLI tool on the system.
+/// Locate a CLI tool: first from bundled resources, then system PATH.
 fn find_tool(name: &str) -> Option<PathBuf> {
+    // 1. 优先从应用内置资源目录查找（开箱即用）
+    if let Some(res_dir) = RESOURCE_DIR.get() {
+        let bundled = res_dir.join("bin").join(name);
+        if bundled.exists() {
+            return Some(bundled);
+        }
+    }
+    // 2. 开发模式：从 src-tauri/resources/bin 查找
+    let dev_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources").join("bin").join(name);
+    if dev_path.exists() {
+        return Some(dev_path);
+    }
+    // 3. 回退到系统 PATH（用户自行安装的工具）
     let extra = [
         "/opt/homebrew/opt/mozjpeg/bin",
         "/opt/homebrew/bin",
@@ -137,7 +159,6 @@ fn find_tool(name: &str) -> Option<PathBuf> {
             return Some(p);
         }
     }
-    // Try `which`
     if let Ok(out) = std::process::Command::new("which").arg(name).output() {
         if out.status.success() {
             let s = String::from_utf8_lossy(&out.stdout).trim().to_string();

@@ -29,11 +29,15 @@ pub fn run() {
             commands::export_all,
             commands::get_file_sizes,
         ])
-        .setup(|_app| {
+        .setup(|app| {
+            // 初始化压缩工具资源目录（开箱即用，无需用户安装 CLI 工具）
+            use tauri::Manager;
+            if let Ok(res_dir) = app.path().resource_dir() {
+                engine::set_resource_dir(res_dir);
+            }
             #[cfg(debug_assertions)]
             {
-                use tauri::Manager;
-                if let Some(window) = _app.get_webview_window("main") {
+                if let Some(window) = app.get_webview_window("main") {
                     window.open_devtools();
                 }
             }
