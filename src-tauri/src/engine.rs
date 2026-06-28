@@ -230,6 +230,22 @@ fn fallback_engine(original: Vec<u8>, out_type: &str, algorithm: &str, error: &s
     }
 }
 
+/// 压缩后体积未减小：返回原始数据，标记为"无优化空间"（不算失败）
+fn no_improvement(original: Vec<u8>, out_type: &str, algorithm: &str, orig_size: u64, comp_size: u64) -> EngineResult {
+    let msg = if comp_size >= orig_size {
+        format!("压缩后 {} > 原始 {}，原图已是最优压缩", format_bytes(comp_size), format_bytes(orig_size))
+    } else {
+        "压缩后体积未减小".into()
+    };
+    EngineResult {
+        success: true,  // 不算失败，只是没有优化空间
+        compressed: original,
+        out_type: out_type.into(),
+        algorithm: algorithm.into(),
+        error: Some(msg),
+    }
+}
+
 /// Run a CLI tool that writes to an output file, then read the output.
 async fn cli_to_file(
     tool: &Path,
@@ -310,7 +326,7 @@ async fn compress_png(file: &Path, options: &CompressOptions) -> EngineResult {
         }
     }
 
-    fallback_engine(original, "png", "pngquant", "Compression failed, using original")
+    no_improvement(original, "png", "pngquant", original_size, original_size)
 }
 
 fn compress_png_with_image(file: &Path) -> Option<Vec<u8>> {
@@ -377,7 +393,7 @@ async fn compress_jpg(file: &Path, options: &CompressOptions) -> EngineResult {
         }
     }
 
-    fallback_engine(original, "jpg", "mozjpeg", "Compression failed, using original")
+    no_improvement(original, "jpg", "mozjpeg", original_size, original_size)
 }
 
 fn compress_jpg_with_image(file: &Path, quality: u8) -> Option<Vec<u8>> {
@@ -421,7 +437,7 @@ async fn compress_gif(file: &Path, options: &CompressOptions) -> EngineResult {
     }
 
     // No good image-crate fallback for GIF animation; return original
-    fallback_engine(original, "gif", "gifsicle", "gifsicle not found, using original")
+    no_improvement(original, "gif", "gifsicle", original_size, original_size)
 }
 
 // ─── WebP ───────────────────────────────────────────────────────
@@ -452,7 +468,7 @@ async fn compress_to_webp(file: &Path, options: &CompressOptions) -> EngineResul
         }
     }
 
-    fallback_engine(original, "webp", "cwebp", "cwebp not found, using original")
+    no_improvement(original, "webp", "cwebp", original_size, original_size)
 }
 
 // ─── AVIF ───────────────────────────────────────────────────────
@@ -483,7 +499,7 @@ async fn compress_to_avif(file: &Path, options: &CompressOptions) -> EngineResul
         }
     }
 
-    fallback_engine(original, "avif", "avifenc", "avifenc not found, using original")
+    no_improvement(original, "avif", "avifenc", original_size, original_size)
 }
 
 // ─── JPEG XL ────────────────────────────────────────────────────
@@ -514,7 +530,7 @@ async fn compress_to_jxl(file: &Path, options: &CompressOptions) -> EngineResult
         }
     }
 
-    fallback_engine(original, "jxl", "cjxl", "cjxl not found, using original")
+    no_improvement(original, "jxl", "cjxl", original_size, original_size)
 }
 
 // ─── Dispatcher ─────────────────────────────────────────────────

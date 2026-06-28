@@ -398,6 +398,16 @@ async function startCompression() {
         ? (result.savings >= 0 ? '-' : '+') + Math.abs(result.savings).toFixed(1) + '%'
         : '失败';
       row.querySelector('.queue-item-status').textContent = savingsText;
+      // 如果有错误信息，添加警告图标
+      if (result.error) {
+        var statusEl = row.querySelector('.queue-item-status');
+        var errIcon = document.createElement('span');
+        errIcon.className = 'error-info-btn';
+        errIcon.title = result.error;
+        errIcon.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1L1 11h10L6 1z" fill="#f59e0b" stroke="#f59e0b" stroke-width="0.5"/><circle cx="6" cy="8" r="0.5" fill="white"/><path d="M6 4.5v2.5" stroke="white" stroke-width="0.8" stroke-linecap="round"/></svg>';
+        errIcon.onclick = function(e) { e.stopPropagation(); showErrorDetail(result.file, result.error); };
+        statusEl.appendChild(errIcon);
+      }
       results.push(result);
       updateStats();
       totalDone++;
@@ -512,6 +522,21 @@ function showResults() {
     `;
 
     resultsList.appendChild(item);
+
+    // 如果有错误信息，添加警告图标
+    if (r.error) {
+      var savingsEl = item.querySelector('.result-savings');
+      if (savingsEl) {
+        var errIcon = document.createElement('span');
+        errIcon.className = 'error-info-btn';
+        errIcon.title = '点击查看详情';
+        errIcon.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1L1 11h10L6 1z" fill="#f59e0b" stroke="#f59e0b" stroke-width="0.5"/><circle cx="6" cy="8" r="0.5" fill="white"/><path d="M6 4.5v2.5" stroke="white" stroke-width="0.8" stroke-linecap="round"/></svg>';
+        (function(err, file) {
+          errIcon.onclick = function(e) { e.stopPropagation(); showErrorDetail(file, err); };
+        })(r.error, r.file);
+        savingsEl.appendChild(errIcon);
+      }
+    }
   }
 
   resultsPanel.scrollIntoView({ behavior: 'smooth' });
