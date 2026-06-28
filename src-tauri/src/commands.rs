@@ -107,6 +107,11 @@ fn write_output_file(
     if !result.success || compressed.is_empty() {
         return;
     }
+    // 如果压缩后体积没有变小，不写入文件（原图已是最优）
+    if (compressed.len() as u64) >= result.original_size {
+        result.error = Some("原图已是最优，无需替换".into());
+        return;
+    }
     let out_ext = format!(".{}", result.out_type);
     let out_path: Option<PathBuf> = match options.output_mode.as_str() {
         "replace" => {
