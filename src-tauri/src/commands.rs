@@ -175,9 +175,7 @@ async fn compress_batch(
     state.cancel_queue.lock().unwrap().clear();
     let all_files = collect_image_files(&file_paths);
     let total = all_files.len();
-    let mut results = Vec::new();
-    let mut processed = 0usize;
-    let mut skipped = 0usize;
+    let _results: Vec<CompressResult> = Vec::new();
 
     // Emit "queued" for all files
     for fp in &all_files {
@@ -193,10 +191,26 @@ async fn compress_batch(
         );
     }
 
+    // 3 线程并发压缩
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    let options = Arc::new(options);
+    let file_paths_arc = Arc::new(file_paths);
+    let app_arc = Arc::new(app.clone());
+    let cancel_queue = &state.cancel_queue;
+    let results_arc = Arc::new(Mutex::new(Vec::<CompressResult>::new()));
+    let processed_arc = Arc::new(Mutex::new(0usize));
+    let skipped_arc = Arc::new(Mutex::new(0usize));
+
+    // 信号量限制并发数为 3
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(3));
+
+    let mut handles = Vec::new();
     for file_path in all_files {
         // Check cancellation
         let cancelled = {
-            let mut cq = state.cancel_queue.lock().unwrap();
+            let mut cq = cancel_queue.lock().unwrap();
             if cq.contains(&file_path) {
                 cq.remove(&file_path);
                 true
@@ -205,13 +219,15 @@ async fn compress_batch(
             }
         };
         if cancelled {
-            skipped += 1;
-            processed += 1;
-            let _ = app.emit(
+            let mut sk = skipped_arc.lock().await;
+            *sk += 1;
+            let mut pr = processed_arc.lock().await;
+            *pr += 1;
+            let _ = app_arc.emit(
                 "compress-progress",
                 ProgressPayload {
-                    total: total - skipped,
-                    current: processed,
+                    total: total - *sk,
+                    current: *pr,
                     file: file_path.clone(),
                     status: "cancelled".into(),
                     result: None,
@@ -220,47 +236,73 @@ async fn compress_batch(
             continue;
         }
 
-        // Yield so the UI stays responsive
-        tokio::task::yield_now().await;
-
         // Emit "starting"
-        let _ = app.emit(
-            "compress-progress",
-            ProgressPayload {
-                total: total - skipped,
-                current: processed,
-                file: file_path.clone(),
-                status: "starting".into(),
-                result: None,
-            },
-        );
+        {
+            let pr = processed_arc.lock().await;
+            let sk = skipped_arc.lock().await;
+            let _ = app_arc.emit(
+                "compress-progress",
+                ProgressPayload {
+                    total: total - *sk,
+                    current: *pr,
+                    file: file_path.clone(),
+                    status: "starting".into(),
+                    result: None,
+                },
+            );
+        }
 
-        let path = PathBuf::from(&file_path);
-        let engine_result = if use_smart {
-            engine::compress_smart(&path, &options).await
-        } else {
-            engine::compress_image(&path, &options).await
-        };
+        let permit = semaphore.clone().acquire_owned().await.unwrap();
+        let opts = options.clone();
+        let fps = file_paths_arc.clone();
+        let app_c = app_arc.clone();
+        let results_c = results_arc.clone();
+        let processed_c = processed_arc.clone();
+        let skipped_c = skipped_arc.clone();
+        let fp = file_path.clone();
 
-        let mut result = build_result(&file_path, &engine_result);
-        write_output_file(&mut result, &path, &engine_result.compressed, &file_paths, &options);
-        results.push(result.clone());
-        processed += 1;
+        handles.push(tokio::spawn(async move {
+            let _permit = permit; // 持有信号量直到压缩完成
 
-        let _ = app.emit(
-            "compress-progress",
-            ProgressPayload {
-                total: total - skipped,
-                current: processed,
-                file: file_path.clone(),
-                status: "".into(),
-                result: Some(result),
-            },
-        );
+            let path = PathBuf::from(&fp);
+            let engine_result = if use_smart {
+                engine::compress_smart(&path, &opts).await
+            } else {
+                engine::compress_image(&path, &opts).await
+            };
+
+            let mut result = build_result(&fp, &engine_result);
+            write_output_file(&mut result, &path, &engine_result.compressed, &fps, &opts);
+
+            {
+                let mut pr = processed_c.lock().await;
+                *pr += 1;
+                let sk = *skipped_c.lock().await;
+                let _ = app_c.emit(
+                    "compress-progress",
+                    ProgressPayload {
+                        total: total - sk,
+                        current: *pr,
+                        file: fp.clone(),
+                        status: "".into(),
+                        result: Some(result.clone()),
+                    },
+                );
+            }
+
+            let mut res = results_c.lock().await;
+            res.push(result);
+        }));
+    }
+
+    // 等待所有任务完成
+    for handle in handles {
+        let _ = handle.await;
     }
 
     state.cancel_queue.lock().unwrap().clear();
-    results
+    let final_results = results_arc.lock().await.clone();
+    final_results
 }
 
 // ─── Tauri commands ─────────────────────────────────────────────
@@ -499,6 +541,44 @@ pub fn restore_original(
     }
 }
 
+
+/// 一键恢复全部原图
+#[derive(Serialize)]
+pub struct RestoreAllResult {
+    success: bool,
+    restored: usize,
+    failed: usize,
+    message: String,
+}
+
+#[tauri::command]
+pub fn restore_all(results: Vec<CompressResult>) -> RestoreAllResult {
+    let mut restored = 0usize;
+    let mut failed = 0usize;
+
+    for r in &results {
+        if !r.success {
+            continue;
+        }
+        let single = restore_original(
+            r.file.clone(),
+            r.backup_path.clone(),
+            r.output_mode.clone().unwrap_or_else(|| "suffix".into()),
+        );
+        if single.success {
+            restored += 1;
+        } else {
+            failed += 1;
+        }
+    }
+
+    RestoreAllResult {
+        success: true,
+        restored,
+        failed,
+        message: format!("已恢复 {} 个文件", restored),
+    }
+}
 
 #[tauri::command]
 pub fn get_file_sizes(file_paths: Vec<String>) -> Vec<u64> {

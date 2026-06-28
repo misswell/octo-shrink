@@ -572,6 +572,26 @@ async function restoreOriginal(filePath, backupPath, outputMode) {
   }
 }
 
+async function restoreAllOriginals() {
+  if (results.length === 0) return;
+  var successCount = 0;
+  for (var i = 0; i < results.length; i++) {
+    var r = results[i];
+    if (!r.success) continue;
+    try {
+      await invoke('restore_original', {
+        filePath: r.file,
+        backupPath: r.backupPath || null,
+        outputMode: r.outputMode || 'suffix'
+      });
+      successCount++;
+    } catch(e) { /* ignore */ }
+  }
+  showToast('已恢复 ' + successCount + ' 个文件到原图');
+  results = [];
+  showResults();
+}
+
 async function exportAll() {
   if (results.length === 0) return;
   const count = await invoke('export_all', { results: results });

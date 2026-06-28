@@ -28,6 +28,7 @@ pub fn run() {
             commands::restore_original,
             commands::export_all,
             commands::get_file_sizes,
+            commands::restore_all,
         ])
         .setup(|app| {
             // 初始化压缩工具资源目录（开箱即用，无需用户安装 CLI 工具）
