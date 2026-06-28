@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Tauri build artifacts
+src-tauri/target/
+src-tauri/gen/
+
+# Original Electron version (not part of Tauri project)
+electron/
+
+# OS files
+.DS_Store
+*.log

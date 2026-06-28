@@ -1,0 +1,10 @@
+{
+  "name": "octor-compressor-tauri",
+  "version": "2.0.0",
+  "description": "Octor Compressor - Tauri edition",
+  "scripts": {
+    "dev": "cargo tauri dev",
+    "build": "cargo tauri build"
+  },
+  "license": "MIT"
+}

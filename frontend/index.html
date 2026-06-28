@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Octor Compressor</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Title Bar -->
+  <div class="titlebar">
+    <div class="titlebar-traffic-spacer"></div>
+    <div class="titlebar-drag">
+      <img src="octo-icon.png" class="titlebar-icon-img" alt="Octor">
+      <span class="titlebar-text">Octor Compressor</span>
+    </div>
+    <div class="titlebar-actions">
+      <button class="tb-btn" onclick="toggleWindowControls()" title="关于">
+        <svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.2"/><text x="7" y="10" text-anchor="middle" font-size="9" fill="currentColor">i</text></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Main Layout -->
+  <div class="container">
+    <!-- Drop Zone -->
+    <div class="dropzone" id="dropzone">
+      <div class="dropzone-content" id="dropzoneContent">
+        <div class="dropzone-icon">
+          <svg width="56" height="56" viewBox="0 0 56 56" fill="none">
+            <rect x="6" y="6" width="44" height="44" rx="8" stroke="#4A90D9" stroke-width="2" fill="none"/>
+            <path d="M28 18v20M18 28h20" stroke="#4A90D9" stroke-width="2.5" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <h2>拖拽图片或文件夹到此处</h2>
+        <p>支持 PNG、JPG、GIF、WebP、BMP 格式 · 自动批量压缩</p>
+        <div class="dropzone-buttons">
+          <button class="btn btn-primary" onclick="selectFiles()">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><path d="M7 0a1 1 0 011 1v5h5a1 1 0 110 2H8v5a1 1 0 11-2 0V8H1a1 1 0 110-2h5V1a1 1 0 011-1z"/></svg>
+            选择文件
+          </button>
+          <button class="btn btn-secondary" onclick="selectFolder()">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><path d="M1 2.5A1.5 1.5 0 012.5 1h3.172a1.5 1.5 0 011.06.44l.94.94H11.5A1.5 1.5 0 0113 3.88V11.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 011 11.5V2.5z"/></svg>
+            选择文件夹
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Queue Panel (unified: shows files waiting + compressing + done) -->
+    <div class="queue-panel" id="queuePanel" style="display:none;">
+      <div class="queue-header">
+        <h3>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 3h12v2H2V3zm0 4h12v2H2V7zm0 4h8v2H2v-2z"/></svg>
+          文件队列
+        </h3>
+        <div class="queue-header-right">
+          <span class="queue-summary" id="queueSummary">0 个文件</span>
+          <span class="progress-summary" id="progressSummary" style="display:none;"></span>
+          <button class="btn btn-small btn-ghost" onclick="clearAllFiles()" title="清空列表">清除全部</button>
+        </div>
+      </div>
+      <div class="queue-stats" id="queueStats" style="display:none;">
+        <div class="stat-item">
+          <span class="stat-label">原始大小</span>
+          <span class="stat-value stat-original" id="statOriginal">0B</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">压缩后</span>
+          <span class="stat-value stat-compressed" id="statCompressed">0B</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">已节省</span>
+          <span class="stat-value stat-savings" id="totalSavings">0B</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">压缩率</span>
+          <span class="stat-value stat-rate" id="totalRate">0%</span>
+        </div>
+      </div>
+      <div class="file-queue-list" id="fileQueueList"></div>
+      <div class="queue-actions">
+        <button class="btn btn-secondary" onclick="selectFiles()">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><path d="M7 0a1 1 0 011 1v5h5a1 1 0 110 2H8v5a1 1 0 11-2 0V8H1a1 1 0 110-2h5V1a1 1 0 011-1z"/></svg>
+          追加文件
+        </button>
+        <button class="btn btn-primary btn-full" id="startCompressBtn" onclick="startCompression()">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1L2 7h4v5h4V7h4L8 1z"/></svg>
+          开始压缩
+        </button>
+      </div>
+    </div>
+
+    <!-- Settings Panel -->
+    <div class="settings-panel" id="settingsPanel" style="display:none;">
+      <div class="settings-header">
+        <h3>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1L2 7h4v5h4V7h4L8 1z"/></svg>
+          压缩设置
+        </h3>
+      </div>
+      <div class="settings-body">
+        <div class="settings-row">
+          <label>压缩质量</label>
+          <div class="quality-control">
+            <input type="range" id="qualitySlider" min="10" max="100" value="75">
+            <span id="qualityValue">75%</span>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label>输出模式</label>
+          <div class="radio-group">
+            <label class="radio-label">
+              <input type="radio" name="outputMode" value="replace" checked>
+              <span class="radio-custom"></span>
+              覆盖原文件
+            </label>
+            <label class="radio-label">
+              <input type="radio" name="outputMode" value="suffix">
+              <span class="radio-custom"></span>
+              添加 _compressed 后缀
+            </label>
+            <label class="radio-label">
+              <input type="radio" name="outputMode" value="folder">
+              <span class="radio-custom"></span>
+              输出到指定文件夹
+            </label>
+          </div>
+        </div>
+        <div class="settings-row" id="outputDirRow" style="display:none;">
+          <label>输出目录</label>
+          <div class="dir-picker">
+            <span id="outputDirDisplay" class="dir-display">未选择</span>
+            <button class="btn btn-small" onclick="selectOutputDir()">浏览</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label>智能模式</label>
+          <div class="toggle-wrapper">
+            <label class="toggle">
+              <input type="checkbox" id="smartMode" checked>
+              <span class="toggle-slider"></span>
+            </label>
+            <span class="toggle-label">自动选择最佳算法和参数</span>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label>转换为 WebP</label>
+          <div class="toggle-wrapper">
+            <label class="toggle">
+              <input type="checkbox" id="convertToWebp">
+              <span class="toggle-slider"></span>
+            </label>
+            <span class="toggle-label">输出为 WebP 格式（更小体积）</span>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label>输出格式</label>
+          <div class="select-wrapper">
+            <select id="outputFormat" class="settings-select">
+              <option value="original">保持原格式</option>
+              <option value="jpg">JPEG</option>
+              <option value="png">PNG</option>
+              <option value="webp">WebP</option>
+              <option value="avif">AVIF</option>
+              <option value="jxl">JPEG XL</option>
+            </select>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label>压缩引擎</label>
+          <div class="select-wrapper">
+            <select id="compressionBackend" class="settings-select">
+              <option value="auto">自动选择（推荐）</option>
+              <option value="sharp">现代引擎（推荐）</option>
+              <option value="cli">CLI 工具</option>
+            </select>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label>压缩力度</label>
+          <div class="select-wrapper">
+            <select id="compressionEffort" class="settings-select">
+              <option value="4">快速</option>
+              <option value="6" selected>平衡（推荐）</option>
+              <option value="7">高质量</option>
+              <option value="9">极致压缩（慢）</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+
+
+    <!-- Results Panel -->
+    <div class="results-panel" id="resultsPanel" style="display:none;">
+      <div class="results-header">
+        <h3>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 3h12v2H2V3zm0 4h12v2H2V7zm0 4h8v2H2v-2z"/></svg>
+          压缩结果
+        </h3>
+        <div class="results-actions">
+          <button class="btn btn-small" onclick="clearResults()">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M2 1h8v1H2V1zm1 2h6v8H3V3z"/></svg>
+            清空
+          </button>
+          <button class="btn btn-small btn-primary" onclick="exportAll()">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M6 1l4 4H7v4H5V5H2l4-4z"/></svg>
+            全部导出
+          </button>
+        </div>
+      </div>
+      <div class="results-summary" id="resultsSummary">
+        <span>共压缩 <strong id="resultCount">0</strong> 个文件，节省 <strong id="resultTotalSavings">0B</strong></span>
+      </div>
+      <div class="results-list" id="resultsList"></div>
+    </div>
+  </div>
+
+  <!-- Comparison Modal -->
+  <div class="modal-backdrop" id="modalBackdrop" style="display:none;" onclick="closeCompare()"></div>
+  <div class="compare-modal" id="comparePanel" style="display:none;">
+    <div class="compare-modal-header">
+     <h3>
+        <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="7" height="12" rx="1.5"/><rect x="11" y="4" width="7" height="12" rx="1.5"/><path d="M9 10h2"/></svg>
+        原图对比
+     </h3>
+     <div class="compare-toolbar-right">
+       <div class="compare-zoom-control">
+         <button class="zoom-step-btn" onclick="stepZoom(-0.25)" title="缩小">−</button>
+         <input type="range" class="zoom-slider" id="zoomSlider" min="0.1" max="8" step="0.1" value="1">
+         <button class="zoom-step-btn" onclick="stepZoom(0.25)" title="放大">+</button>
+         <span class="zoom-value" id="zoomValue">100%</span>
+         <button class="zoom-reset-btn" onclick="setCompareZoom(1)" title="重置缩放">⟲</button>
+       </div>
+       <button class="btn btn-icon-close compare-fullscreen-btn" id="fullscreenBtn" onclick="toggleFullscreen()" title="全屏">
+         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5V2h3M9 2h3v3M12 9v3H9M5 12H2V9"/></svg>
+       </button>
+       <button class="btn btn-icon-close" onclick="closeCompare()" title="关闭">
+         <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+       </button>
+     </div>
+   </div>
+<div class="compare-modal-body" id="compareModalBody">
+      <div class="compare-slider-outer" id="compareSliderOuter">
+        <div class="compare-slider-container" id="compareSliderContainer">
+          <div class="compare-img-wrapper" id="compareImgWrapper">
+            <img id="compareCompressedImg" class="compare-img-base" alt="压缩后">
+            <img id="compareOriginalImg" class="compare-img-overlay" alt="原图">
+          </div>
+        </div>
+        <div class="compare-label label-left">原图</div>
+        <div class="compare-label label-right">压缩后</div>
+        <div class="compare-handle" id="compareHandle">
+          <div class="compare-handle-line"></div>
+          <div class="compare-handle-circle">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path d="M4 3l-3 5 3 5" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M12 3l3 5-3 5" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+        </div>
+        <input type="range" class="compare-slider-bar" id="compareRange" min="0" max="100" value="50">
+      </div>
+<div class="compare-info">
+   <div class="compare-info-item" style="width:100%;margin-bottom:4px;">
+     <span class="compare-info-label">文件名</span>
+ <span class="compare-info-value" id="compareFilename">-</span>
+     </div>
+     <div class="compare-info-row">
+       <div class="compare-info-item">
+         <span class="compare-info-label">原图大小</span>
+         <span class="compare-info-value original" id="compareOriginalSize">-</span>
+       </div>
+       <div class="compare-info-item">
+         <span class="compare-info-label">压缩后大小</span>
+         <span class="compare-info-value compressed" id="compareCompressedSize">-</span>
+       </div>
+       <div class="compare-info-item">
+         <span class="compare-info-label">节省</span>
+         <span class="compare-info-value savings" id="compareSavings">-</span>
+       </div>
+       <div class="compare-info-item">
+         <span class="compare-info-label">算法</span>
+         <span class="compare-info-value" id="compareAlgorithm">-</span>
+       </div>
+     </div>
+   </div>
+   <div class="compare-recompress">
+     <div class="recompress-row">
+       <label>重新压缩质量</label>
+       <input type="range" id="recompressQuality" min="10" max="100" value="75">
+       <span id="recompressQualityValue">75%</span>
+       <button class="btn btn-primary btn-recompress" id="recompressBtn" onclick="recompressWithQuality(document.getElementById('recompressQuality').value)">
+         <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M1 6a5 5 0 0110 0H9a3 3 0 10-3 3v2a5 5 0 01-5-5z"/></svg>
+         重新压缩
+       </button>
+     </div>
+   </div>
+   <div class="compare-modal-footer">
+     <button class="btn btn-secondary" onclick="restoreFromCompare()">
+       <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1a6 6 0 100 12A6 6 0 007 1zm0 10V7H4l3-4 3 4H7v4z"/></svg>
+       恢复原图
+     </button>
+     <button class="btn btn-primary" onclick="closeCompare()">关闭</button>
+   </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
