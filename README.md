@@ -3,7 +3,7 @@
 > **免费开源的图片压缩神器** — 图片压缩神器，帮你的图片减减肥
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-macOS-blue)](https://github.com/misswell/octoshrink/releases)
+[![Platform](https://img.shields.io/badge/platform-macOS-blue)](https://github.com/misswell/octo-shrink/releases)
 [![Tauri](https://img.shields.io/badge/Tauri-2.x-orange)](https://tauri.app)
 
 ## ✨ 特性
