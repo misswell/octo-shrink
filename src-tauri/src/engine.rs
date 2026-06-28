@@ -15,6 +15,40 @@ pub fn set_resource_dir(path: PathBuf) {
     let _ = RESOURCE_DIR.set(path);
 }
 
+/// 获取库目录路径（resources/lib）
+fn get_lib_dir() -> Option<PathBuf> {
+    // 1. 生产环境：从资源目录查找
+    if let Some(res_dir) = RESOURCE_DIR.get() {
+        let lib_dir = res_dir.join("lib");
+        if lib_dir.exists() {
+            return Some(lib_dir);
+        }
+    }
+    // 2. 开发模式：从 src-tauri/resources/lib 查找
+    let dev_lib = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources").join("lib");
+    if dev_lib.exists() {
+        return Some(dev_lib);
+    }
+    None
+}
+
+/// 创建带有正确环境变量的 Command（自动设置 DYLD_FALLBACK_LIBRARY_PATH）
+fn make_command(tool: &Path) -> Command {
+    let mut cmd = Command::new(tool);
+    if let Some(lib_dir) = get_lib_dir() {
+        // macOS: 设置 DYLD_FALLBACK_LIBRARY_PATH 让工具找到内置动态库
+        // 这样无需修改二进制文件的依赖路径，保持原始签名有效
+        let current = std::env::var("DYLD_FALLBACK_LIBRARY_PATH").unwrap_or_default();
+        let combined = if current.is_empty() {
+            lib_dir.to_string_lossy().into_owned()
+        } else {
+            format!("{}:{}", lib_dir.to_string_lossy(), current)
+        };
+        cmd.env("DYLD_FALLBACK_LIBRARY_PATH", combined);
+    }
+    cmd
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
@@ -202,7 +236,7 @@ async fn cli_to_file(
     args: &[String],
     output_path: &Path,
 ) -> Option<Vec<u8>> {
-    let result = Command::new(tool)
+    let result = make_command(tool)
         .args(args)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -259,7 +293,7 @@ async fn compress_png(file: &Path, options: &CompressOptions) -> EngineResult {
                 "safe".into(),
                 out.to_string_lossy().into(),
             ];
-            let _ = Command::new(&tool).args(&args).stdout(std::process::Stdio::null())
+            let _ = make_command(&tool).args(&args).stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null()).status().await;
             if let Ok(data) = fs::read(&out) {
                 if !data.is_empty() && (data.len() as u64) < original_size {
@@ -313,7 +347,7 @@ async fn compress_jpg(file: &Path, options: &CompressOptions) -> EngineResult {
             ppm.extend_from_slice(format!("P6\n{} {}\n255\n", w, h).as_bytes());
             ppm.extend_from_slice(&rgb);
             // Pipe PPM to cjpeg stdin
-            if let Ok(mut child) = Command::new(&tool)
+            if let Ok(mut child) = make_command(&tool)
                 .args([
                     "-quality", &quality.to_string(),
                     "-optimize", "-progressive",
