@@ -20,6 +20,65 @@ function dirname(p) {
   return parts.join('/') || '.';
 }
 
+// ─── 主题管理（自动/亮色/暗黑）──────────────────────────────────
+// 三种模式：auto（跟随系统）、light、dark，循环切换
+const THEMES = ['auto', 'light', 'dark'];
+let currentTheme = localStorage.getItem('octor-theme') || 'auto';
+
+function applyTheme(theme) {
+  currentTheme = theme;
+  localStorage.setItem('octor-theme', theme);
+
+  if (theme === 'dark') {
+    document.documentElement.setAttribute('data-theme', 'dark');
+  } else if (theme === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+  } else {
+    // auto: 跟随系统
+    document.documentElement.removeAttribute('data-theme');
+  }
+
+  // 更新图标显示
+  const icons = document.querySelectorAll('.theme-icon');
+  icons.forEach(ic => ic.style.display = 'none');
+  const activeIcon = document.querySelector('.theme-icon-' + theme);
+  if (activeIcon) activeIcon.style.display = '';
+
+  // 更新按钮提示
+  const btn = document.getElementById('themeToggleBtn');
+  if (btn) {
+    const labels = { auto: '自动（跟随系统）', light: '亮色模式', dark: '暗黑模式' };
+    btn.title = '当前: ' + labels[theme] + ' · 点击切换';
+  }
+}
+
+function cycleTheme() {
+  const idx = THEMES.indexOf(currentTheme);
+  const next = THEMES[(idx + 1) % THEMES.length];
+  applyTheme(next);
+  const labels = { auto: '自动', light: '亮色', dark: '暗黑' };
+  showToast('主题: ' + labels[next]);
+}
+
+// 监听系统主题变化（auto 模式下实时响应）
+if (window.matchMedia) {
+  const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+  const handler = () => {
+    if (currentTheme === 'auto') {
+      // 触发重新应用（移除再添加属性，强制 CSS 重新计算）
+      document.documentElement.removeAttribute('data-theme');
+    }
+  };
+  if (mediaQuery.addEventListener) {
+    mediaQuery.addEventListener('change', handler);
+  } else if (mediaQuery.addListener) {
+    mediaQuery.addListener(handler);
+  }
+}
+
+// 初始化主题
+applyTheme(currentTheme);
+
 // State
 let files = [];
 let results = [];

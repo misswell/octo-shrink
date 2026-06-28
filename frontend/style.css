@@ -30,6 +30,49 @@
   --glass-border: rgba(255,255,255,0.30);
   --glass-bg: rgba(255,255,255,0.75);
 }
+/* ─── 暗黑模式 ─────────────────────────────────────────────────── */
+[data-theme="dark"] {
+  --primary: #818cf8;
+  --primary-hover: #6366f1;
+  --primary-light: rgba(129,140,248,0.15);
+  --primary-glow: rgba(129,140,248,0.30);
+  --bg: #0f172a;
+  --card: rgba(30,41,59,0.82);
+  --card-border: rgba(51,65,85,0.50);
+  --border: #334155;
+  --border-light: #1e293b;
+  --text: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-tertiary: #64748b;
+  --success: #34d399;
+  --success-light: rgba(52,211,153,0.10);
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --danger-light: rgba(248,113,113,0.10);
+  --shadow: 0 1px 3px rgba(0,0,0,0.30), 0 1px 2px rgba(0,0,0,0.20);
+  --shadow-lg: 0 8px 32px rgba(0,0,0,0.40);
+  --modal-overlay: rgba(0,0,0,0.70);
+  --glass-border: rgba(51,65,85,0.40);
+  --glass-bg: rgba(15,23,42,0.80);
+  /* 暗黑模式专用变量 */
+  --queue-done-bg: rgba(52,211,153,0.08);
+  --queue-failed-bg: rgba(248,113,113,0.08);
+  --slider-track: #334155;
+  --input-bg: rgba(30,41,59,0.60);
+  --hover-bg: rgba(51,65,85,0.40);
+  --code-bg: rgba(15,23,42,0.60);
+}
+
+/* 亮色模式专用变量补充 */
+:root {
+  --queue-done-bg: #f0fdf4;
+  --queue-failed-bg: #fef2f2;
+  --slider-track: #e2e8f0;
+  --input-bg: rgba(255,255,255,0.60);
+  --hover-bg: rgba(241,245,249,0.60);
+  --code-bg: #f8fafc;
+}
+
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
@@ -524,7 +567,7 @@ body {
   left: 0;
   right: 0;
   bottom: 0;
-  background: #d0d5dd;
+  background: var(--slider-track);
   transition: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   border-radius: 22px;
 }
@@ -586,7 +629,7 @@ body {
 .progress-bar {
   flex: 1;
   height: 6px;
-  background: #e2e8f0;
+  background: var(--slider-track);
   border-radius: 3px;
   overflow: hidden;
 }
@@ -751,8 +794,8 @@ body {
 
 .file-queue-item.waiting { opacity: 0.8; }
 .file-queue-item.compressing { background: var(--primary-light, #e8f0fe); }
-.file-queue-item.done { background: #f0fdf4; }
-.file-queue-item.failed { background: #fef2f2; }
+.file-queue-item.done { background: var(--queue-done-bg); }
+.file-queue-item.failed { background: var(--queue-failed-bg); }
 .file-queue-item.cancelled { opacity: 0.4; }
 
 .file-queue-item .queue-item-icon {
@@ -885,8 +928,8 @@ body {
 
 .progress-file-row.waiting { opacity: 0.7; }
 .progress-file-row.compressing { background: var(--primary-light, #e8f0fe); }
-.progress-file-row.done { background: #f0fdf4; }
-.progress-file-row.failed { background: #fef2f2; }
+.progress-file-row.done { background: var(--queue-done-bg); }
+.progress-file-row.failed { background: var(--queue-failed-bg); }
 .progress-file-row.cancelled { opacity: 0.35; }
 
 /* Per-file mini progress bar */
@@ -1028,7 +1071,7 @@ body {
 }
 
 .result-item:hover {
-  background: #e8edf5;
+  background: var(--input-bg);
   transform: translateX(2px);
 }
 
@@ -1129,12 +1172,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: var(--border);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: var(--text-tertiary);
 }
 
 /* ─── Toast ─────────────────────────────────────────────────── */
@@ -1284,7 +1327,7 @@ body {
   height: 4px;
   -webkit-appearance: none;
   appearance: none;
-  background: #d0d0d0;
+  background: var(--slider-track);
   border-radius: 2px;
   outline: none;
   cursor: pointer;
@@ -1357,7 +1400,7 @@ body {
   position: relative;
   width: 100%;
   border-radius: 12px;
-  background: #1a1a2e;
+  background: var(--code-bg);
   aspect-ratio: 4 / 3;
   cursor: ew-resize;
   margin-bottom: 16px;
@@ -1534,7 +1577,7 @@ body {
   width: 140px;
   height: 4px;
   -webkit-appearance: none;
-  background: #e2e8f0;
+  background: var(--slider-track);
   border-radius: 2px;
   outline: none;
 }
@@ -1623,3 +1666,43 @@ body {
    cursor: ew-resize;
    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
  }
+
+/* ─── 暗黑模式特定调整 ─────────────────────────────────────────── */
+[data-theme="dark"] .dropzone {
+  border-color: var(--border);
+}
+[data-theme="dark"] .dropzone.dragover {
+  border-color: var(--primary);
+  background: var(--primary-light);
+}
+[data-theme="dark"] .settings-select {
+  background-color: var(--input-bg);
+  color: var(--text);
+}
+[data-theme="dark"] .settings-select option {
+  background: #1e293b;
+  color: var(--text);
+}
+[data-theme="dark"] input[type="range"] {
+  background: var(--slider-track);
+}
+[data-theme="dark"] .compare-modal {
+  background: #1e293b;
+}
+[data-theme="dark"] .compare-info {
+  background: rgba(30,41,59,0.60);
+}
+[data-theme="dark"] .compare-recompress {
+  background: rgba(30,41,59,0.60);
+}
+[data-theme="dark"] .toast {
+  background: rgba(30,41,59,0.95);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+[data-theme="dark"] .result-icon {
+  background: var(--hover-bg);
+}
+[data-theme="dark"] .modal-backdrop {
+  background: rgba(0,0,0,0.70);
+}
