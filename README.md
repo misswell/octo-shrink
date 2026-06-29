@@ -3,8 +3,18 @@
 > **免费开源的图片压缩神器** — 图片压缩神器，帮你的图片减减肥
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-macOS-blue)](https://github.com/misswell/octo-shrink/releases)
+[![Platform](https://img.shields.io/badge/platform-macOS·Windows·Linux-blue)](https://github.com/misswell/octo-shrink/releases)
 [![Tauri](https://img.shields.io/badge/Tauri-2.x-orange)](https://tauri.app)
+
+![章小压 · OctoShrink](assets/banner.png)
+
+## 📸 截图
+
+| 亮色模式 | 暗黑模式 |
+|---------|---------|
+| ![亮色模式](assets/screenshot-light.png) | ![暗黑模式](assets/screenshot-dark.png) |
+
+![压缩对比](assets/compare.png)
 
 ## ✨ 特性
 
