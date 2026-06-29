@@ -40,7 +40,7 @@ fn make_command(tool: &Path) -> Command {
     #[cfg(target_os = "windows")]
     {
         // CREATE_NO_WINDOW: 避免每个 CLI 工具弹出控制台黑框
-        use tokio::os::windows::process::CommandExt;
+        use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
