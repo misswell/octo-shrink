@@ -443,10 +443,28 @@ pub fn open_in_finder(file_path: String) -> bool {
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
-        let _ = std::process::Command::new("explorer")
-            .arg(format!("/select,{}", file_path))
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn();
+        let path = PathBuf::from(&file_path);
+        let canonical = path.canonicalize().unwrap_or(path);
+        if canonical.is_file() {
+            let _ = std::process::Command::new("explorer.exe")
+                .arg("/select,")
+                .arg(&canonical)
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn();
+        } else {
+            let dir = if canonical.is_dir() {
+                canonical
+            } else {
+                canonical
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| PathBuf::from(&file_path))
+            };
+            let _ = std::process::Command::new("explorer.exe")
+                .arg(dir)
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn();
+        }
     }
     #[cfg(target_os = "linux")]
     {

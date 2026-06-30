@@ -25,10 +25,20 @@ function imageFileSrc(filePath) {
   return convertFileSrc(filePath);
 }
 
-function setImageSource(img, src) {
+function setImageSource(img, src, timeoutMs) {
   return new Promise((resolve, reject) => {
-    img.onload = () => resolve(true);
-    img.onerror = () => reject(new Error('image load failed'));
+    var timer = null;
+    var done = function(ok) {
+      if (timer) clearTimeout(timer);
+      img.onload = null;
+      img.onerror = null;
+      ok ? resolve(true) : reject(new Error('image load failed'));
+    };
+    img.onload = () => done(true);
+    img.onerror = () => done(false);
+    if (timeoutMs) {
+      timer = setTimeout(function() { done(false); }, timeoutMs);
+    }
     img.src = src;
   });
 }
@@ -38,7 +48,7 @@ async function loadOriginalImage(img, filePath) {
   const directSrc = imageFileSrc(filePath);
   if (directSrc) {
     try {
-      await setImageSource(img, directSrc);
+      await setImageSource(img, directSrc, 1500);
       return true;
     } catch (_) {
       img.removeAttribute('src');
@@ -47,7 +57,7 @@ async function loadOriginalImage(img, filePath) {
 
   const dataUrl = await invoke('read_image_dataurl', { filePath: filePath, preview: false });
   if (!dataUrl) return false;
-  await setImageSource(img, dataUrl);
+  await setImageSource(img, dataUrl, 5000);
   return true;
 }
 
@@ -811,7 +821,12 @@ async function openCompare(result) {
 
   // Load compressed image from output path
   const compressedPath = result.outputPath || result.file;
-  await loadOriginalImage(compareCompressedImg, compressedPath);
+  const loadedCompressed = await loadOriginalImage(compareCompressedImg, compressedPath);
+  if (!loadedCompressed) {
+    showToast('无法加载压缩图');
+    releaseCompareImages();
+    return;
+  }
 
   // Set container aspect-ratio to match image
   var outer = document.getElementById('compareSliderOuter');
