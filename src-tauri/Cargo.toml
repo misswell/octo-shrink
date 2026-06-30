@@ -1,6 +1,6 @@
 [package]
 name = "octoshrink"
-version = "2.1.10"
+version = "2.1.11"
 description = "OctoShrink"
 authors = ["Octor Team"]
 license = "MIT"

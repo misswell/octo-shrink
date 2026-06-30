@@ -55,18 +55,25 @@ async function loadOriginalImage(img, filePath) {
 // 三种模式：auto（跟随系统）、light、dark，循环切换
 const THEMES = ['auto', 'light', 'dark'];
 let currentTheme = localStorage.getItem('octoshrink-theme') || 'auto';
+if (!THEMES.includes(currentTheme)) currentTheme = 'auto';
+
+function getResolvedTheme(theme) {
+  if (theme === 'auto') {
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+  return theme;
+}
 
 function applyTheme(theme) {
   currentTheme = theme;
   localStorage.setItem('octoshrink-theme', theme);
 
-  if (theme === 'dark') {
+  const resolvedTheme = getResolvedTheme(theme);
+  document.documentElement.setAttribute('data-theme-mode', theme);
+  if (resolvedTheme === 'dark') {
     document.documentElement.setAttribute('data-theme', 'dark');
-  } else if (theme === 'light') {
-    document.documentElement.setAttribute('data-theme', 'light');
   } else {
-    // auto: 跟随系统
-    document.documentElement.removeAttribute('data-theme');
+    document.documentElement.setAttribute('data-theme', 'light');
   }
 
   // 更新图标显示
@@ -96,8 +103,7 @@ if (window.matchMedia) {
   const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
   const handler = () => {
     if (currentTheme === 'auto') {
-      // 触发重新应用（移除再添加属性，强制 CSS 重新计算）
-      document.documentElement.removeAttribute('data-theme');
+      applyTheme('auto');
     }
   };
   if (mediaQuery.addEventListener) {
@@ -153,10 +159,15 @@ const outputDirRow = document.getElementById('outputDirRow');
 
 // Quality slider
 qualitySlider.addEventListener('input', () => {
+  updateQualitySlider();
+});
+
+function updateQualitySlider() {
+  if (!qualitySlider) return;
   qualityValue.textContent = qualitySlider.value + '%';
   const pct = qualitySlider.value;
-  qualitySlider.style.background = 'linear-gradient(90deg, var(--primary) ' + pct + '%, #e2e8f0 ' + pct + '%)';
-});
+  qualitySlider.style.background = 'linear-gradient(90deg, var(--primary) ' + pct + '%, var(--slider-track) ' + pct + '%)';
+}
 
 // Output mode radio
 document.querySelectorAll('input[name="outputMode"]').forEach(radio => {
@@ -1060,8 +1071,7 @@ function openCompareByFile(filePath) {
 (function() {
   const qs = document.getElementById('qualitySlider');
   if (qs) {
-    const pct = qs.value;
-    qs.style.background = 'linear-gradient(90deg, var(--primary) ' + pct + '%, #e2e8f0 ' + pct + '%)';
+    updateQualitySlider();
   }
   // Fetch app version
   invoke('get_app_version').then(v => { window.appVersion = v; }).catch(() => {});

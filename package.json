@@ -1,6 +1,6 @@
 {
   "name": "octoshrink",
-  "version": "2.1.10",
+  "version": "2.1.11",
   "description": "OctoShrink - Tauri edition",
   "scripts": {
     "dev": "cargo tauri dev",

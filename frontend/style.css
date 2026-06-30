@@ -5,6 +5,7 @@
 }
 
 :root {
+  color-scheme: light;
   --primary: #6366f1;
   --primary-hover: #4f46e5;
   --primary-light: rgba(99,102,241,0.10);
@@ -29,9 +30,13 @@
   --modal-overlay: rgba(15,23,42,0.50);
   --glass-border: rgba(255,255,255,0.30);
   --glass-bg: rgba(255,255,255,0.75);
+  --bg-secondary: rgba(255,255,255,0.68);
+  --control-thumb: #ffffff;
+  --control-thumb-border: rgba(15,23,42,0.10);
 }
 /* ─── 暗黑模式 ─────────────────────────────────────────────────── */
 [data-theme="dark"] {
+  color-scheme: dark;
   --primary: #818cf8;
   --primary-hover: #6366f1;
   --primary-light: rgba(129,140,248,0.15);
@@ -54,6 +59,9 @@
   --modal-overlay: rgba(0,0,0,0.70);
   --glass-border: rgba(51,65,85,0.40);
   --glass-bg: rgba(15,23,42,0.80);
+  --bg-secondary: rgba(15,23,42,0.48);
+  --control-thumb: #e2e8f0;
+  --control-thumb-border: rgba(148,163,184,0.32);
   /* 暗黑模式专用变量 */
   --queue-done-bg: rgba(52,211,153,0.08);
   --queue-failed-bg: rgba(248,113,113,0.08);
@@ -417,7 +425,7 @@ body {
   width: 130px;
   height: 4px;
   -webkit-appearance: none;
-  background: linear-gradient(90deg, var(--primary) 0%, #e2e8f0 0%);
+  background: linear-gradient(90deg, var(--primary) 0%, var(--slider-track) 0%);
   border-radius: 2px;
   outline: none;
 }
@@ -427,7 +435,7 @@ body {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: white;
+  background: var(--control-thumb);
   border: 2px solid var(--primary);
   cursor: pointer;
   box-shadow: 0 2px 6px var(--primary-glow);
@@ -476,7 +484,7 @@ body {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  border: 2px solid #d0d5dd;
+  border: 2px solid var(--border);
   display: inline-block;
   position: relative;
   transition: all 0.2s;
@@ -595,7 +603,8 @@ body {
   width: 16px;
   left: 3px;
   bottom: 3px;
-  background: white;
+  background: var(--control-thumb);
+  border: 1px solid var(--control-thumb-border);
   transition: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   border-radius: 50%;
   box-shadow: 0 1px 3px rgba(0,0,0,0.15);
@@ -768,7 +777,7 @@ body {
   gap: 24px;
   padding: 12px 18px;
   border-bottom: 1px solid var(--border-light);
-  background: var(--bg-secondary, #fafafa);
+  background: var(--bg-secondary);
 }
 
 .queue-actions {
@@ -802,7 +811,7 @@ body {
   padding: 8px 10px;
   border-radius: 8px;
   font-size: 12px;
-  background: var(--bg-secondary, #f5f5f5);
+  background: var(--bg-secondary);
   animation: fadeIn 0.2s ease;
   transition: background 0.2s;
   position: relative;
@@ -810,11 +819,11 @@ body {
 }
 
 .file-queue-item.waiting { opacity: 0.8; }
-.file-queue-item.compressing { background: var(--primary-light, #e8f0fe); }
+.file-queue-item.compressing { background: var(--primary-light); }
 .file-queue-item.done { background: var(--queue-done-bg); }
 .file-queue-item.failed { background: var(--queue-failed-bg); }
 .file-queue-item.cancelled { opacity: 0.4; }
-.file-queue-item.restored { background: var(--bg-secondary, #f5f5f5); opacity: 0.76; }
+.file-queue-item.restored { background: var(--bg-secondary); opacity: 0.76; }
 
 .file-queue-item .queue-item-icon {
   width: 30px;
@@ -911,7 +920,7 @@ body {
 }
 
 .file-queue-item .queue-item-remove:hover {
-  background: var(--danger-light, #fee2e2);
+  background: var(--danger-light);
   color: var(--danger);
 }
 
@@ -933,7 +942,7 @@ body {
 
 .file-queue-item.done .progress-file-bar {
   width: 100%;
-  background: var(--success, #34c759);
+  background: var(--success);
 }
 
 @keyframes pulseBar {
@@ -970,13 +979,13 @@ body {
   padding: 7px 10px;
   border-radius: 8px;
   font-size: 12px;
-  background: var(--bg-secondary, #f5f5f5);
+  background: var(--bg-secondary);
   animation: fadeIn 0.2s ease;
   transition: background 0.2s;
 }
 
 .progress-file-row.waiting { opacity: 0.7; }
-.progress-file-row.compressing { background: var(--primary-light, #e8f0fe); }
+.progress-file-row.compressing { background: var(--primary-light); }
 .progress-file-row.done { background: var(--queue-done-bg); }
 .progress-file-row.failed { background: var(--queue-failed-bg); }
 .progress-file-row.cancelled { opacity: 0.35; }
@@ -1001,8 +1010,8 @@ body {
   display: flex; align-items: center; justify-content: center;
   font-weight: 700; font-size: 12px;
 }
-.progress-file-row.done .progress-file-icon { color: var(--success, #34c759); }
-.progress-file-row.failed .progress-file-icon { color: var(--danger, #ef4444); }
+.progress-file-row.done .progress-file-icon { color: var(--success); }
+.progress-file-row.failed .progress-file-icon { color: var(--danger); }
 
 .progress-file-name {
   flex: 1;
@@ -1030,8 +1039,8 @@ body {
   color: var(--text-tertiary);
 }
 .progress-file-row.compressing .progress-file-status { color: var(--primary); }
-.progress-file-row.done .progress-file-status { color: var(--success, #34c759); }
-.progress-file-row.failed .progress-file-status { color: var(--danger, #ef4444); }
+.progress-file-row.done .progress-file-status { color: var(--success); }
+.progress-file-row.failed .progress-file-status { color: var(--danger); }
 
 .progress-file-remove {
   width: 20px; height: 20px;
@@ -1042,11 +1051,11 @@ body {
   font-size: 14px; flex-shrink: 0; line-height: 1;
   transition: all 0.15s;
 }
-.progress-file-remove:hover { background: var(--danger-light, #fee2e2); color: var(--danger); }
+.progress-file-remove:hover { background: var(--danger-light); color: var(--danger); }
 
 .progress-file-spinner {
   width: 14px; height: 14px;
-  border: 2px solid var(--primary-light, #c8dafc);
+  border: 2px solid var(--primary-light);
   border-top-color: var(--primary);
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
@@ -1346,7 +1355,7 @@ body {
   gap: 6px;
   padding: 3px 8px;
   border-radius: 8px;
-  background: var(--bg-secondary, #f0f0f0);
+  background: var(--bg-secondary);
 }
 
 .zoom-step-btn {
@@ -1368,7 +1377,7 @@ body {
 }
 
 .zoom-step-btn:hover {
-  background: var(--primary-light, #e8f0fe);
+  background: var(--primary-light);
   color: var(--primary);
 }
 
@@ -1391,7 +1400,7 @@ body {
   border-radius: 50%;
   background: var(--primary);
   cursor: pointer;
-  border: 2px solid white;
+  border: 2px solid var(--control-thumb);
   box-shadow: 0 1px 4px rgba(0,0,0,0.2);
 }
 
@@ -1401,7 +1410,7 @@ body {
   border-radius: 50%;
   background: var(--primary);
   cursor: pointer;
-  border: 2px solid white;
+  border: 2px solid var(--control-thumb);
 }
 
 .zoom-value {
@@ -1428,7 +1437,7 @@ body {
 }
 
 .zoom-reset-btn:hover {
-  background: var(--primary-light, #e8f0fe);
+  background: var(--primary-light);
   color: var(--primary);
 }
 
@@ -1684,7 +1693,7 @@ body {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: white;
+  background: var(--control-thumb);
   border: 2px solid var(--primary);
   cursor: pointer;
   box-shadow: 0 2px 6px var(--primary-glow);
