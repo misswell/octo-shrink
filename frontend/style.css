@@ -1214,6 +1214,7 @@ body {
 /* ─── Scrollbar ─────────────────────────────────────────────── */
 ::-webkit-scrollbar {
   width: 5px;
+  height: 5px;
 }
 
 ::-webkit-scrollbar-track {
@@ -1455,6 +1456,9 @@ body {
   margin-bottom: 16px;
   box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05);
   overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 /* Slider Container — scrollable, holds images only */
@@ -1466,6 +1470,37 @@ body {
   height: 100%;
   overflow: auto;
   z-index: 1;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100,116,139,0.55) transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.compare-slider-container::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.compare-slider-container::-webkit-scrollbar-track {
+  background: rgba(15,23,42,0.08);
+}
+
+.compare-slider-container::-webkit-scrollbar-thumb {
+  background: rgba(100,116,139,0.58);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.compare-slider-container::-webkit-scrollbar-thumb:hover {
+  background: rgba(71,85,105,0.82);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.compare-slider-container::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* Image wrapper — sized by zoom level, creates scrollable area */
@@ -1475,6 +1510,8 @@ body {
   height: calc(100% * var(--zoom, 1));
   min-width: 100%;
   min-height: 100%;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .compare-img-base {
@@ -1486,6 +1523,9 @@ body {
   top: 0;
   left: 0;
   pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
 }
 
 .compare-img-overlay {
@@ -1499,6 +1539,9 @@ body {
   z-index: 2;
   clip-path: inset(0 50% 0 0);
   pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
 }
 
 .compare-label {
@@ -1678,47 +1721,45 @@ body {
  /* ─── Visible Compare Slider Bar ──────────────────────────── */
  .compare-slider-bar {
    position: absolute;
-   bottom: 12px;
-   left: 12px;
-   right: 12px;
-   width: calc(100% - 24px);
-   height: 6px;
-   z-index: 10;
+   inset: 0;
+   width: 100%;
+   height: 100%;
+   z-index: 12;
    -webkit-appearance: none;
    appearance: none;
-   background: rgba(255,255,255,0.25);
-   border-radius: 3px;
+   background: transparent;
+   border-radius: 0;
    outline: none;
    cursor: ew-resize;
    margin: 0;
-   backdrop-filter: blur(4px);
+   opacity: 0;
  }
  
  .compare-slider-bar::-webkit-slider-thumb {
    -webkit-appearance: none;
    appearance: none;
-   width: 20px;
-   height: 20px;
-   border-radius: 50%;
-   background: white;
-   border: 2px solid var(--primary);
+   width: 1px;
+   height: 100%;
+   border: 0;
+   background: transparent;
    cursor: ew-resize;
-   box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-   transition: transform 0.15s;
  }
  
  .compare-slider-bar::-webkit-slider-thumb:hover {
-   transform: scale(1.15);
+   transform: none;
  }
  
  .compare-slider-bar::-moz-range-thumb {
-   width: 20px;
-   height: 20px;
-   border-radius: 50%;
-   background: white;
-   border: 2px solid var(--primary);
+   width: 1px;
+   height: 100%;
+   border: 0;
+   background: transparent;
    cursor: ew-resize;
-   box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+ }
+
+ .compare-slider-bar::-moz-range-track {
+   background: transparent;
+   border: 0;
  }
 
 /* ─── 暗黑模式特定调整 ─────────────────────────────────────────── */

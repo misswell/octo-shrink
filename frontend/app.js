@@ -860,6 +860,10 @@ if (recompressQualitySlider) {
   function onPointerDown(e) {
     isPointerDown = true;
     e.preventDefault();
+    if (window.getSelection) {
+      var selection = window.getSelection();
+      if (selection) selection.removeAllRanges();
+    }
     var clientX = e.touches ? e.touches[0].clientX : e.clientX;
     updateCompareSlider(getPercent(clientX));
   }
