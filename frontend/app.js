@@ -384,6 +384,55 @@ function renderQueueResultActions(row, result) {
   });
 }
 
+function renderRestoredActions(row, filePath) {
+  var actions = row.querySelector('.queue-item-actions');
+  if (!actions) return;
+  actions.innerHTML = '';
+
+  var btn = document.createElement('button');
+  btn.className = 'queue-action-btn';
+  btn.type = 'button';
+  btn.title = '重新压缩';
+  btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1L2 6h3v5h4V6h3L7 1z"/></svg>';
+  btn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    compressOneFile(filePath);
+  });
+  actions.appendChild(btn);
+}
+
+function getCurrentCompressionConfig() {
+  const outputMode = document.querySelector('input[name="outputMode"]:checked').value;
+  const outputFormat = document.getElementById('outputFormat').value;
+  const backend = document.getElementById('compressionBackend').value;
+  const effort = parseInt(document.getElementById('compressionEffort').value);
+  const smartMode = document.getElementById('smartMode').checked;
+  const convertToWebp = document.getElementById('convertToWebp').checked;
+
+  let effectiveFormat = outputFormat;
+  if (convertToWebp && outputFormat === 'original') {
+    effectiveFormat = 'webp';
+  }
+
+  if (outputMode === 'folder' && !outputDir) {
+    return { error: '请先选择输出目录' };
+  }
+
+  return {
+    useSmartIpc: smartMode || effectiveFormat !== 'original',
+    options: {
+      quality: parseInt(qualitySlider.value),
+      smartMode,
+      outputFormat: effectiveFormat,
+      backend,
+      effort,
+      convertToWebp,
+      outputMode,
+      outputDir: outputMode === 'folder' ? outputDir : null,
+    },
+  };
+}
+
 function clearAllFiles() {
   if (files.length === 0) return;
   if (!confirm('确定要清空全部 ' + files.length + ' 个文件吗？')) return;
@@ -413,36 +462,12 @@ async function startCompression() {
   isCompressing = true;
   results = [];
 
-  const outputMode = document.querySelector('input[name="outputMode"]:checked').value;
-  const outputFormat = document.getElementById('outputFormat').value;
-  const backend = document.getElementById('compressionBackend').value;
-  const effort = parseInt(document.getElementById('compressionEffort').value);
-  const smartMode = document.getElementById('smartMode').checked;
-  const convertToWebp = document.getElementById('convertToWebp').checked;
-
-  let effectiveFormat = outputFormat;
-  if (convertToWebp && outputFormat === 'original') {
-    effectiveFormat = 'webp';
-  }
-
-  const options = {
-    quality: parseInt(qualitySlider.value),
-    smartMode,
-    outputFormat: effectiveFormat,
-    backend,
-    effort,
-    convertToWebp,
-    outputMode,
-    outputDir: outputMode === 'folder' ? outputDir : null,
-  };
-
-  if (outputMode === 'folder' && !outputDir) {
-    showToast('请先选择输出目录');
+  const config = getCurrentCompressionConfig();
+  if (config.error) {
+    showToast(config.error);
     isCompressing = false;
     return;
   }
-
-  const useSmartIpc = smartMode || effectiveFormat !== 'original';
 
   var queueStats = document.getElementById('queueStats');
   if (queueStats) queueStats.style.display = 'flex';
@@ -520,7 +545,7 @@ async function startCompression() {
 
   try {
     const pathsForCompression = (!queueWasEdited && inputPaths.length > 0) ? inputPaths : files;
-    await invoke(useSmartIpc ? 'compress_smart' : 'compress_files', { filePaths: pathsForCompression, options: options });
+    await invoke(config.useSmartIpc ? 'compress_smart' : 'compress_files', { filePaths: pathsForCompression, options: config.options });
     updateStats();
     showResults();
   } catch (err) {
@@ -557,6 +582,66 @@ function updateStats() {
 function showResults() {
   resultsPanel.style.display = 'none';
   resultsList.innerHTML = '';
+}
+
+async function compressOneFile(filePath) {
+  if (isCompressing) return;
+  const row = fileRows[filePath];
+  if (!row) return;
+
+  const config = getCurrentCompressionConfig();
+  if (config.error) {
+    showToast(config.error);
+    return;
+  }
+
+  isCompressing = true;
+  results = results.filter(function(r) { return r.file !== filePath; });
+
+  row.classList.remove('waiting', 'done', 'failed', 'restored', 'cancelled');
+  row.classList.add('compressing');
+  row.querySelector('.queue-item-icon').innerHTML = '<span class="progress-file-spinner"></span>';
+  row.querySelector('.queue-item-status').textContent = '压缩中…';
+  var actions = row.querySelector('.queue-item-actions');
+  if (actions) actions.innerHTML = '';
+  var rmBtn = row.querySelector('.queue-item-remove');
+  if (rmBtn) rmBtn.style.display = 'none';
+
+  const unlisten = await listen('compress-progress', (event) => {
+    var data = event.payload;
+    if (!data || data.file !== filePath || !data.result) return;
+    var result = data.result;
+    row.classList.remove('compressing');
+    row.classList.add(result.success ? 'done' : 'failed');
+    row.querySelector('.queue-item-icon').innerHTML = result.success ? '✓' : '✗';
+    var sizeEl = row.querySelector('.queue-item-size');
+    if (result.success && sizeEl) {
+      sizeEl.textContent = formatBytes(result.originalSize) + ' → ' + formatBytes(result.compressedSize);
+    }
+    row.querySelector('.queue-item-status').textContent = result.success
+      ? (result.savings >= 0 ? '-' : '+') + Math.abs(result.savings).toFixed(1) + '%'
+      : '失败';
+    results = results.filter(function(r) { return r.file !== filePath; });
+    results.push(result);
+    renderQueueResultActions(row, result);
+    updateStats();
+    updateQueueSummary();
+  });
+
+  try {
+    await invoke(config.useSmartIpc ? 'compress_smart' : 'compress_files', { filePaths: [filePath], options: config.options });
+    showToast('已重新压缩: ' + basename(filePath));
+  } catch (err) {
+    row.classList.remove('compressing');
+    row.classList.add('failed');
+    row.querySelector('.queue-item-icon').innerHTML = '✗';
+    row.querySelector('.queue-item-status').textContent = '失败';
+    showToast('重新压缩出错: ' + (err.message || err));
+  } finally {
+    unlisten();
+    isCompressing = false;
+    updateQueueSummary();
+  }
 }
 
 async function saveResult(filePath) {
@@ -600,8 +685,7 @@ function markQueueRowRestored(filePath) {
   if (icon) icon.textContent = '↺';
   var status = row.querySelector('.queue-item-status');
   if (status) status.textContent = '已恢复';
-  var actions = row.querySelector('.queue-item-actions');
-  if (actions) actions.innerHTML = '';
+  renderRestoredActions(row, filePath);
 }
 
 async function restoreAllOriginals() {
