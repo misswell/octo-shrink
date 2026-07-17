@@ -4,6 +4,10 @@
 const { invoke, convertFileSrc } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
+function iconMarkup(name, small) {
+  return '<svg class="symbol-icon' + (small ? ' symbol-icon-small' : '') + '" aria-hidden="true"><use href="#icon-' + name + '"></use></svg>';
+}
+
 // ─── Path utilities (replace Node's path module) ────────────────
 function basename(p) {
   const parts = String(p).replace(/\\/g, '/').split('/');
@@ -282,7 +286,7 @@ async function handleFilePaths(filePaths) {
   resultsPanel.style.display = 'none';
   updateQueueSummary();
   renderFileQueue();
-  queuePanel.scrollIntoView({ behavior: 'smooth' });
+  document.querySelector('.container').scrollTop = 0;
 }
 
 // Global state for compression
@@ -341,12 +345,12 @@ function createQueueRow(filePath) {
   row.dataset.file = filePath;
   var name = basename(filePath);
   row.innerHTML =
-    '<span class="queue-item-icon">○</span>' +
+    '<span class="queue-item-icon">' + iconMarkup('queue', true) + '</span>' +
     '<span class="queue-item-name">' + name + '</span>' +
     '<span class="queue-item-size"></span>' +
     '<span class="queue-item-status">等待中</span>' +
     '<span class="queue-item-actions"></span>' +
-    '<button class="queue-item-remove" title="移除">×</button>' +
+    '<button class="queue-item-remove" title="移除">' + iconMarkup('close', true) + '</button>' +
     '<div class="progress-file-bar"></div>';
   var rmBtn = row.querySelector('.queue-item-remove');
   rmBtn.addEventListener('click', function(e) {
@@ -360,7 +364,7 @@ function createQueueRow(filePath) {
       if (idx >= 0) files.splice(idx, 1);
       row.classList.remove('waiting');
       row.classList.add('cancelled');
-      row.querySelector('.queue-item-icon').textContent = '—';
+      row.querySelector('.queue-item-icon').innerHTML = iconMarkup('minus', true);
       row.querySelector('.queue-item-status').textContent = '已移除';
       row.querySelector('.queue-item-remove').style.display = 'none';
       if (!isCompressing) {
@@ -382,10 +386,10 @@ function renderQueueResultActions(row, result) {
   if (!result || !result.success) return;
 
   var actionDefs = [
-    { action: 'save', title: '另存为', icon: '<svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor"><path d="M11 0H3a1 1 0 00-1 1v12a1 1 0 001 1h8a1 1 0 001-1V1a1 1 0 00-1-1zm-1 12H4V2h6v10z"/></svg>' },
-    { action: 'compare', title: '对比查看', icon: '<svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor"><path d="M2 2h4v4H2V2zm0 6h4v4H2V8zm6-6h4v4H8V2zm0 6h4v4H8V8z"/></svg>' },
-    { action: 'restore', title: '恢复原图', icon: '<svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1a6 6 0 100 12A6 6 0 007 1zm0 10V7H4l3-4 3 4H7v4z"/></svg>' },
-    { action: 'finder', title: '在访达中显示', icon: '<svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor"><path d="M1 2.5A1.5 1.5 0 012.5 1h3.172a1.5 1.5 0 011.06.44l.94.94H11.5A1.5 1.5 0 0113 3.88V11.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 011 11.5V2.5z"/></svg>' },
+    { action: 'save', title: '另存为', icon: iconMarkup('save', true) },
+    { action: 'compare', title: '对比查看', icon: iconMarkup('compare', true) },
+    { action: 'restore', title: '恢复原图', icon: iconMarkup('restore', true) },
+    { action: 'finder', title: '在访达中显示', icon: iconMarkup('finder', true) },
   ];
 
   actionDefs.forEach(function(def) {
@@ -414,7 +418,7 @@ function renderRestoredActions(row, filePath) {
   btn.className = 'queue-action-btn';
   btn.type = 'button';
   btn.title = '重新压缩';
-  btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1L2 6h3v5h4V6h3L7 1z"/></svg>';
+  btn.innerHTML = iconMarkup('refresh', true);
   btn.addEventListener('click', function(e) {
     e.stopPropagation();
     compressOneFile(filePath);
@@ -525,7 +529,7 @@ async function startCompression() {
     if (result) {
       row.classList.remove('compressing');
       row.classList.add(result.success ? 'done' : 'failed');
-      row.querySelector('.queue-item-icon').innerHTML = result.success ? '✓' : '✗';
+      row.querySelector('.queue-item-icon').innerHTML = iconMarkup(result.success ? 'check' : 'error', true);
       var rmBtnDone = row.querySelector('.queue-item-remove');
       if (rmBtnDone) rmBtnDone.style.display = 'none';
       var sizeEl = row.querySelector('.queue-item-size');
@@ -542,7 +546,7 @@ async function startCompression() {
         var errIcon = document.createElement('span');
         errIcon.className = 'error-info-btn';
         errIcon.title = result.error;
-        errIcon.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1L1 11h10L6 1z" fill="#f59e0b" stroke="#f59e0b" stroke-width="0.5"/><circle cx="6" cy="8" r="0.5" fill="white"/><path d="M6 4.5v2.5" stroke="white" stroke-width="0.8" stroke-linecap="round"/></svg>';
+        errIcon.innerHTML = iconMarkup('warning', true);
         errIcon.onclick = function(e) { e.stopPropagation(); showErrorDetail(result.file, result.error); };
         statusEl.appendChild(errIcon);
       }
@@ -555,7 +559,7 @@ async function startCompression() {
 
     if (status === 'cancelled' && row) {
       row.classList.add('cancelled');
-      row.querySelector('.queue-item-icon').textContent = '—';
+      row.querySelector('.queue-item-icon').innerHTML = iconMarkup('minus', true);
       row.querySelector('.queue-item-status').textContent = '已跳过';
     }
   };
@@ -634,7 +638,7 @@ async function compressOneFile(filePath) {
     var result = data.result;
     row.classList.remove('compressing');
     row.classList.add(result.success ? 'done' : 'failed');
-    row.querySelector('.queue-item-icon').innerHTML = result.success ? '✓' : '✗';
+    row.querySelector('.queue-item-icon').innerHTML = iconMarkup(result.success ? 'check' : 'error', true);
     var sizeEl = row.querySelector('.queue-item-size');
     if (result.success && sizeEl) {
       sizeEl.textContent = formatBytes(result.originalSize) + ' → ' + formatBytes(result.compressedSize);
@@ -655,7 +659,7 @@ async function compressOneFile(filePath) {
   } catch (err) {
     row.classList.remove('compressing');
     row.classList.add('failed');
-    row.querySelector('.queue-item-icon').innerHTML = '✗';
+    row.querySelector('.queue-item-icon').innerHTML = iconMarkup('error', true);
     row.querySelector('.queue-item-status').textContent = '失败';
     showToast('重新压缩出错: ' + (err.message || err));
   } finally {
@@ -703,7 +707,7 @@ function markQueueRowRestored(filePath) {
   row.classList.remove('done', 'failed', 'compressing');
   row.classList.add('restored');
   var icon = row.querySelector('.queue-item-icon');
-  if (icon) icon.textContent = '↺';
+  if (icon) icon.innerHTML = iconMarkup('restore', true);
   var status = row.querySelector('.queue-item-status');
   if (status) status.textContent = '已恢复';
   renderRestoredActions(row, filePath);
