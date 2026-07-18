@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "OctoShrink",
-  "version": "2.1.13",
-  "identifier": "com.octoshrink",
+  "version": "2.2.0",
+  "identifier": "com.misswell.octoshrink",
   "build": {
     "frontendDist": "../frontend"
   },
@@ -36,7 +36,10 @@
     ],
     "category": "Utility",
     "macOS": {
-      "frameworks": []
+      "frameworks": [],
+      "minimumSystemVersion": "14.0",
+      "signingIdentity": null,
+      "entitlements": "entitlements.plist"
     }
   }
 }
