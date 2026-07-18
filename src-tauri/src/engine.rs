@@ -7,6 +7,10 @@ use std::sync::OnceLock;
 use tokio::process::Command;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "inproc-backends")]
+#[path = "engine_inproc.rs"]
+mod engine_inproc;
+
 /// 全局存储应用资源目录路径（在 setup 时初始化）
 static RESOURCE_DIR: OnceLock<PathBuf> = OnceLock::new();
 
@@ -586,7 +590,15 @@ async fn compress_to_jxl(file: &Path, options: &CompressOptions) -> EngineResult
 
 // ─── Dispatcher ─────────────────────────────────────────────────
 
+// 函数级 allow：inproc-backends 模式下提前 return 会让后续 cli 代码被判为 unreachable；
+// 放在 fn 签名上方而非语句级，避免 cfg 消除该 return 时属性也跟着消失。
+#[allow(unreachable_code)]
 pub async fn compress_image(file: &Path, options: &CompressOptions) -> EngineResult {
+    // 双线骨架：inproc 模式提前 return；cli 模式走下面默认实现（见 AGENTS.md 强制规则 1-3）
+    // App Store 产物线：路由到进程内实现
+    #[cfg(feature = "inproc-backends")]
+    return engine_inproc::compress_image(file, options).await;
+
     let img_type = detect_image_type(file);
 
     // Format conversion
@@ -606,7 +618,12 @@ pub async fn compress_image(file: &Path, options: &CompressOptions) -> EngineRes
     }
 }
 
+#[allow(unreachable_code)]
 pub async fn compress_to_format(file: &Path, target: &str, options: &CompressOptions) -> EngineResult {
+    // App Store 产物线：路由到进程内实现
+    #[cfg(feature = "inproc-backends")]
+    return engine_inproc::compress_to_format(file, target, options).await;
+
     match target {
         "webp" => compress_to_webp(file, options).await,
         "avif" => compress_to_avif(file, options).await,
@@ -621,7 +638,12 @@ pub async fn compress_to_format(file: &Path, target: &str, options: &CompressOpt
 }
 
 /// Smart mode: try the natural compressor; if smart, also try alternatives and pick best.
+#[allow(unreachable_code)]
 pub async fn compress_smart(file: &Path, options: &CompressOptions) -> EngineResult {
+    // App Store 产物线：路由到进程内实现
+    #[cfg(feature = "inproc-backends")]
+    return engine_inproc::compress_smart(file, options).await;
+
     let img_type = detect_image_type(file);
     let _original_size = get_file_size(file);
     let quality = if options.quality > 0 { options.quality } else { analyze_quality(file) };
