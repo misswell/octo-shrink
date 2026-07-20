@@ -18,7 +18,7 @@ export CARGO_PROFILE_RELEASE_PANIC=unwind
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TAURI_DIR="$PROJECT_DIR/src-tauri"
 APP_NAME="OctoShrink"
-APP_VERSION="2.2.0"
+APP_VERSION="2.2.1"
 APP="$TAURI_DIR/target/release/bundle/macos/$APP_NAME.app"
 BUNDLE_ID="com.misswell.octoshrink.appstore"
 ENTITLEMENTS="$TAURI_DIR/entitlements-appstore.plist"
@@ -38,6 +38,11 @@ cd "$TAURI_DIR"
 cargo tauri build --bundles app --features appstore --config "$CONF" || fail "构建失败"
 [ -d "$APP" ] || fail "构建产物不存在：$APP"
 ok "$APP"
+
+# 复制前端文件到 .app/Contents/Resources/（Tauri --config 模式下 frontendDist 不自动复制）
+cp -R "$PROJECT_DIR/frontend/." "$APP/Contents/Resources/" \
+  || fail "复制前端文件失败"
+ok "前端文件已复制到 .app"
 
 # ---------- 2. Apple Distribution 签名（hardened runtime + sandbox entitlements）----------
 # 前置：在钥匙串安装 "Apple Distribution: <name>" 证书（Apple Developer > Certificates > +）。
