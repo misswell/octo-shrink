@@ -1,0 +1,106 @@
+[default]
+description = "OctoShrink app commands — select, compress, restore, export"
+permissions = [
+  "allow-select-files",
+  "allow-select-folder",
+  "allow-select-output-dir",
+  "allow-expand-image-files",
+  "allow-compress-files",
+  "allow-compress-smart",
+  "allow-compress-single",
+  "allow-cancel-file",
+  "allow-clear-cancel-queue",
+  "allow-save-file",
+  "allow-open-in-finder",
+  "allow-read-image-dataurl",
+  "allow-get-app-version",
+  "allow-restore-original",
+  "allow-export-all",
+  "allow-get-file-sizes",
+  "allow-restore-all",
+]
+
+[[permission]]
+identifier = "allow-select-files"
+description = "Open file picker for image selection"
+commands.allow = ["select_files"]
+
+[[permission]]
+identifier = "allow-select-folder"
+description = "Open folder picker"
+commands.allow = ["select_folder"]
+
+[[permission]]
+identifier = "allow-select-output-dir"
+description = "Pick output directory"
+commands.allow = ["select_output_dir"]
+
+[[permission]]
+identifier = "allow-expand-image-files"
+description = "Expand dropped paths into individual image files"
+commands.allow = ["expand_image_files"]
+
+[[permission]]
+identifier = "allow-compress-files"
+description = "Compress image files"
+commands.allow = ["compress_files"]
+
+[[permission]]
+identifier = "allow-compress-smart"
+description = "Smart compress with auto format selection"
+commands.allow = ["compress_smart"]
+
+[[permission]]
+identifier = "allow-compress-single"
+description = "Compress a single file with custom options"
+commands.allow = ["compress_single"]
+
+[[permission]]
+identifier = "allow-cancel-file"
+description = "Cancel compression for a specific file"
+commands.allow = ["cancel_file"]
+
+[[permission]]
+identifier = "allow-clear-cancel-queue"
+description = "Clear the cancel queue"
+commands.allow = ["clear_cancel_queue"]
+
+[[permission]]
+identifier = "allow-save-file"
+description = "Save a compressed file to a new location"
+commands.allow = ["save_file"]
+
+[[permission]]
+identifier = "allow-open-in-finder"
+description = "Reveal a file in Finder"
+commands.allow = ["open_in_finder"]
+
+[[permission]]
+identifier = "allow-read-image-dataurl"
+description = "Read an image file as data URL for preview"
+commands.allow = ["read_image_dataurl"]
+
+[[permission]]
+identifier = "allow-get-app-version"
+description = "Get app version string"
+commands.allow = ["get_app_version"]
+
+[[permission]]
+identifier = "allow-restore-original"
+description = "Restore original file from backup"
+commands.allow = ["restore_original"]
+
+[[permission]]
+identifier = "allow-export-all"
+description = "Export all compressed results"
+commands.allow = ["export_all"]
+
+[[permission]]
+identifier = "allow-get-file-sizes"
+description = "Get file sizes for a list of paths"
+commands.allow = ["get_file_sizes"]
+
+[[permission]]
+identifier = "allow-restore-all"
+description = "Restore all files from backup"
+commands.allow = ["restore_all"]
