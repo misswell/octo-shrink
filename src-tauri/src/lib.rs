@@ -51,7 +51,7 @@ pub fn run() {
                 use std::net::TcpListener;
 
                 let resource_dir = app.path().resource_dir().unwrap_or_default();
-                let listener = TcpListener::bind("127.0.0.1:0").expect("HTTP bind failed");
+                let listener = TcpListener::bind("localhost:0").expect("HTTP bind failed");
                 let port = listener.local_addr().unwrap().port();
                 let dir = resource_dir.clone();
 
@@ -89,7 +89,7 @@ pub fn run() {
                 });
 
                 if let Some(window) = app.get_webview_window("main") {
-                    let url: tauri::Url = format!("http://127.0.0.1:{}/", port).parse().unwrap();
+                    let url: tauri::Url = format!("http://localhost:{}/", port).parse().unwrap();
                     let _ = window.navigate(url);
                     let _ = window.show();
                 }
