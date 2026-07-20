@@ -47,60 +47,10 @@ pub fn run() {
             // 启动本地 HTTP 服务器服务前端资源，绕过 WKURLSchemeHandler 限制
             #[cfg(feature = "inproc-backends")]
             {
-                use std::io::{BufRead, Write};
-                use std::net::TcpListener;
-
-                let resource_dir = app.path().resource_dir().unwrap_or_default();
-                let listener = TcpListener::bind("localhost:0").expect("HTTP bind failed");
-                let port = listener.local_addr().unwrap().port();
-                let dir = resource_dir.clone();
-
-                std::thread::spawn(move || {
-                    for stream in listener.incoming() {
-                        let Ok(mut stream) = stream else { continue };
-                        let mut reader = std::io::BufReader::new(&stream);
-                        let mut request_line = String::new();
-                        if reader.read_line(&mut request_line).is_err() { continue; }
-                       let path = request_line.split(' ').nth(1).unwrap_or("/");
-                        let path = path.split('?').next().unwrap_or("/");
-                        let file = match path {
-                            "/" | "/index.html" => "index.html",
-                            p => p.trim_start_matches('/'),
-                        };
-                        let full_path = dir.join(file);
-                        if !full_path.starts_with(&dir) {
-                            let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-                            continue;
-                        }
-                        if let Ok(data) = std::fs::read(&full_path) {
-                            let ct = match full_path.extension().and_then(|e| e.to_str()) {
-                                Some("html") => "text/html; charset=utf-8",
-                                Some("css") => "text/css",
-                                Some("js") => "application/javascript",
-                                Some("png") => "image/png",
-                                Some("svg") => "image/svg+xml",
-                                _ => "application/octet-stream",
-                            };
-                            let header = format!(
-                                "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                                ct, data.len()
-                            );
-                            let _ = stream.write_all(header.as_bytes());
-                            let _ = stream.write_all(&data);
-                        } else {
-                            let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-                        }
-                    }
-                });
-
-                if let Some(window) = app.get_webview_window("main") {
-                    let url: tauri::Url = format!("http://localhost:{}/", port).parse().unwrap();
-                    let _ = window.navigate(url);
-                    let _ = window.show();
-                }
+                // App Store 沙盒版使用默认 tauri://localhost 协议
+                // Local origin 不触发 app 命令 ACL 检查，IPC 直接可用
             }
-
-            #[cfg(all(debug_assertions, not(feature = "inproc-backends")))]
+            #[cfg(debug_assertions)]
             {
                 if let Some(window) = app.get_webview_window("main") {
                     window.open_devtools();

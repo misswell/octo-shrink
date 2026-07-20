@@ -7,7 +7,23 @@
     "core:default",
     "dialog:default",
     "core:window:allow-start-dragging",
-    "default"
+    "allow-select-files",
+    "allow-select-folder",
+    "allow-select-output-dir",
+    "allow-expand-image-files",
+    "allow-compress-files",
+    "allow-compress-smart",
+    "allow-compress-single",
+    "allow-cancel-file",
+    "allow-clear-cancel-queue",
+    "allow-save-file",
+    "allow-open-in-finder",
+    "allow-read-image-dataurl",
+    "allow-get-app-version",
+    "allow-restore-original",
+    "allow-export-all",
+    "allow-get-file-sizes",
+    "allow-restore-all"
   ],
   "remote": {
     "urls": ["http://localhost", "http://127.0.0.1"]
