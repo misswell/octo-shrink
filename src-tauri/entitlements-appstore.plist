@@ -14,5 +14,11 @@
     <!-- 允许直接写「下载」目录（输出模式 folder=Downloads 场景） -->
     <key>com.apple.security.files.downloads.read-write</key>
     <true/>
+    <!-- 允许本地 HTTP 服务器（绕过沙盒阻止的 tauri:// 自定义协议） -->
+    <key>com.apple.security.network.server</key>
+    <true/>
+    <!-- 允许 WebContent 进程连接本地 HTTP 服务器 -->
+    <key>com.apple.security.network.client</key>
+    <true/>
 </dict>
 </plist>
