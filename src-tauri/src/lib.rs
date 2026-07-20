@@ -38,28 +38,15 @@ pub fn run() {
             commands::restore_all,
         ])
         .setup(|app| {
-            // 初始化压缩工具资源目录
-            if let Ok(res_dir) = app.path().resource_dir() {
-                engine::set_resource_dir(res_dir);
-            }
-           // App Store 沙盒版：tauri:// 被沙盒阻止，导航到 file://
-            #[cfg(feature = "inproc-backends")]
+           // 初始化压缩工具资源目录
+           if let Ok(res_dir) = app.path().resource_dir() {
+               engine::set_resource_dir(res_dir);
+           }
+            #[cfg(debug_assertions)]
             {
-                // tauri://localhost 被沙盒阻止，延迟 100ms 后导航到 file://
-                // （等 webview 初始化完成，避免被初始 tauri:// 加载覆盖）
-                let app_handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    if let Some(window) = app_handle.get_webview_window("main") {
-                        if let Ok(res_dir) = app_handle.path().resource_dir() {
-                            let index_path = res_dir.join("index.html");
-                            let url_str = format!("file://{}", index_path.to_string_lossy());
-                            if let Ok(url) = url_str.parse() {
-                                let _ = window.navigate(url);
-                            }
-                        }
-                    }
-                });
+                if let Some(window) = app.get_webview_window("main") {
+                    window.open_devtools();
+                }
             }
             Ok(())
         })

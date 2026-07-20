@@ -18,7 +18,7 @@ export CARGO_PROFILE_RELEASE_PANIC=unwind
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TAURI_DIR="$PROJECT_DIR/src-tauri"
 APP_NAME="OctoShrink"
-APP_VERSION="2.2.3"
+APP_VERSION="2.2.4"
 APP="$TAURI_DIR/target/release/bundle/macos/$APP_NAME.app"
 BUNDLE_ID="com.misswell.octoshrink.appstore"
 ENTITLEMENTS="$TAURI_DIR/entitlements-appstore.plist"
@@ -44,14 +44,6 @@ cp -R "$PROJECT_DIR/frontend/." "$APP/Contents/Resources/" \
   || fail "复制前端文件失败"
 ok "前端文件已复制到 .app"
 
- # 内联 CSS/JS 到 index.html（沙盒 WKWebView 用 file:// 加载时不加载外部子资源）
- python3 "$PROJECT_DIR/scripts/inline_assets.py" \
-   "$APP/Contents/Resources/index.html" \
-   "$APP/Contents/Resources/style.css" \
-   "$APP/Contents/Resources/app.js" \
-   || fail "内联 CSS/JS 失败"
- ok "CSS/JS 已内联到 index.html"
- 
 # ---------- 2. Apple Distribution 签名（hardened runtime + sandbox entitlements）----------
 # 前置：在钥匙串安装 "Apple Distribution: <name>" 证书（Apple Developer > Certificates > +）。
 SIGN_IDENTITY="${APPSTORE_SIGN_IDENTITY:-Apple Distribution: Guofeng Liu (U8U443D7ZL)}"

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OctoShrink",
+  "version": "2.2.0",
+  "identifier": "com.misswell.octoshrink",
+  "build": {
+    "frontendDist": "../frontend"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "OctoShrink",
+        "width": 760,
+        "height": 680,
+        "minWidth": 640,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "backgroundColor": "#f8f6f8"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Utility",
+    "macOS": {
+      "frameworks": [],
+      "minimumSystemVersion": "14.0",
+      "signingIdentity": null,
+      "entitlements": "entitlements.plist"
+    }
+  }
+}
