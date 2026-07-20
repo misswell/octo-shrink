@@ -55,10 +55,10 @@ ok "$APP 已签名"
 # ---------- 3. productbuild 打包 .pkg ----------
 PKG="$PROJECT_DIR/OctoShrink-${APP_VERSION}.pkg"
 INSTALLER_IDENTITY="${APPSTORE_INSTALLER_IDENTITY:-3rd Party Mac Developer Installer: Guofeng Liu (U8U443D7ZL)}"
-log "productbuild: $PKG（installer: $INSTALLER_IDENTITY）"
+log "productbuild: ${PKG}（installer: $INSTALLER_IDENTITY）"
 xcrun productbuild --component "$APP" /Applications --sign "$INSTALLER_IDENTITY" "$PKG" \
   || fail "productbuild 失败：确认有 3rd Party Mac Developer Installer 证书"
-ok "$PKG"
+ok "${PKG}"
 
 # ---------- 4. 上传 App Store Connect ----------
 echo ""
