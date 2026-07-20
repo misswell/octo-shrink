@@ -10,6 +10,11 @@
 
 set -euo pipefail
 
+# Cargo 1.90.0 regression：panic=abort 会让 proc-macro（equator-macro）的 dylib
+# metadata 损坏，rustc 报 E0463 "can't find crate for equator_macro"。
+# 用 panic=unwind 绕过，仅 appstore 线，不影响默认线（notarize.sh 仍用 abort）。
+export CARGO_PROFILE_RELEASE_PANIC=unwind
+
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TAURI_DIR="$PROJECT_DIR/src-tauri"
 APP_NAME="OctoShrink"
@@ -36,7 +41,7 @@ ok "$APP"
 
 # ---------- 2. Apple Distribution 签名（hardened runtime + sandbox entitlements）----------
 # 前置：在钥匙串安装 "Apple Distribution: <name>" 证书（Apple Developer > Certificates > +）。
-SIGN_IDENTITY="${APPSTORE_SIGN_IDENTITY:-Apple Distribution: misswell@foxmail.com}"
+SIGN_IDENTITY="${APPSTORE_SIGN_IDENTITY:-Apple Distribution: Guofeng Liu (U8U443D7ZL)}"
 log "codesign: $SIGN_IDENTITY + hardened runtime + entitlements"
 codesign --force --options runtime --entitlements "$ENTITLEMENTS" --sign "$SIGN_IDENTITY" "$APP" \
   || fail "签名失败：确认钥匙串已安装 Apple Distribution 证书"
@@ -44,7 +49,7 @@ ok "$APP 已签名"
 
 # ---------- 3. productbuild 打包 .pkg ----------
 PKG="$PROJECT_DIR/OctoShrink-${APP_VERSION}.pkg"
-INSTALLER_IDENTITY="${APPSTORE_INSTALLER_IDENTITY:-3rd Party Mac Developer Installer: misswell@foxmail.com}"
+INSTALLER_IDENTITY="${APPSTORE_INSTALLER_IDENTITY:-3rd Party Mac Developer Installer: Guofeng Liu (U8U443D7ZL)}"
 log "productbuild: $PKG（installer: $INSTALLER_IDENTITY）"
 xcrun productbuild --component "$APP" /Applications --sign "$INSTALLER_IDENTITY" "$PKG" \
   || fail "productbuild 失败：确认有 3rd Party Mac Developer Installer 证书"
