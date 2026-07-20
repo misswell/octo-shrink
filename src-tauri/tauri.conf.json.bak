@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "OctoShrink",
-  "version": "2.2.4",
-  "identifier": "com.misswell.octoshrink.appstore",
+  "version": "2.2.0",
+  "identifier": "com.misswell.octoshrink",
   "build": {
     "frontendDist": "../frontend"
   },
@@ -28,7 +28,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "app",
+    "targets": "all",
     "icon": [
       "icons/icon.png",
       "icons/icon.icns",
@@ -39,7 +39,7 @@
       "frameworks": [],
       "minimumSystemVersion": "14.0",
       "signingIdentity": null,
-      "entitlements": "entitlements-appstore.plist"
+      "entitlements": "entitlements.plist"
     }
   }
 }
