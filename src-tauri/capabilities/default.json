@@ -5,7 +5,9 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "dialog:default"
+    "dialog:default",
+    "core:window:allow-start-dragging",
+    "default"
   ],
   "remote": {
     "urls": ["http://localhost", "http://127.0.0.1"]
