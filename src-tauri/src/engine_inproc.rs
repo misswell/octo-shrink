@@ -126,27 +126,55 @@ fn compress_png_with_imagequant(file: &Path, quality: u32) -> Option<Vec<u8>> {
     if buf.is_empty() { None } else { Some(buf) }
 }
 
-/// JPEG：占位实现，用 image crate 按质量重编码。
-/// 后续接入 mozjpeg crate（与 cjpeg 同源 trellis quant）。
+/// image crate 兜底：JPEG 按质量重编码（RGB8）。
+fn compress_jpg_with_image(file: &Path, quality: u8) -> Option<Vec<u8>> {
+    let img = image::open(file).ok()?;
+    let rgb = img.to_rgb8();
+    let mut buf = Vec::new();
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, quality);
+    use image::ImageEncoder;
+    encoder
+        .write_image(&rgb, img.width(), img.height(), image::ExtendedColorType::Rgb8)
+        .ok()?;
+    if buf.is_empty() { None } else { Some(buf) }
+}
+
+/// mozjpeg crate 量化（同源 cjpeg trellis quant）：set_quality + optimize + progressive。
+fn compress_jpg_with_mozjpeg(file: &Path, quality: u32) -> Option<Vec<u8>> {
+    let img = image::open(file).ok()?;
+    let rgb = img.to_rgb8();
+    let (w, h) = (rgb.width() as usize, rgb.height() as usize);
+    let mut cinfo = mozjpeg::Compress::new(mozjpeg::ColorSpace::JCS_EXT_RGB);
+    cinfo.set_size(w, h);
+    cinfo.set_quality(quality as f32);
+    cinfo.set_optimize_coding(true);
+    cinfo.set_progressive_mode();
+    let mut comp = cinfo.start_compress(Vec::new()).ok()?;
+    let row_stride = w * 3;
+    let raw: &[u8] = rgb.as_raw();
+    for row in raw.chunks_exact(row_stride) {
+        let _ = comp.write_scanlines(row);
+    }
+    comp.finish().ok()
+}
+
+/// JPEG：两级 fallback（对齐 cli 版 engine.rs），成功判定 data.len() < original_size。
+/// mozjpeg crate 量化（同源 cjpeg trellis quant）→ image crate 兜底。
 async fn compress_jpg(file: &Path, options: &CompressOptions) -> EngineResult {
     let original = fs::read(file).unwrap_or_default();
     let original_size = original.len() as u64;
-    let quality = options.quality as u8;
-    if let Ok(img) = image::open(file) {
-        let rgb = img.to_rgb8();
-        let mut buf = Vec::new();
-        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, quality);
-        use image::ImageEncoder;
-        if encoder
-            .write_image(&rgb, img.width(), img.height(), image::ExtendedColorType::Rgb8)
-            .is_ok()
-            && !buf.is_empty()
-            && (buf.len() as u64) < original_size
-        {
-            return ok(buf, "jpg", "image-jpeg (inproc, 待升级 mozjpeg)");
+    let quality = options.quality;
+    if let Some(data) = compress_jpg_with_mozjpeg(file, quality) {
+        if (data.len() as u64) < original_size {
+            return ok(data, "jpg", "mozjpeg (inproc)");
         }
     }
-    no_improvement(original, "jpg", "image-jpeg (inproc)", original_size, original_size)
+    if let Some(data) = compress_jpg_with_image(file, quality as u8) {
+        if (data.len() as u64) < original_size {
+            return ok(data, "jpg", "image-jpeg (inproc)");
+        }
+    }
+    no_improvement(original, "jpg", "mozjpeg (inproc)", original_size, original_size)
 }
 
 pub async fn compress_image(file: &Path, options: &CompressOptions) -> EngineResult {
