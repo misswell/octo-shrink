@@ -177,27 +177,98 @@ async fn compress_jpg(file: &Path, options: &CompressOptions) -> EngineResult {
     no_improvement(original, "jpg", "mozjpeg (inproc)", original_size, original_size)
 }
 
+/// webp crate 编码（同源 cwebp/libwebp）：from_rgba + encode(quality)。
+fn compress_to_webp_with_cwebp(file: &Path, quality: u32) -> Option<Vec<u8>> {
+    let img = image::open(file).ok()?;
+    let rgba = img.to_rgba8();
+    let encoder = webp::Encoder::from_rgba(rgba.as_raw(), rgba.width(), rgba.height());
+    let webp_data = encoder.encode(quality as f32);
+    let bytes: &[u8] = &webp_data;
+    if bytes.is_empty() { None } else { Some(bytes.to_vec()) }
+}
+
+/// WebP：进程内 webp crate 编码（对齐 cli 版 cwebp）。成功判定 < original_size。
+async fn compress_to_webp(file: &Path, options: &CompressOptions) -> EngineResult {
+    let original = fs::read(file).unwrap_or_default();
+    let original_size = original.len() as u64;
+    let quality = options.quality;
+    if let Some(data) = compress_to_webp_with_cwebp(file, quality) {
+        if (data.len() as u64) < original_size {
+            return ok(data, "webp", "cwebp (inproc)");
+        }
+    }
+    no_improvement(original, "webp", "cwebp (inproc)", original_size, original_size)
+}
+
+/// image crate 重编码 GIF（保留所有帧，无 gifsicle 减色优化，功能降级但可用）。
+fn compress_gif_with_image(file: &Path) -> Option<Vec<u8>> {
+    use image::AnimationDecoder;
+    let f = std::fs::File::open(file).ok()?;
+    let dec = image::codecs::gif::GifDecoder::new(std::io::BufReader::new(f)).ok()?;
+    let frames = dec.into_frames().collect_frames().ok()?;
+    let mut buf = Vec::new();
+    {
+        let mut enc = image::codecs::gif::GifEncoder::new_with_speed(&mut buf, 3);
+        let _ = enc.encode_frames(frames);
+    }
+    if buf.is_empty() { None } else { Some(buf) }
+}
+
+/// GIF：进程内重编码（对齐 cli 版 gifsicle 接口）。成功判定 < original_size。
+async fn compress_gif(file: &Path, options: &CompressOptions) -> EngineResult {
+    let original = fs::read(file).unwrap_or_default();
+    let original_size = original.len() as u64;
+    let _quality = options.quality;
+    if let Some(data) = compress_gif_with_image(file) {
+        if (data.len() as u64) < original_size {
+            return ok(data, "gif", "gifsicle (inproc)");
+        }
+    }
+    no_improvement(original, "gif", "gifsicle (inproc)", original_size, original_size)
+}
+
+/// ravif crate 编码（同源 AV1/rav1e，对齐 avifenc）：with_quality + with_speed(6)。
+fn compress_to_avif_with_avifenc(file: &Path, quality: u32) -> Option<Vec<u8>> {
+    let img = image::open(file).ok()?;
+    let rgba = img.to_rgba8();
+    let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+    let pixels: Vec<ravif::RGBA8> = rgba.as_raw().chunks_exact(4)
+        .map(|c| ravif::RGBA8 { r: c[0], g: c[1], b: c[2], a: c[3] })
+        .collect();
+    let enc = ravif::Encoder::new().with_quality(quality as f32).with_speed(6);
+    let result = enc.encode_rgba(ravif::Img::new(&pixels, w, h)).ok()?;
+    Some(result.avif_file)
+}
+
+/// AVIF：进程内 ravif 编码（对齐 cli 版 avifenc）。成功判定 < original_size。
+async fn compress_to_avif(file: &Path, options: &CompressOptions) -> EngineResult {
+    let original = fs::read(file).unwrap_or_default();
+    let original_size = original.len() as u64;
+    let quality = options.quality;
+    if let Some(data) = compress_to_avif_with_avifenc(file, quality) {
+        if (data.len() as u64) < original_size {
+            return ok(data, "avif", "avifenc (inproc)");
+        }
+    }
+    no_improvement(original, "avif", "avifenc (inproc)", original_size, original_size)
+}
+
+/// JPEG XL：App Store 版暂未接入 libjxl（编译链重），友好降级保留原图不崩。
+async fn compress_to_jxl(file: &Path, _options: &CompressOptions) -> EngineResult {
+    let original = fs::read(file).unwrap_or_default();
+    let original_size = original.len() as u64;
+    no_improvement(original, "jxl", "cjxl (inproc, 暂未接入)", original_size, original_size)
+}
+
 pub async fn compress_image(file: &Path, options: &CompressOptions) -> EngineResult {
     let img_type = detect_image_type(file);
     match img_type.as_str() {
         "png" => compress_png(file, options).await,
         "jpg" => compress_jpg(file, options).await,
-        "webp" => {
-            let original = fs::read(file).unwrap_or_default();
-            unsupported(original, "webp", "App Store 进程内版暂未接入 WebP，待加 webp crate")
-        }
-        "gif" => {
-            let original = fs::read(file).unwrap_or_default();
-            unsupported(original, "gif", "App Store 进程内版暂未接入 GIF，待加 gif crate")
-        }
-        "avif" => {
-            let original = fs::read(file).unwrap_or_default();
-            unsupported(original, "avif", "App Store 进程内版暂未接入 AVIF，待加 libavif")
-        }
-        "jxl" => {
-            let original = fs::read(file).unwrap_or_default();
-            unsupported(original, "jxl", "App Store 进程内版暂未接入 JPEG XL")
-        }
+        "webp" => compress_to_webp(file, options).await,
+        "gif" => compress_gif(file, options).await,
+        "avif" => compress_to_avif(file, options).await,
+        "jxl" => compress_to_jxl(file, options).await,
         "" | "unknown" => {
             let original = fs::read(file).unwrap_or_default();
             unsupported(original, &img_type, "未识别的图片类型")
@@ -213,6 +284,9 @@ pub async fn compress_to_format(file: &Path, target: &str, options: &CompressOpt
     match target {
         "png" => compress_png(file, options).await,
         "jpg" | "jpeg" => compress_jpg(file, options).await,
+        "webp" => compress_to_webp(file, options).await,
+        "avif" => compress_to_avif(file, options).await,
+        "jxl" => compress_to_jxl(file, options).await,
         other => {
             let original = fs::read(file).unwrap_or_default();
             unsupported(original, other, &format!("App Store 版暂未接入 {} 输出", other))
