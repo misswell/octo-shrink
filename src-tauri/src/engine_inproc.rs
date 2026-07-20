@@ -54,21 +54,26 @@ async fn compress_png(file: &Path, options: &CompressOptions) -> EngineResult {
     let original = fs::read(file).unwrap_or_default();
     let original_size = original.len() as u64;
     let quality = options.quality;
+    eprintln!("[DEBUG] inproc compress_png: {:?} q={} orig_size={}", file, quality, original_size);
     if let Some(data) = compress_png_with_imagequant(file, quality) {
+        eprintln!("[DEBUG] imagequant returned {} bytes", data.len());
         if (data.len() as u64) < original_size {
             return ok(data, "png", "pngquant (inproc)");
         }
     }
     if let Some(data) = compress_png_with_oxipng(file, quality) {
+        eprintln!("[DEBUG] oxipng returned {} bytes", data.len());
         if (data.len() as u64) < original_size {
             return ok(data, "png", "oxipng (inproc)");
         }
     }
     if let Some(data) = compress_png_with_image(file) {
+        eprintln!("[DEBUG] image-png returned {} bytes", data.len());
         if (data.len() as u64) < original_size {
             return ok(data, "png", "image-png (inproc)");
         }
     }
+    eprintln!("[DEBUG] compress_png: no improvement, returning original");
     no_improvement(original, "png", "pngquant (inproc)", original_size, original_size)
 }
 
@@ -116,9 +121,14 @@ fn compress_png_with_imagequant(file: &Path, quality: u32) -> Option<Vec<u8>> {
     let mut image = attr.new_image(pixels, w, h, 0.0).ok()?;
     let mut quant = attr.quantize(&mut image).ok()?;
     let _ = quant.set_dithering_level(1.0);
-    let (remapped, _idx) = quant.remapped(&mut image).ok()?;
-    let mut out: Vec<u8> = Vec::with_capacity(remapped.len() * 4);
-    for p in &remapped { out.push(p.r); out.push(p.g); out.push(p.b); out.push(p.a); }
+    // remapped() 返回 (palette, indices)：palette 是量化后的颜色表，
+    // indices 是每像素 1 字节的调色板索引。需要用索引查表重建完整 RGBA 图。
+    let (palette, indices) = quant.remapped(&mut image).ok()?;
+    let mut out: Vec<u8> = Vec::with_capacity(indices.len() * 4);
+    for &idx in &indices {
+        let p = palette[idx as usize];
+        out.push(p.r); out.push(p.g); out.push(p.b); out.push(p.a);
+    }
     let mut buf = Vec::new();
     let enc = image::codecs::png::PngEncoder::new_with_quality(
         &mut buf, image::codecs::png::CompressionType::Best, image::codecs::png::FilterType::Adaptive);
@@ -262,6 +272,7 @@ async fn compress_to_jxl(file: &Path, _options: &CompressOptions) -> EngineResul
 
 pub async fn compress_image(file: &Path, options: &CompressOptions) -> EngineResult {
     let img_type = detect_image_type(file);
+    eprintln!("[DEBUG] inproc compress_image: {:?} type={}", file, img_type);
     match img_type.as_str() {
         "png" => compress_png(file, options).await,
         "jpg" => compress_jpg(file, options).await,
@@ -297,4 +308,35 @@ pub async fn compress_to_format(file: &Path, target: &str, options: &CompressOpt
 pub async fn compress_smart(file: &Path, options: &CompressOptions) -> EngineResult {
     // 骨架：先按 compress_image 的结果走；后续接入多引擎候选挑选
     compress_image(file, options).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[tokio::test]
+    async fn test_compress_png_inproc() {
+        let test_file = PathBuf::from("/tmp/test_octoshrink.png");
+        if !test_file.exists() {
+            eprintln!("[TEST] test file not found, skipping");
+            return;
+        }
+        let opts = CompressOptions {
+            quality: 80,
+            output_format: "original".into(),
+            smart_mode: false,
+            backend: "auto".into(),
+            effort: 3,
+            convert_to_webp: false,
+            output_mode: "suffix".into(),
+            output_dir: None,
+            lossless: None,
+        };
+        eprintln!("[TEST] calling compress_image on {:?}", test_file);
+        let result = compress_image(&test_file, &opts).await;
+        eprintln!("[TEST] result: success={} out_type={} algo={} err={:?} comp_len={}",
+            result.success, result.out_type, result.algorithm, result.error, result.compressed.len());
+        assert!(result.success, "compression should succeed");
+    }
 }

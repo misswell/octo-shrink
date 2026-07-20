@@ -206,7 +206,7 @@ async fn compress_batch(
     // 信号量限制并发数为 3
     let semaphore = Arc::new(tokio::sync::Semaphore::new(3));
 
-    let mut handles = Vec::new();
+    let mut handles: Vec<(tokio::task::JoinHandle<()>, String)> = Vec::new();
     for file_path in all_files {
         // Check cancellation
         let cancelled = {
@@ -261,9 +261,11 @@ async fn compress_batch(
         let skipped_c = skipped_arc.clone();
         let fp = file_path.clone();
 
-        handles.push(tokio::spawn(async move {
+        let fp_for_track = fp.clone();
+        handles.push((tokio::spawn(async move {
             let _permit = permit; // 持有信号量直到压缩完成
 
+            eprintln!("[DEBUG] spawn task started for: {}", fp);
             let path = PathBuf::from(&fp);
             let engine_result = if use_smart {
                 engine::compress_smart(&path, &opts).await
@@ -274,6 +276,7 @@ async fn compress_batch(
             let mut result = build_result(&fp, &engine_result);
             write_output_file(&mut result, &path, &engine_result.compressed, &fps, &opts);
 
+            eprintln!("[DEBUG] spawn task done for: {} success={}", fp, result.success);
             {
                 let mut pr = processed_c.lock().await;
                 *pr += 1;
@@ -292,12 +295,40 @@ async fn compress_batch(
 
             let mut res = results_c.lock().await;
             res.push(result);
-        }));
+        }), fp_for_track));
     }
 
     // 等待所有任务完成
-    for handle in handles {
-        let _ = handle.await;
+    for (handle, fp) in handles {
+        if let Err(e) = handle.await {
+            eprintln!("[ERROR] compression task panicked for {}: {:?}", fp, e);
+            let mut pr = processed_arc.lock().await;
+            *pr += 1;
+            let _ = app_arc.emit(
+                "compress-progress",
+                ProgressPayload {
+                    total: total - *skipped_arc.lock().await,
+                    current: *pr,
+                    file: fp.clone(),
+                    status: "".into(),
+                    result: Some(CompressResult {
+                        success: false,
+                        file: fp,
+                        original_size: 0,
+                        compressed_size: 0,
+                        savings: 0.0,
+                        original_size_formatted: "0 B".into(),
+                        compressed_size_formatted: "0 B".into(),
+                        out_type: "unknown".into(),
+                        algorithm: "none".into(),
+                        error: Some("压缩过程发生内部错误".into()),
+                        output_path: None,
+                        backup_path: None,
+                        output_mode: None,
+                    }),
+                },
+            );
+        }
     }
 
     state.cancel_queue.lock().unwrap().clear();
@@ -351,6 +382,7 @@ pub async fn compress_files(
     file_paths: Vec<String>,
     options: CompressOptions,
 ) -> Result<Vec<CompressResult>, String> {
+    eprintln!("[DEBUG] compress_files invoked: {} files, quality={}", file_paths.len(), options.quality);
     Ok(compress_batch(&app, state.inner(), file_paths, options, false).await)
 }
 
