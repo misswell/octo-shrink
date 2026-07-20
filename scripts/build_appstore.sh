@@ -13,6 +13,7 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TAURI_DIR="$PROJECT_DIR/src-tauri"
 APP_NAME="OctoShrink"
+APP_VERSION="2.2.0"
 APP="$TAURI_DIR/target/release/bundle/macos/$APP_NAME.app"
 BUNDLE_ID="com.misswell.octoshrink.appstore"
 ENTITLEMENTS="$TAURI_DIR/entitlements-appstore.plist"
@@ -29,19 +30,30 @@ fail() { echo "✗ $*" >&2; exit 1; }
 log "cargo tauri build --bundles app --features appstore（进程内 Rust 库，无外部 CLI/dylib）"
 # 用 tauri.conf.appstore.json 作为配置基准（identifier=appstore Bundle ID）
 cd "$TAURI_DIR"
-TAURI_CONF="$CONF" cargo tauri build --bundles app --features appstore || fail "构建失败"
+cargo tauri build --bundles app --features appstore --config "$CONF" || fail "构建失败"
 [ -d "$APP" ] || fail "构建产物不存在：$APP"
 ok "$APP"
 
-# ---------- 2. 当前状态：骨架占位 ----------
-# 以下步骤待 Apple Distribution 证书签发后补齐，骨架阶段到此为止。
-#   a. 用 Apple Distribution + hardened runtime 重新签名（entitlements-appstore.plist）
-#      codesign --force --options runtime --entitlements "$ENTITLEMENTS" \
-#        --sign "Apple Distribution: misswell@foxmail.com" "$APP"
-#   b. 生成 .pkg: xcrun productbuild --component "$APP" /Applications ...
-#   c. 用 Transporter / xcrun altool 上传到 App Store Connect（不走 notarytool）
+# ---------- 2. Apple Distribution 签名（hardened runtime + sandbox entitlements）----------
+# 前置：在钥匙串安装 "Apple Distribution: <name>" 证书（Apple Developer > Certificates > +）。
+SIGN_IDENTITY="${APPSTORE_SIGN_IDENTITY:-Apple Distribution: misswell@foxmail.com}"
+log "codesign: $SIGN_IDENTITY + hardened runtime + entitlements"
+codesign --force --options runtime --entitlements "$ENTITLEMENTS" --sign "$SIGN_IDENTITY" "$APP" \
+  || fail "签名失败：确认钥匙串已安装 Apple Distribution 证书"
+ok "$APP 已签名"
 
+# ---------- 3. productbuild 打包 .pkg ----------
+PKG="$PROJECT_DIR/OctoShrink-${APP_VERSION}.pkg"
+INSTALLER_IDENTITY="${APPSTORE_INSTALLER_IDENTITY:-3rd Party Mac Developer Installer: misswell@foxmail.com}"
+log "productbuild: $PKG（installer: $INSTALLER_IDENTITY）"
+xcrun productbuild --component "$APP" /Applications --sign "$INSTALLER_IDENTITY" "$PKG" \
+  || fail "productbuild 失败：确认有 3rd Party Mac Developer Installer 证书"
+ok "$PKG"
+
+# ---------- 4. 上传 App Store Connect ----------
 echo ""
-log "骨架阶段产物：$APP"
-log "App Store 签名/打包/上传待 Apple Distribution 证书就绪后补齐。"
-log "下一步见 docs/APPSTORE_MIGRATION_PLAN.md（阶段 1-5）与 AGENTS.md。"
+log "✅ 产物就绪：$PKG"
+log "上传方式（二选一）："
+log "  a. 打开 Transporter.app，拖入 $PKG 上传（推荐）"
+log "  b. xcrun altool --upload-app -f \"$PKG\" -t macOS -u \"<apple_id>\" -p \"<app_specific_password>\""
+log "上传后在 App Store Connect 选 build 提交审核（1-3 周）。"
