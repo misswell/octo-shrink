@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "OctoShrink",
-  "version": "2.2.1",
+  "version": "2.2.3",
   "identifier": "com.misswell.octoshrink.appstore",
   "build": {
     "frontendDist": "../frontend"
@@ -17,10 +17,10 @@
         "minHeight": 600,
         "resizable": true,
         "fullscreen": false,
-      "titleBarStyle": "Overlay",
-      "hiddenTitle": true,
-      "backgroundColor": "#f8f6f8"
-    }
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "backgroundColor": "#f8f6f8"
+      }
     ],
     "security": {
       "csp": null
