@@ -24,12 +24,14 @@ base64 = "0.22"
 tempfile = "3"
 tokio = { version = "1", features = ["process", "rt-multi-thread", "macros", "fs", "io-util"] }
 log = "0.4"
+imagequant = { version = "4", optional = true }
+oxipng = { version = "9", optional = true }
 
 [features]
 default = ["cli-backends"]
 cli-backends = []                  # Direct 产物线：调外部 CLI + 内置 dylib（现状）
 appstore = ["inproc-backends"]     # App Store 产物线：进程内 Rust 库 + 沙盒
-inproc-backends = []               # 进程内 Rust 库（沙盒友好）
+inproc-backends = ["dep:imagequant", "dep:oxipng"]  # 进程内 Rust 库（沙盒友好）
 custom-protocol = ["tauri/custom-protocol"]
 
 [profile.release]

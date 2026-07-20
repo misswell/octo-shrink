@@ -23,13 +23,18 @@ fn ok(data: Vec<u8>, out_type: &str, algorithm: &str) -> EngineResult {
     }
 }
 
-fn no_improvement(original: Vec<u8>, out_type: &str, algorithm: &str) -> EngineResult {
+fn no_improvement(original: Vec<u8>, out_type: &str, algorithm: &str, orig_size: u64, comp_size: u64) -> EngineResult {
+    let msg = if comp_size >= orig_size {
+        format!("压缩后 {} > 原始 {}，原图已是最优压缩", super::format_bytes(comp_size), super::format_bytes(orig_size))
+    } else {
+        "压缩后体积未减小".into()
+    };
     EngineResult {
         success: true,
         compressed: original,
         out_type: out_type.into(),
         algorithm: algorithm.into(),
-        error: Some("压缩后体积未减小".into()),
+        error: Some(msg),
     }
 }
 
@@ -43,30 +48,82 @@ fn unsupported(original: Vec<u8>, out_type: &str, reason: &str) -> EngineResult 
     }
 }
 
-/// PNG：占位实现，用 image crate 重编码（PNG 无损最佳压缩）。
-/// 后续接入 imagequant crate 做量化（与 pngquant 同源算法）+ oxipng crate 无损再压。
-async fn compress_png(file: &Path, _options: &CompressOptions) -> EngineResult {
+/// PNG：三级 fallback（与 cli 版 engine.rs 同序），成功判定 data.len() < original_size。
+/// imagequant 量化（同源 pngquant）→ oxipng 无损 → image crate 兜底。
+async fn compress_png(file: &Path, options: &CompressOptions) -> EngineResult {
     let original = fs::read(file).unwrap_or_default();
     let original_size = original.len() as u64;
-    if let Ok(img) = image::open(file) {
-        let mut buf = Vec::new();
-        let encoder = image::codecs::png::PngEncoder::new_with_quality(
-            &mut buf,
-            image::codecs::png::CompressionType::Best,
-            image::codecs::png::FilterType::Adaptive,
-        );
-        use image::ImageEncoder;
-        let rgba = img.to_rgba8();
-        if encoder
-            .write_image(&rgba, img.width(), img.height(), image::ExtendedColorType::Rgba8)
-            .is_ok()
-            && !buf.is_empty()
-            && (buf.len() as u64) < original_size
-        {
-            return ok(buf, "png", "image-png (inproc, 待升级 imagequant+oxipng)");
+    let quality = options.quality;
+    if let Some(data) = compress_png_with_imagequant(file, quality) {
+        if (data.len() as u64) < original_size {
+            return ok(data, "png", "pngquant (inproc)");
         }
     }
-    no_improvement(original, "png", "image-png (inproc)")
+    if let Some(data) = compress_png_with_oxipng(file, quality) {
+        if (data.len() as u64) < original_size {
+            return ok(data, "png", "oxipng (inproc)");
+        }
+    }
+    if let Some(data) = compress_png_with_image(file) {
+        if (data.len() as u64) < original_size {
+            return ok(data, "png", "image-png (inproc)");
+        }
+    }
+    no_improvement(original, "png", "pngquant (inproc)", original_size, original_size)
+}
+
+/// image crate 兜底：PNG 无损最佳压缩重编码（RGBA8）。
+fn compress_png_with_image(file: &Path) -> Option<Vec<u8>> {
+    let img = image::open(file).ok()?;
+    let mut buf = Vec::new();
+    let encoder = image::codecs::png::PngEncoder::new_with_quality(
+        &mut buf,
+        image::codecs::png::CompressionType::Best,
+        image::codecs::png::FilterType::Adaptive,
+    );
+    use image::ImageEncoder;
+    let rgba = img.to_rgba8();
+    encoder
+        .write_image(&rgba, img.width(), img.height(), image::ExtendedColorType::Rgba8)
+        .ok()?;
+    if buf.is_empty() { None } else { Some(buf) }
+}
+
+/// oxipng crate 无损优化。level = (quality/20).clamp(1,6)。
+fn compress_png_with_oxipng(file: &Path, quality: u32) -> Option<Vec<u8>> {
+    let data = std::fs::read(file).ok()?;
+    let level = (quality / 20).clamp(1, 6) as u8;
+    let opts = oxipng::Options::from_preset(level);
+    oxipng::optimize_from_memory(&data, &opts).ok()
+}
+
+/// imagequant crate 量化（与 pngquant 同源算法）：quality→set_quality(q-10,q)，speed=3，
+/// 量化后取 remapped 像素重编码 RGBA8 PNG（颜色已减，非 PLTE 调色板）。
+fn compress_png_with_imagequant(file: &Path, quality: u32) -> Option<Vec<u8>> {
+    use imagequant::{RGBA, Attributes};
+    use image::ImageEncoder;
+    let img = image::open(file).ok()?;
+    let rgba = img.to_rgba8();
+    let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+    let raw: &[u8] = rgba.as_raw();
+    let pixels: Vec<RGBA> = raw.chunks_exact(4)
+        .map(|c| RGBA::new(c[0], c[1], c[2], c[3]))
+        .collect();
+    let mut attr = Attributes::new();
+    let _ = attr.set_speed(3);
+    let q = quality.min(100).max(10);
+    let _ = attr.set_quality((q - 10) as u8, q as u8);
+    let mut image = attr.new_image(pixels, w, h, 0.0).ok()?;
+    let mut quant = attr.quantize(&mut image).ok()?;
+    let _ = quant.set_dithering_level(1.0);
+    let (remapped, _idx) = quant.remapped(&mut image).ok()?;
+    let mut out: Vec<u8> = Vec::with_capacity(remapped.len() * 4);
+    for p in &remapped { out.push(p.r); out.push(p.g); out.push(p.b); out.push(p.a); }
+    let mut buf = Vec::new();
+    let enc = image::codecs::png::PngEncoder::new_with_quality(
+        &mut buf, image::codecs::png::CompressionType::Best, image::codecs::png::FilterType::Adaptive);
+    enc.write_image(&out, w as u32, h as u32, image::ExtendedColorType::Rgba8).ok()?;
+    if buf.is_empty() { None } else { Some(buf) }
 }
 
 /// JPEG：占位实现，用 image crate 按质量重编码。
@@ -89,7 +146,7 @@ async fn compress_jpg(file: &Path, options: &CompressOptions) -> EngineResult {
             return ok(buf, "jpg", "image-jpeg (inproc, 待升级 mozjpeg)");
         }
     }
-    no_improvement(original, "jpg", "image-jpeg (inproc)")
+    no_improvement(original, "jpg", "image-jpeg (inproc)", original_size, original_size)
 }
 
 pub async fn compress_image(file: &Path, options: &CompressOptions) -> EngineResult {
