@@ -109,11 +109,12 @@ cargo test --features inproc-backends          # 进程内版
 ## 当前状态（编辑此节以保持最新）
 
 - ✅ Direct 产物线已就绪：v2.2.0 已签名公证发布，notarize.sh 工作
-- 🟡 App Store 产物线骨架已完成：features 双线、engine_inproc.rs 占位、build_appstore.sh 占位
-- ⬜ App Store 引擎迁移：PNG 进程内化（阶段 1.1 起步）→ JPEG → WebP → AVIF → GIF → JXL
-- ⬜ 沙盒改造：entitlements-appstore.plist、bookmarks、open_in_finder 替换
-- ⬜ Apple Distribution 证书签发
-- ⬜ 首次 App Store 提交
+- ✅ App Store 产物线已构建并上传：v2.2.6 PKG 已上传 App Store Connect（Apple ID: 6792604654）
+- ✅ 白屏与 IPC 问题已修复：回归 tauri://localhost，capabilities 声明权限，删除 HTTP 服务器
+- ✅ 沙盒文件访问已修复：security-scoped bookmarks + 弹窗授权 + 清理旧授权功能
+- ✅ PNG 进程内化已完成（阶段 1.1）：imagequant + oxipng crate 接入
+- 🟡 App Store 审核待提交：需补全元数据（截图、描述、关键词、类别等）后提交审核
+- ⬜ 引擎迁移后续：JPEG（mozjpeg crate）→ WebP → AVIF → GIF → JXL
 
 ## 文件访问差异表（随改动更新）
 
@@ -142,8 +143,8 @@ cargo test --features inproc-backends          # 进程内版
 
 | CLI（Direct 版用）| Rust crate 替代（App Store 版用）| 状态 |
 ---|---|---|
-| pngquant | imagequant crate（同源算法）| 待接入 |
-| oxipng | oxipng crate（库版）| 待接入 |
+| pngquant | imagequant crate（同源算法）| ✅ 已完成 |
+| oxipng | oxipng crate（库版）| ✅ 已完成 |
 | cjpeg (mozjpeg) | mozjpeg crate | 待接入 |
 | cwebp | webp + libwebp-sys | 待接入 |
 | avifenc | libavif / ravif | 待接入 |
@@ -157,10 +158,125 @@ cargo test --features inproc-backends          # 进程内版
 
 ## 参考
 
+- [App Store 提交完整流程与注意事项](#app-store-提交完整流程与注意事项)
 - docs/APPSTORE_MIGRATION_PLAN.md — 5 阶段路线图
 - scripts/notarize.sh — Direct 产物线
-- scripts/build_appstore.sh — App Store 产物线（占位）
+- scripts/build_appstore.sh — App Store 产物线（构建→签名→PKG）
 - src-tauri/entitlements.plist — Direct entitlements
-- src-tauri/entitlements-appstore.plist — App Store entitlements（占位）
+- src-tauri/entitlements-appstore.plist — App Store entitlements（沙盒权限）
 - src-tauri/tauri.conf.json — Direct 配置（identifier = com.misswell.octoshrink）
-- src-tauri/tauri.conf.appstore.json — App Store 配置（identifier = com.misswell.octoshrink.appstore，占位）
+- src-tauri/tauri.conf.appstore.json — App Store 配置（identifier = com.misswell.octoshrink.appstore，v2.2.6）
+- src-tauri/capabilities/default.json — IPC 权限（App Store 版需显式声明所有 app 命令权限）
+- src-tauri/permissions/commands.toml — app 命令 ACL 权限定义
+
+## App Store 提交完整流程与注意事项
+
+> 记录于 2026-07-21。基于 v2.2.0 → v2.2.6 的实际上架经验。每次上架前必读。
+
+### 1. 前置准备（一次性）
+
+- Apple Developer 账号（已就绪：Guofeng Liu - U8U443D7ZL）
+- 两张证书（在 Keychain Access 中）：
+  - `Apple Distribution: Guofeng Liu (U8U443D7ZL)` — 用于 codesign app
+  - `3rd Party Mac Developer Installer: Guofeng Liu (U8U443D7ZL)` — 用于 productbuild 打 PKG
+- Bundle ID 注册：`com.misswell.octoshrink.appstore`（已在 Apple Developer Portal 注册）
+- App Store Connect 已创建 App：OctoShrink（Apple ID: 6792604654）
+- App-Specific Password（用于 xcrun altool 上传）：在 appleid.apple.com 生成
+
+### 2. 构建与签名
+
+```bash
+cd src-tauri
+export CARGO_PROFILE_RELEASE_PANIC=unwind
+
+# 构建 app bundle（App Store feature）
+cargo tauri build --bundles app --features appstore --config tauri.conf.appstore.json
+
+# 手动复制前端资源到 Resources（Tauri 默认不打前端进 app bundle）
+cp -R ../frontend/. target/release/bundle/macos/OctoShrink.app/Contents/Resources/
+
+# 用 Apple Distribution 证书签名
+codesign --force --options runtime \
+  --entitlements entitlements-appstore.plist \
+  --sign "Apple Distribution: Guofeng Liu (U8U443D7ZL)" \
+  target/release/bundle/macos/OctoShrink.app
+
+# 打 PKG（用 3rd Party Mac Developer Installer 证书）
+xcrun productbuild --component \
+  target/release/bundle/macos/OctoShrink.app /Applications \
+  --sign "3rd Party Mac Developer Installer: Guofeng Liu (U8U443D7ZL)" \
+  OctoShrink-<version>.pkg
+```
+
+或直接用 `bash scripts/build_appstore.sh`（封装了上述步骤）。
+
+### 3. 白屏排查（已解决，记录供参考）
+
+- **不要用** `visible: false` + 延迟 `show()` → 窗口可能永不显示
+- **不要用** 本地 HTTP 服务器替代 `tauri://localhost` → remote origin 触发 Tauri ACL 权限检查
+- **正确做法**：回归默认 `tauri://localhost`（Local origin），窗口 `visible: true`（默认）
+- `tauri://localhost` 在 App Sandbox 下正常工作，不需要 HTTP fallback
+
+### 4. IPC 权限（App Store 版必须配置）
+
+- 在 `capabilities/default.json` 中显式声明所有 app 命令的 permission（约 17 个）
+- 创建 `permissions/commands.toml` 定义权限 schema
+- 不配置 → 前端 invoke 全部失败（静默，不报错）
+- Direct 版不需要此配置（非沙盒，不检查 ACL）
+
+### 5. 沙盒文件访问
+
+- 用户选文件/拖入文件时，系统弹窗授权（security-scoped bookmarks）
+- 授权后路径写入 BookmarkStore，后续可续访
+- 提供「清理旧授权」功能，避免书签过期导致访问失败
+- `files.user-selected.read-write` + `files.bookmarks.app-scope` entitlements 必须开启
+
+### 6. 上传到 App Store Connect
+
+```bash
+xcrun altool --upload-app \
+  -f OctoShrink-<version>.pkg \
+  -t macOS \
+  -u misswell@foxmail.com \
+  -p <app-specific-password>
+```
+
+- 版本号（CFBundleVersion）必须比上次上传的**高**，否则报 `ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE`
+- 上传成功后约 15-30 分钟才出现在 App Store Connect 构建版本列表
+- macOS beta 可能无法安装 Transporter app → 用 `xcrun altool` 命令行替代
+
+### 7. App Store Connect 元数据（提交审核前必须补全）
+
+| 项目 | 要求 | 备注 |
+|---|---|---|
+| 截图 | 至少 1 张 | 1280×800 / 1440×900 / 2560×1600 / 2880×1800 |
+| 描述 | 必填 | 简体中文 |
+| 关键词 | 必填 | 100 字符以内 |
+| 技术支持网址 | 必填 | URL |
+| 版权 | 必填 | 如 "© 2026 Guofeng Liu" |
+| 主要类别 | 必填 | 如「工具」/「图形和设计」|
+| 出口合规证明 | 必填 | 选「不属于上述的任意一种算法」或在 Info.plist 加 `ITSAppUsesNonExemptEncryption=false` |
+| 隐私政策网址 | 必填 | 在「App 隐私」页面填写 |
+| 联系信息 | 必填 | 姓名、电话、邮箱 |
+| 年龄分级 | 必填 | 设置年龄分级问卷 |
+
+### 8. 常见错误与解决
+
+| 错误 | 原因 | 解决 |
+|---|---|---|
+| `bundle version must be higher` | 版本号重复 | 递增 tauri.conf.appstore.json 的 version |
+| `缺少出口合规证明` | 未声明加密 | 选「不属于上述」或加 Info.plist key |
+| 白屏 | visible:false 或 HTTP 服务器 | 回归 tauri://localhost + visible:true |
+| 无法选文件/拖入 | 沙盒缺权限 | 检查 entitlements + bookmarks 配置 |
+| 窗口无法拖动 | 缺 start-dragging 权限 | capabilities 加 `core:window:allow-start-dragging` |
+| 中间有方形洞 | CSS/布局问题 | 检查前端透明区域 |
+| Transporter 无法安装 | macOS beta | 用 `xcrun altool` 命令行 |
+
+### 9. 版本号管理
+
+- App Store 版与 Direct 版版本号保持一致（如都是 2.2.6）
+- 每次上传构建版本号必须递增
+- `tauri.conf.appstore.json` 的 `version` 字段 = CFBundleShortVersionString（显示版本）
+- `tauri.conf.appstore.json` 的 `version` 也用作 CFBundleVersion（构建版本）
+  - 如需分离，在 `tauri.conf.appstore.json` 加 `"macOS": { "buildNumber": "..." }`
+   
