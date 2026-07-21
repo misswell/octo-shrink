@@ -11,9 +11,6 @@
     <!-- 应用级安全书签：用户选过的文件夹下次启动仍可访问 -->
     <key>com.apple.security.files.bookmarks.app-scope</key>
     <true/>
-    <!-- 允许直接写「下载」目录（输出模式 folder=Downloads 场景） -->
-    <key>com.apple.security.files.downloads.read-write</key>
-    <true/>
     <!-- 允许本地 HTTP 服务器（绕过 macOS 沙盒阻止的 tauri:// 自定义协议 → 白屏） -->
     <key>com.apple.security.network.server</key>
     <true/>
