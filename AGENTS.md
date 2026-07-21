@@ -88,6 +88,11 @@ pub async fn compress_png(file: &Path, opts: &CompressOptions) -> EngineResult {
 ## 构建命令速查
 
 ```bash
+# 两版同时构建（日常开发首选）
+bash scripts/build_all.sh                      # 编译两版 + 复制资源（不签名）
+SIGN=1 bash scripts/build_all.sh               # 编译 + 签名两版
+# 产物：OctoShrink_direct.app（Direct）+ OctoShrink.app（App Store）
+
 # Direct（默认，发布到 GitHub Releases）
 cargo tauri build                              # 或 cargo tauri build --features default
 bash scripts/notarize.sh                       # 一键：构建→签名→公证→装订→DMG
@@ -178,7 +183,8 @@ cargo test --features inproc-backends          # 进程内版
 
 - [App Store 提交完整流程与注意事项](#app-store-提交完整流程与注意事项)
 - docs/APPSTORE_MIGRATION_PLAN.md — 5 阶段路线图
-- scripts/notarize.sh — Direct 产物线
+- scripts/build_all.sh — 两版同时构建（日常首选，Direct 产物加 _direct 后缀）
+- scripts/notarize.sh — Direct 产物线（构建→签名→公证→装订→DMG）
 - scripts/build_appstore.sh — App Store 产物线（构建→签名→PKG）
 - src-tauri/entitlements.plist — Direct entitlements
 - src-tauri/entitlements-appstore.plist — App Store entitlements（沙盒权限）
