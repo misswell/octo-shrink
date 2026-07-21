@@ -29,12 +29,13 @@ oxipng = { version = "9", optional = true }
 mozjpeg = { version = "0.10", optional = true }
 webp = { version = "0.2", optional = true, default-features = false }
 ravif = { version = "0.11", optional = true, default-features = false }
+png = { version = "0.18", optional = true, features = ["zlib-rs"] }
 
 [features]
 default = ["cli-backends"]
 cli-backends = []                  # Direct 产物线：调外部 CLI + 内置 dylib（现状）
 appstore = ["inproc-backends"]     # App Store 产物线：进程内 Rust 库 + 沙盒
-inproc-backends = ["dep:imagequant", "dep:oxipng", "dep:mozjpeg", "dep:webp", "dep:ravif"]  # 进程内 Rust 库（沙盒友好）
+inproc-backends = ["dep:imagequant", "dep:oxipng", "dep:mozjpeg", "dep:webp", "dep:ravif", "dep:png"]  # 进程内 Rust 库（沙盒友好）
 custom-protocol = ["tauri/custom-protocol"]
 
 [profile.release]
