@@ -110,7 +110,7 @@ cargo test --features inproc-backends          # 进程内版
 
 - ✅ Direct 产物线已就绪：v2.2.0 已签名公证发布，notarize.sh 工作
 - ✅ App Store 产物线已构建并上传：v2.2.6 PKG 已上传 App Store Connect（Apple ID: 6792604654）
-- ✅ 白屏与 IPC 问题已修复：回归 tauri://localhost，capabilities 声明权限，删除 HTTP 服务器
+- ✅ 白屏与 IPC 问题已最终修复（v2.2.8）：HTTP 服务器（绕过沙盒阻止的 tauri://）+ 完整 ACL（allow-* + remote.urls）合并方案，详见第 3 节「白屏与 IPC 反复 bug 终极解法」
 - ✅ 沙盒文件访问已修复：security-scoped bookmarks + 弹窗授权 + 清理旧授权功能
 - ✅ PNG 进程内化已完成（阶段 1.1）：imagequant + oxipng crate 接入
 - 🟡 App Store 审核待提交：需补全元数据（截图、描述、关键词、类别等）后提交审核
@@ -136,6 +136,8 @@ cargo test --features inproc-backends          # 进程内版
 | files.user-selected.read-write | 不需要 | 需要 |
 | files.bookmarks.app-scope | 不需要 | 需要 |
 | files.downloads.read-write | 不需要 | 需要 |
+| network.server | 不需要 | 需要（本地 HTTP 服务器绕过沙盒阻止的 tauri://，见第 3 节终极解法） |
+| network.client | 不需要 | 需要（WebContent 进程连本地 HTTP 服务器） |
 | cs.disable-library-validation | 需要（加载内置 dylib） | 不允许（沙盒禁用） |
 | cs.allow-dyld-environment-variables | 需要（DYLD_FALLBACK_LIBRARY_PATH） | 不允许（沙盒禁用） |
 
@@ -210,12 +212,25 @@ xcrun productbuild --component \
 
 或直接用 `bash scripts/build_appstore.sh`（封装了上述步骤）。
 
-### 3. 白屏排查（已解决，记录供参考）
+### 3. 白屏与 IPC 反复 bug 终极解法（v2.2.8，务必遵守）
 
-- **不要用** `visible: false` + 延迟 `show()` → 窗口可能永不显示
-- **不要用** 本地 HTTP 服务器替代 `tauri://localhost` → remote origin 触发 Tauri ACL 权限检查
-- **正确做法**：回归默认 `tauri://localhost`（Local origin），窗口 `visible: true`（默认）
-- `tauri://localhost` 在 App Sandbox 下正常工作，不需要 HTTP fallback
+**根因**：macOS 27 App Sandbox 阻止 `tauri://localhost`（WKURLSchemeHandler 完全不工作）→ webview 拿不到内容 → 白屏。必须用本地 HTTP 服务器（监听 127.0.0.1 随机端口）服务前端资源。
+
+**「来回修」真相**：历史上两个 commit 各解决一半，从未合并，故反复：
+- `2672532`/`10e56fc`：有 HTTP 服务器（白屏解决）但 capabilities 只有 4 项 → app 命令不在 ACL → IPC 全失效（选图/拖图/移窗口失效）
+- `b21cc53`：补全 17 个 `allow-*` + `remote.urls`（IPC 解决）但删了 HTTP 服务器 → 沙盒白屏
+
+**正确方案（v2.2.8 合并，缺一不可）**：
+- `lib.rs` `#[cfg(feature = "inproc-backends")]` 块：`TcpListener::bind("localhost:0")`，serve resource_dir 前端，`window.navigate("http://localhost:PORT/")`
+- `entitlements-appstore.plist`：`network.server` + `network.client` 必需
+- `capabilities/default.json`：17 个 `allow-*` app 命令权限 + `remote.urls: ["http://localhost","http://127.0.0.1"]` + `core:window:allow-start-dragging`
+
+**勿再犯**：
+- ❌ 「tauri://localhost 在沙盒下正常工作，不需要 HTTP fallback」—— 错！macOS 27 沙盒阻止它。此断言曾写入本文件，导致 b21cc53 删 HTTP 服务器 → 白屏回归。
+- ❌ 单独用 HTTP 服务器不配 ACL → app 命令（remote origin）全被 Tauri ACL 拒，IPC 静默失效。
+- ❌ `visible: false` + 延迟 `show()` → 窗口可能永不显示（曾误判为白屏根因，实际是独立问题）。
+
+**验证方法**：`open` 签名+沙盒 .app（**非** `cargo tauri dev`，后者非沙盒不复现白屏），`screencapture` 截图确认 UI 渲染。b21cc53 的"截图确认无白屏"疑在非沙盒环境测，不可信。
 
 ### 4. IPC 权限（App Store 版必须配置）
 
@@ -266,7 +281,7 @@ xcrun altool --upload-app \
 |---|---|---|
 | `bundle version must be higher` | 版本号重复 | 递增 tauri.conf.appstore.json 的 version |
 | `缺少出口合规证明` | 未声明加密 | 选「不属于上述」或加 Info.plist key |
-| 白屏 | visible:false 或 HTTP 服务器 | 回归 tauri://localhost + visible:true |
+| 白屏 | 沙盒阻止 tauri://（缺 HTTP 服务器）或缺 ACL（有 HTTP 服务器但 app 命令被拒） | HTTP 服务器 + 完整 allow-* + remote.urls（见第 3 节终极解法） |
 | 无法选文件/拖入 | 沙盒缺权限 | 检查 entitlements + bookmarks 配置 |
 | 窗口无法拖动 | 缺 start-dragging 权限 | capabilities 加 `core:window:allow-start-dragging` |
 | 中间有方形洞 | CSS/布局问题 | 检查前端透明区域 |
@@ -279,4 +294,22 @@ xcrun altool --upload-app \
 - `tauri.conf.appstore.json` 的 `version` 字段 = CFBundleShortVersionString（显示版本）
 - `tauri.conf.appstore.json` 的 `version` 也用作 CFBundleVersion（构建版本）
   - 如需分离，在 `tauri.conf.appstore.json` 加 `"macOS": { "buildNumber": "..." }`
-   
+
+### 10. network.server entitlement 的 App Store 审核（路径 B，勿走路径 A）
+
+`network.server` 是 HTTP 服务器方案必需。Apple 自动分析可能标记"有 entitlement 但无匹配功能"（v2.2.7 曾因此被拒）。
+
+- ❌ **不要走路径 A（移除 network.server）**——移除后沙盒白屏回归（tauri:// 不工作）。
+- ✅ **走路径 B（回复解释用途）**：提交审核时在 App Store Connect > App Review Information 附上：
+
+> `com.apple.security.network.server` 用于 app 内本地 HTTP 服务器（仅监听 127.0.0.1 随机端口）向 WKWebView 提供打包在 Resources 目录内的前端资源（index.html/app.js/style.css）。macOS App Sandbox 在 macOS 27 阻止 `tauri://localhost` 自定义协议（WKURLSchemeHandler）导致白屏，本地 HTTP 服务器是唯一加载前端的方式。仅监听 localhost、只服务 app 自带资源（带路径穿越防护）、不发起任何出站连接。`network.client` 允许 WebContent 进程连此本地服务器。
+
+### 11. TestFlight 需 provisioning profile（build_appstore.sh 当前漏嵌）
+
+`.app` 必须嵌入 `embedded.provisionprofile` 才能上 TestFlight / 提交审核。当前 `build_appstore.sh` 只做 codesign + productbuild，**漏了嵌入 profile**，上传时 ASC 警告 90889（不能 TestFlight）。
+
+修复（待落地）：codesign 前 `cp <profile>.provisionprofile "$APP/Contents/embedded.provisionprofile"`，再 codesign + productbuild。profile 从 Apple Developer > Profiles 下载（macOS → App Store 类型，App ID = com.misswell.octoshrink.appstore，证书 Apple Distribution: Guofeng Liu）。
+
+### 12. build_appstore.sh 变量引用必须用花括号
+
+`set -u` 模式下，`$VAR` 后紧跟非 ASCII 字符（如全角括号 `）`）会被 bash 误解析为变量名延续 → unbound variable。**变量引用一律 `${VAR}` 花括号界定**。曾因 `log "...$INSTALLER_IDENTITY）"`（全角右括号）报 `INSTALLER_IDENTITY unbound` 卡住 productbuild。
