@@ -48,6 +48,20 @@
 
 ---
 
+### 7. 修改前防改坏流程（务必遵守，避免"修A坏B"反复）
+
+历史上反复出现"修改之前正常，修改之后坏了"——根因是修一个问题时不验证是否破坏另一个已修复项，或凭推理盲改不查 git 历史。强制流程：
+
+1. **先查 git 历史，别凭推理直接改**：用户说"之前正常"→ `git log -- <file>` + `git show <commit>:<file>` 找正常基线，diff 出"正常→坏"改动点，证据闭环后再动。绝不只读几行靠推理就 apply_patch。
+2. **已盲改的先撤回**：没查根因就改了→ `git checkout -- <file>` 撤回已知状态，查清再精准改，不留叠加瞎改。
+3. **耦合项必须同改**：本项目耦合对 = **白屏（HTTP 服务器 + network entitlements）↔ IPC（remote.urls 带端口 origin + allow-* ACL）**，改任一项须确认另一项仍满足。`f064299` 修白屏漏改 remote.urls 端口→IPC 坏；`2760364` 移除 network entitlements→白屏回归。两害同治。
+4. **最小改动**：只改确诊根因行，不碰 engine/commands/前端/另一产物线。<30 行优先 apply_patch；>50% 文件用 `_write` 整覆盖。
+5. **不破坏 Direct 产物线**：HTTP 服务器在 `#[cfg(feature="inproc-backends")]` 内；`capabilities/default.json` 两线共用但 Direct 用 tauri:// 不走 remote ACL。改完确认 `cargo tauri build`（无 --features）仍可用。
+6. **验证用签名+沙盒 .app**：`open` 产物实测（非 `cargo tauri dev`，非沙盒不复现）。改完跑 `bash scripts/build_appstore.sh`，`open` 产物测白屏+拖图+选文件夹+窗口拖动四项。
+7. **诊断优先于动手**：写码前读完相关文件+git 历史，证据闭环再改。没把握不改，宁可问基线，不赌。
+
+---
+
 ## 两条产物线的 feature 分叉结构
 
 ```toml
@@ -220,13 +234,14 @@ xcrun productbuild --component \
 - `2672532`/`10e56fc`：有 HTTP 服务器（白屏解决）但 capabilities 只有 4 项 → app 命令不在 ACL → IPC 全失效（选图/拖图/移窗口失效）
 - `b21cc53`：补全 17 个 `allow-*` + `remote.urls`（IPC 解决）但删了 HTTP 服务器 → 沙盒白屏
 
-**正确方案（v2.2.8 合并，缺一不可）**：
-- `lib.rs` `#[cfg(feature = "inproc-backends")]` 块：`TcpListener::bind("localhost:0")`，serve resource_dir 前端，`window.navigate("http://localhost:PORT/")`
+**正确方案（v2.2.9，缺一不可）**：
+- `lib.rs` `#[cfg(feature = "inproc-backends")]` 块：`TcpListener::bind` **固定端口段** `[41845u16, 41846, 41847]`（带 fallback 防冲突），serve resource_dir 前端，`window.navigate("http://localhost:PORT/")`
 - `entitlements-appstore.plist`：`network.server` + `network.client` 必需
-- `capabilities/default.json`：17 个 `allow-*` app 命令权限 + `remote.urls: ["http://localhost","http://127.0.0.1"]` + `core:window:allow-start-dragging`
+- `capabilities/default.json`：17 个 `allow-*` app 命令权限 + `remote.urls: ["http://localhost:41845","http://localhost:41846","http://localhost:41847"]`（**精确匹配带端口 origin**）+ `core:window:allow-start-dragging`
 
 **勿再犯**：
 - ❌ 「tauri://localhost 在沙盒下正常工作，不需要 HTTP fallback」—— 错！macOS 27 沙盒阻止它。此断言曾写入本文件，导致 b21cc53 删 HTTP 服务器 → 白屏回归。
+- ❌ **随机端口 `:0` + 无端口 `remote.urls: ["http://localhost"]`** —— 错！Tauri ACL 对 remote origin 精确匹配，`http://localhost` ≠ `http://localhost:41845` → IPC 静默失效（加不了图/拖不进图/窗口拖不动）。v2.2.8（`f064299`）即此 bug：修白屏却漏改端口匹配。**必须固定端口段 + remote.urls 精确列带端口 origin**。
 - ❌ 单独用 HTTP 服务器不配 ACL → app 命令（remote origin）全被 Tauri ACL 拒，IPC 静默失效。
 - ❌ `visible: false` + 延迟 `show()` → 窗口可能永不显示（曾误判为白屏根因，实际是独立问题）。
 

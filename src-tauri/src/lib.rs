@@ -51,7 +51,12 @@ pub fn run() {
                 use std::net::TcpListener;
 
                 let resource_dir = app.path().resource_dir().unwrap_or_default();
-                let listener = TcpListener::bind("localhost:0").expect("HTTP bind failed");
+                // 固定端口段：remote.urls 须精确匹配带端口的 origin；
+                // 用 :0 随机端口会让 origin 不匹配 -> IPC 静默失效（加不了图/拖不进图）
+                let listener = [41845u16, 41846, 41847]
+                    .iter()
+                    .find_map(|p| TcpListener::bind(format!("localhost:{}", p)).ok())
+                    .expect("HTTP bind failed: 41845-41847 均被占用");
                 let port = listener.local_addr().unwrap().port();
                 let dir = resource_dir.clone();
 

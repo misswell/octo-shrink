@@ -26,6 +26,6 @@
     "allow-restore-all"
   ],
   "remote": {
-    "urls": ["http://localhost", "http://127.0.0.1"]
+    "urls": ["http://localhost:41845", "http://localhost:41846", "http://localhost:41847"]
   }
 }
