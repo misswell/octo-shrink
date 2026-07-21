@@ -123,12 +123,14 @@ cargo test --features inproc-backends          # 进程内版
 ## 当前状态（编辑此节以保持最新）
 
 - ✅ Direct 产物线已就绪：v2.2.0 已签名公证发布，notarize.sh 工作
-- ✅ App Store 产物线已构建并上传：v2.2.6 PKG 已上传 App Store Connect（Apple ID: 6792604654）
-- ✅ 白屏与 IPC 问题已最终修复（v2.2.8）：HTTP 服务器（绕过沙盒阻止的 tauri://）+ 完整 ACL（allow-* + remote.urls）合并方案，详见第 3 节「白屏与 IPC 反复 bug 终极解法」
+- ✅ App Store 产物线已构建并上传：v2.2.9 PKG 已上传 App Store Connect（Apple ID: 6792604654，Delivery UUID 6d414d74-5d30-449f-a666-ac11f6ea4814）
+- ✅ 白屏与 IPC 问题已最终修复（v2.2.9）：固定端口段 41845-41847 + HTTP 服务器 + 完整 ACL（allow-* + remote.urls 精确带端口 origin），详见第 3 节「白屏与 IPC 反复 bug 终极解法」
 - ✅ 沙盒文件访问已修复：security-scoped bookmarks + 弹窗授权 + 清理旧授权功能
 - ✅ PNG 进程内化已完成（阶段 1.1）：imagequant + oxipng crate 接入
-- 🟡 App Store 审核待提交：需补全元数据（截图、描述、关键词、类别等）后提交审核
-- ⬜ 引擎迁移后续：JPEG（mozjpeg crate）→ WebP → AVIF → GIF → JXL
+- ✅ JPG/WebP/AVIF 进程内化已完成：mozjpeg / webp / ravif crate 接入
+- ✅ 两条产物线功能对齐：JXL 已从前端输出格式下拉移除（两版一致）；GIF 两版均有压缩功能（Direct gifsicle 减色更优，App Store image crate 重编码，属质量差异非功能差异）
+- 🟡 App Store 审核待提交：2.2.9 已上传 ASC，需补全元数据 + 回复 network.server 解释（路径B）后提交审核
+- ⬜ 引擎迁移后续：JXL（未来接入 jpegxl-sys 后可恢复 UI 选项）；GIF 减色优化（未来可用 imagequant 逐帧量化，当前有帧间闪烁风险暂不做）
 
 ## 文件访问差异表（随改动更新）
 
@@ -161,11 +163,11 @@ cargo test --features inproc-backends          # 进程内版
 ---|---|---|
 | pngquant | imagequant crate（同源算法）| ✅ 已完成 |
 | oxipng | oxipng crate（库版）| ✅ 已完成 |
-| cjpeg (mozjpeg) | mozjpeg crate | 待接入 |
-| cwebp | webp + libwebp-sys | 待接入 |
-| avifenc | libavif / ravif | 待接入 |
-| cjxl | jpegxl-sys（或临时移除 JXL 输出）| 待接入 |
-| gifsicle | gif crate | 待接入（动图优化能力下降）|
+| cjpeg (mozjpeg) | mozjpeg crate | ✅ 已完成 |
+| cwebp | webp crate | ✅ 已完成 |
+| avifenc | ravif crate | ✅ 已完成 |
+| cjxl | jpegxl-sys | ⬜ 已从前端移除（两版一致）；engine 代码保留，未来接入后可恢复 UI |
+| gifsicle | image crate（无减色优化）| ✅ 已完成（质量降级：无 gifsicle --colors=N 减色，两版均有 GIF 压缩功能）|
 
 ## 变更本文件的规定
 
