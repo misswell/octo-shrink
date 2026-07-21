@@ -326,11 +326,21 @@ xcrun altool --upload-app \
 
 > ⚠️ **与全局 AGENTS.md 冲突**：全局 `~/.codex/AGENTS.md` 有一条（2026-07-21）称"tauri:// 沙盒下正常、白屏是 visible:false 导致、应删 HTTP 服务器"。经实测（v2.2.8 HTTP 服务器版正常，b21cc53 删 HTTP 后白屏），**以本节为准：HTTP 服务器 + network.server 必需，勿删、勿走路径 A**。全局那条疑在非沙盒环境验证，不可信。
 
-### 11. TestFlight 需 provisioning profile（build_appstore.sh 当前漏嵌）
+### 11. provisioning profile：仅 TestFlight 需要，提交审核不需要
 
-`.app` 必须嵌入 `embedded.provisionprofile` 才能上 TestFlight / 提交审核。当前 `build_appstore.sh` 只做 codesign + productbuild，**漏了嵌入 profile**，上传时 ASC 警告 90889（不能 TestFlight）。
+**关键结论（2.2.6 + 2.2.9 实证）**：macOS App Store 提交审核**不强制** `embedded.provisionprofile`（与 iOS 不同）。2.2.6/2.2.9 无 profile 照样上传成功 + 进入审核（2.2.6 被审核驳回是 network.server 问题，非 profile）。`xcrun altool --upload-app` 上传 .pkg 不查 profile。
 
-修复（待落地）：codesign 前 `cp <profile>.provisionprofile "$APP/Contents/embedded.provisionprofile"`，再 codesign + productbuild。profile 从 Apple Developer > Profiles 下载（macOS → App Store 类型，App ID = com.misswell.octoshrink.appstore，证书 Apple Distribution: Guofeng Liu）。
+上传时 ASC 返回 1 个 warning 90889："Cannot be used with **TestFlight** because the bundle is missing a provisioning profile"——**只阻止 TestFlight，不阻止提交审核**。`altool` 输出 `UPLOAD SUCCEEDED with no errors, 1 warning` 即可提交审核。
+
+| 目标 | 需要 embedded.provisionprofile 吗 |
+|---|---|
+| 上传到 App Store Connect | ❌ 不需要 |
+| 提交审核（过审上架） | ❌ 不需要（2.2.6 / 2.2.9 实证） |
+| TestFlight 内测分发 | ✅ 需要 |
+
+**何时需要 profile**：仅当要 TestFlight 内测分发给测试者时才嵌入。过审上架直接上传 + 提交审核即可，不必等 profile。
+
+嵌入步骤（TestFlight 时才用）：codesign 前 `cp <profile>.provisionprofile "$APP/Contents/embedded.provisionprofile"`，再 codesign + productbuild。profile 从 Apple Developer > Profiles 下载（macOS → App Store 类型，App ID = com.misswell.octoshrink.appstore，证书 Apple Distribution: Guofeng Liu）。
 
 ### 12. build_appstore.sh 变量引用必须用花括号
 
