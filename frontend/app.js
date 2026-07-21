@@ -129,6 +129,12 @@ if (window.matchMedia) {
 
 // 初始化主题
 applyTheme(currentTheme);
+var BUILD_VARIANT = (window.location.origin.indexOf('http://localhost') === 0) ? 'App Store' : 'Direct';
+(function() {
+  var tb = document.querySelector('.titlebar-text');
+  if (tb) tb.textContent = 'OctoShrink (' + BUILD_VARIANT + ')';
+  try { document.title = 'OctoShrink (' + BUILD_VARIANT + ')'; } catch(e) {}
+})();
 
 // ─── 设置面板折叠 ─────────────────────────────────────────────────
 function toggleSettings() {
@@ -143,6 +149,7 @@ let inputPaths = [];
 let results = [];
 let isCompressing = false;
 let outputDir = null;
+let currentCompressOptions = null;
 
 // DOM Elements
 const dropzone = document.getElementById('dropzone');
@@ -383,14 +390,18 @@ function renderQueueResultActions(row, result) {
   var actions = row.querySelector('.queue-item-actions');
   if (!actions) return;
   actions.innerHTML = '';
-  if (!result || !result.success) return;
+  if (!result) return;
 
-  var actionDefs = [
-    { action: 'save', title: '另存为', icon: iconMarkup('save', true) },
-    { action: 'compare', title: '对比查看', icon: iconMarkup('compare', true) },
-    { action: 'restore', title: '恢复原图', icon: iconMarkup('restore', true) },
-    { action: 'finder', title: '在访达中显示', icon: iconMarkup('finder', true) },
-  ];
+  var actionDefs = [];
+  if (result.success) {
+    actionDefs = [
+      { action: 'save', title: '另存为', icon: iconMarkup('save', true) },
+      { action: 'compare', title: '对比查看', icon: iconMarkup('compare', true) },
+      { action: 'restore', title: '恢复原图', icon: iconMarkup('restore', true) },
+      { action: 'finder', title: '在访达中显示', icon: iconMarkup('finder', true) },
+    ];
+  }
+  actionDefs.push({ action: 'log', title: '复制日志', icon: iconMarkup('info', true) });
 
   actionDefs.forEach(function(def) {
     var btn = document.createElement('button');
@@ -404,9 +415,57 @@ function renderQueueResultActions(row, result) {
       else if (def.action === 'compare') openCompareByFile(result.file);
       else if (def.action === 'restore') restoreOriginal(result.file, result.backupPath || '', result.outputMode || 'suffix');
       else if (def.action === 'finder') openInFinder(result.file);
+      else if (def.action === 'log') copyCompressLog(result);
     });
     actions.appendChild(btn);
   });
+}
+
+function copyCompressLog(result) {
+  var opts = result.compressOptions || {};
+  var lines = [];
+  lines.push('版本: ' + BUILD_VARIANT);
+  lines.push('=== OctoShrink \u538b\u7f29\u65e5\u5fd7 ===');
+  lines.push('');
+  lines.push('\u6587\u4ef6: ' + (result.file || ''));
+  lines.push('\u72b6\u6001: ' + (result.success ? '\u6210\u529f' : '\u5931\u8d25'));
+  lines.push('');
+  lines.push('--- \u538b\u7f29\u53c2\u6570 ---');
+  lines.push('quality: ' + (opts.quality !== undefined ? opts.quality : '(\u672a\u8bbe\u7f6e)'));
+  lines.push('smartMode: ' + (opts.smartMode !== undefined ? opts.smartMode : '(\u672a\u8bbe\u7f6e)'));
+  lines.push('outputFormat: ' + (opts.outputFormat || '(\u672a\u8bbe\u7f6e)'));
+  lines.push('backend: ' + (opts.backend || '(\u672a\u8bbe\u7f6e)'));
+  lines.push('effort: ' + (opts.effort !== undefined ? opts.effort : '(\u672a\u8bbe\u7f6e)'));
+  lines.push('convertToWebp: ' + (opts.convertToWebp !== undefined ? opts.convertToWebp : '(\u672a\u8bbe\u7f6e)'));
+  lines.push('outputMode: ' + (opts.outputMode || '(\u672a\u8bbe\u7f6e)'));
+  lines.push('');
+  lines.push('--- \u538b\u7f29\u7ed3\u679c ---');
+  if (result.success) {
+    lines.push('\u539f\u59cb\u5927\u5c0f: ' + formatBytes(result.originalSize) + ' (' + result.originalSize + ' bytes)');
+    lines.push('\u538b\u7f29\u540e\u5927\u5c0f: ' + formatBytes(result.compressedSize) + ' (' + result.compressedSize + ' bytes)');
+    lines.push('\u538b\u7f29\u7387: ' + (result.savings >= 0 ? '-' : '+') + Math.abs(result.savings).toFixed(1) + '%');
+    lines.push('\u8f93\u51fa\u683c\u5f0f: ' + (result.type || '(\u672a\u77e5)'));
+    lines.push('\u7b97\u6cd5: ' + (result.algorithm || '(\u672a\u77e5)'));
+  } else {
+    lines.push('\u538b\u7f29\u5931\u8d25');
+  }
+  lines.push('');
+  lines.push('--- \u9519\u8bef\u4fe1\u606f ---');
+  lines.push(result.error ? result.error : '(\u65e0)');
+  var text = lines.join('\n');
+  var ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.top = '0';
+  ta.style.left = '0';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  var ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  document.body.removeChild(ta);
+  showToast(ok ? '\u538b\u7f29\u65e5\u5fd7\u5df2\u590d\u5236\u5230\u526a\u8d34\u677f' : '\u590d\u5236\u5931\u8d25\uff0c\u8bf7\u624b\u52a8\u9009\u4e2d\u65e5\u5fd7\u6587\u672c');
 }
 
 function renderRestoredActions(row, filePath) {
@@ -486,6 +545,7 @@ async function startCompression() {
   if (isCompressing || files.length === 0) return;
   isCompressing = true;
   results = [];
+  currentCompressOptions = null;
 
   const config = getCurrentCompressionConfig();
   if (config.error) {
@@ -493,6 +553,7 @@ async function startCompression() {
     isCompressing = false;
     return;
   }
+  currentCompressOptions = config.options;
 
   var queueStats = document.getElementById('queueStats');
   if (queueStats) queueStats.style.display = 'flex';
@@ -550,6 +611,7 @@ async function startCompression() {
         errIcon.onclick = function(e) { e.stopPropagation(); showErrorDetail(result.file, result.error); };
         statusEl.appendChild(errIcon);
       }
+      result.compressOptions = currentCompressOptions;
       results.push(result);
       renderQueueResultActions(row, result);
       updateStats();
@@ -621,6 +683,7 @@ async function compressOneFile(filePath) {
   }
 
   isCompressing = true;
+  currentCompressOptions = config.options;
   results = results.filter(function(r) { return r.file !== filePath; });
 
   row.classList.remove('waiting', 'done', 'failed', 'restored', 'cancelled');
@@ -647,6 +710,7 @@ async function compressOneFile(filePath) {
       ? (result.savings >= 0 ? '-' : '+') + Math.abs(result.savings).toFixed(1) + '%'
       : '失败';
     results = results.filter(function(r) { return r.file !== filePath; });
+    result.compressOptions = currentCompressOptions;
     results.push(result);
     renderQueueResultActions(row, result);
     updateStats();

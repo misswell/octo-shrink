@@ -78,11 +78,74 @@ APPSTORE_APP="$BUNDLE_DIR/${APP_NAME}.app"
 cp -R "$PROJECT_DIR/frontend/." "$APPSTORE_APP/Contents/Resources/" || true
 ok "前端文件已复制"
 
+# 复制 CLI 工具到 App Store .app（自包含的 + 带 dylib 依赖的）
+log "复制 CLI 工具到 App Store .app"
+mkdir -p "$APPSTORE_APP/Contents/Resources/bin"
+AS_BIN="$APPSTORE_APP/Contents/Resources/bin"
+AS_LIB="$APPSTORE_APP/Contents/Resources/lib"
+mkdir -p "$AS_LIB"
+SRC_BIN="$TAURI_DIR/resources/bin"
+
+# gifsicle（自包含，仅依赖 libSystem）
+if [ -f "$TAURI_DIR/resources/bin/gifsicle" ]; then
+  cp "$SRC_BIN/gifsicle" "$AS_BIN/"
+  ok "gifsicle 已复制"
+else
+  echo "    ⚠ gifsicle 未找到，GIF 将降级为 gif crate"
+fi
+
+# oxipng（自包含，仅依赖 libiconv + libSystem）
+if [ -f "$SRC_BIN/oxipng" ]; then
+  cp "$SRC_BIN/oxipng" "$AS_BIN/"
+  ok "oxipng 已复制"
+else
+  echo "    ⚠ oxipng 未找到，PNG 无损优化将降级为 inproc oxipng crate"
+fi
+
+# pngquant + 依赖 dylib（libpng16 + liblcms2，均仅递归依赖系统库）
+if [ -f "$SRC_BIN/pngquant" ]; then
+  cp "$SRC_BIN/pngquant" "$AS_BIN/"
+  # 复制 pngquant 的非系统 dylib 依赖
+  for lib in libpng16.16.dylib liblcms2.2.dylib; do
+    SRC_LIB=""
+    # 尝试从 otool 输出提取实际路径
+    SRC_LIB=$(otool -L "$SRC_BIN/pngquant" 2>/dev/null | grep "$lib" | awk '{print $1}' | head -1)
+    if [ -n "$SRC_LIB" ] && [ -f "$SRC_LIB" ]; then
+      cp "$SRC_LIB" "$AS_LIB/"
+      ok "$lib 已复制"
+    else
+      echo "    ⚠ $lib 未找到，pngquant 可能无法运行"
+    fi
+  done
+  # 用 install_name_tool 将 dylib 路径改为 @executable_path（沙盒不依赖 DYLD）
+  install_name_tool -change /opt/homebrew/opt/little-cms2/lib/liblcms2.2.dylib \
+    @executable_path/../lib/liblcms2.2.dylib "$AS_BIN/pngquant" 2>/dev/null || true
+  install_name_tool -change /opt/homebrew/opt/libpng/lib/libpng16.16.dylib \
+    @executable_path/../lib/libpng16.16.dylib "$AS_BIN/pngquant" 2>/dev/null || true
+  # 修正 dylib 自身 ID
+  if [ -f "$AS_LIB/liblcms2.2.dylib" ]; then
+    install_name_tool -id @executable_path/../lib/liblcms2.2.dylib "$AS_LIB/liblcms2.2.dylib" 2>/dev/null || true
+  fi
+  if [ -f "$AS_LIB/libpng16.16.dylib" ]; then
+    install_name_tool -id @executable_path/../lib/libpng16.16.dylib "$AS_LIB/libpng16.16.dylib" 2>/dev/null || true
+  fi
+  ok "pngquant + dylib 路径已修正"
+else
+  echo "    ⚠ pngquant 未找到，PNG 压缩将降级为 inproc imagequant"
+fi
+
 # 签名 App Store 版（可选）
 if [ "${SIGN:-0}" = "1" ]; then
   SIGN_IDENTITY_AS="${APPSTORE_SIGN_IDENTITY:-Apple Distribution: Guofeng Liu (U8U443D7ZL)}"
   log "签名 App Store 版：${SIGN_IDENTITY_AS}"
   ENT_AS="$TAURI_DIR/entitlements-appstore.plist"
+  # 先签名所有子进程可执行文件和 dylib（子进程需要独立签名）
+  for bin in "$AS_BIN"/*; do
+    [ -f "$bin" ] && codesign --force --options runtime --sign "${SIGN_IDENTITY_AS}" "$bin" 2>/dev/null || true
+  done
+  for lib in "$AS_LIB"/*.dylib; do
+    [ -f "$lib" ] && codesign --force --options runtime --sign "${SIGN_IDENTITY_AS}" "$lib" 2>/dev/null || true
+  done
   codesign --force --options runtime --entitlements "$ENT_AS" --sign "${SIGN_IDENTITY_AS}" "$APPSTORE_APP" \
     || echo "    ⚠ App Store 签名失败：确认钥匙串已安装 Apple Distribution 证书"
   ok "App Store 版已签名"

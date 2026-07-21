@@ -48,36 +48,86 @@ fn unsupported(original: Vec<u8>, out_type: &str, reason: &str) -> EngineResult 
     }
 }
 
-/// PNG：三级 fallback（与 cli 版 engine.rs 同序），成功判定 data.len() < original_size。
-/// imagequant 量化（同源 pngquant）→ oxipng 无损 → image crate 兜底。
+/// PNG：优先调打包的 pngquant/oxipng CLI（与 Direct 版完全一致），找不到降级 inproc。
 async fn compress_png(file: &Path, options: &CompressOptions) -> EngineResult {
     let original = fs::read(file).unwrap_or_default();
     let original_size = original.len() as u64;
     let quality = options.quality;
-    eprintln!("[DEBUG] inproc compress_png: {:?} q={} orig_size={}", file, quality, original_size);
+
+    // 1. pngquant CLI（与 Direct 版 engine.rs 完全一致的调用方式）
+    if let Some(tool) = super::find_tool("pngquant") {
+        let tmp = tempfile::tempdir().ok();
+        if let Some(ref td) = tmp {
+            let out = td.path().join("c.png");
+            let q_low = quality.saturating_sub(10).max(10);
+            let q_high = quality.min(100);
+            let args = vec![
+                format!("--quality={}-{}", q_low, q_high),
+                "--speed=3".into(),
+                "--strip".into(),
+                "--output".into(),
+                out.to_string_lossy().into(),
+                "--".into(),
+                file.to_string_lossy().into(),
+            ];
+            if let Some(data) = super::cli_to_file(&tool, &args, &out).await {
+                if (data.len() as u64) < original_size {
+                    return ok(data, "png", "pngquant");
+                }
+            }
+        }
+    }
+
+    // 2. oxipng CLI（与 Direct 版一致，自包含可沙盒运行）
+    if let Some(tool) = super::find_tool("oxipng") {
+        let tmp = tempfile::tempdir().ok();
+        if let Some(ref td) = tmp {
+            let out = td.path().join("c.png");
+            let _ = fs::copy(file, &out);
+            let level = (quality / 20).min(6).max(1);
+            let args = vec![
+                format!("-o{}", level),
+                "--strip".into(),
+                "safe".into(),
+                out.to_string_lossy().into(),
+            ];
+            let _ = super::make_command(&tool).args(&args)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status().await;
+            if let Ok(data) = fs::read(&out) {
+                if !data.is_empty() && (data.len() as u64) < original_size {
+                    return ok(data, "png", "oxipng");
+                }
+            }
+        }
+    }
+
+    // 3. inproc imagequant 降级（CLI 工具未找到时，如 dev 模式）
     if let Some(data) = compress_png_with_imagequant(file, quality) {
-        eprintln!("[DEBUG] imagequant returned {} bytes", data.len());
         if (data.len() as u64) < original_size {
-            return ok(data, "png", "pngquant (inproc)");
+            return ok(data, "png", "pngquant (inproc fallback)");
         }
     }
+
+    // 4. inproc oxipng 降级
     if let Some(data) = compress_png_with_oxipng(file, quality) {
-        eprintln!("[DEBUG] oxipng returned {} bytes", data.len());
         if (data.len() as u64) < original_size {
-            return ok(data, "png", "oxipng (inproc)");
+            return ok(data, "png", "oxipng (inproc fallback)");
         }
     }
+
+    // 5. image crate 兜底
     if let Some(data) = compress_png_with_image(file) {
-        eprintln!("[DEBUG] image-png returned {} bytes", data.len());
         if (data.len() as u64) < original_size {
-            return ok(data, "png", "image-png (inproc)");
+            return ok(data, "png", "image-png");
         }
     }
-    eprintln!("[DEBUG] compress_png: no improvement, returning original");
-    no_improvement(original, "png", "pngquant (inproc)", original_size, original_size)
+
+    no_improvement(original, "png", "pngquant", original_size, original_size)
 }
 
-/// image crate 兜底：PNG 无损最佳压缩重编码（RGBA8）。
+/// image crate 兜底：PNG 无损重编码，保留原色型（RGB→RGB8，RGBA→RGBA8）。
 fn compress_png_with_image(file: &Path) -> Option<Vec<u8>> {
     let img = image::open(file).ok()?;
     let mut buf = Vec::new();
@@ -87,10 +137,16 @@ fn compress_png_with_image(file: &Path) -> Option<Vec<u8>> {
         image::codecs::png::FilterType::Adaptive,
     );
     use image::ImageEncoder;
-    let rgba = img.to_rgba8();
-    encoder
-        .write_image(&rgba, img.width(), img.height(), image::ExtendedColorType::Rgba8)
-        .ok()?;
+    match img.color() {
+        image::ColorType::Rgba8 | image::ColorType::Rgba16 => {
+            let rgba = img.to_rgba8();
+            encoder.write_image(&rgba, img.width(), img.height(), image::ExtendedColorType::Rgba8).ok()?
+        }
+        _ => {
+            let rgb = img.to_rgb8();
+            encoder.write_image(&rgb, img.width(), img.height(), image::ExtendedColorType::Rgb8).ok()?
+        }
+    }
     if buf.is_empty() { None } else { Some(buf) }
 }
 
@@ -103,10 +159,9 @@ fn compress_png_with_oxipng(file: &Path, quality: u32) -> Option<Vec<u8>> {
 }
 
 /// imagequant crate 量化（与 pngquant 同源算法）：quality→set_quality(q-10,q)，speed=3，
-/// 量化后取 remapped 像素重编码 RGBA8 PNG（颜色已减，非 PLTE 调色板）。
+/// 量化后用 png crate 直接写 8-bit 调色板 PNG（PLTE + 索引像素），与 pngquant CLI 一致。
 fn compress_png_with_imagequant(file: &Path, quality: u32) -> Option<Vec<u8>> {
     use imagequant::{RGBA, Attributes};
-    use image::ImageEncoder;
     let img = image::open(file).ok()?;
     let rgba = img.to_rgba8();
     let (w, h) = (rgba.width() as usize, rgba.height() as usize);
@@ -121,19 +176,55 @@ fn compress_png_with_imagequant(file: &Path, quality: u32) -> Option<Vec<u8>> {
     let mut image = attr.new_image(pixels, w, h, 0.0).ok()?;
     let mut quant = attr.quantize(&mut image).ok()?;
     let _ = quant.set_dithering_level(1.0);
-    // remapped() 返回 (palette, indices)：palette 是量化后的颜色表，
-    // indices 是每像素 1 字节的调色板索引。需要用索引查表重建完整 RGBA 图。
     let (palette, indices) = quant.remapped(&mut image).ok()?;
-    let mut out: Vec<u8> = Vec::with_capacity(indices.len() * 4);
-    for &idx in &indices {
-        let p = palette[idx as usize];
-        out.push(p.r); out.push(p.g); out.push(p.b); out.push(p.a);
+
+    // 构建 RGB 调色板（3 bytes/entry）+ tRNS 透明度表
+    let mut palette_rgb = Vec::with_capacity(palette.len() * 3);
+    let mut trns = Vec::with_capacity(palette.len());
+    let mut has_alpha = false;
+    for p in &palette {
+        palette_rgb.push(p.r); palette_rgb.push(p.g); palette_rgb.push(p.b);
+        if p.a < 255 { has_alpha = true; }
+        trns.push(p.a);
     }
+
+    // 用 png crate 写 8-bit Indexed PNG（同 pngquant CLI 输出格式）
     let mut buf = Vec::new();
-    let enc = image::codecs::png::PngEncoder::new_with_quality(
-        &mut buf, image::codecs::png::CompressionType::Best, image::codecs::png::FilterType::Adaptive);
-    enc.write_image(&out, w as u32, h as u32, image::ExtendedColorType::Rgba8).ok()?;
-    if buf.is_empty() { None } else { Some(buf) }
+    {
+        let mut enc = png::Encoder::new(&mut buf, w as u32, h as u32);
+        enc.set_color(png::ColorType::Indexed);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.set_palette(&palette_rgb);
+        if has_alpha { enc.set_trns(trns); }
+        enc.set_compression(png::Compression::High);
+        let mut writer = enc.write_header().ok()?;
+        writer.write_image_data(&indices).ok()?;
+        writer.finish().ok()?;
+    }
+    if buf.is_empty() { return None; }
+
+    // 快速路径：palette PNG 已比原文件小 → 直接返回（多数图片走此路径）
+    let original_size = std::fs::metadata(file).ok()?.len() as usize;
+    if buf.len() < original_size {
+        return Some(buf);
+    }
+
+    // 慢速路径：palette PNG 比原文件大 → oxipng 全过滤优化
+    // preset 4 = 全部 5 种过滤器（None/Sub/Up/Avg/Paeth）逐行选优
+    // + Libdeflater（C 库 zlib，compression=12）+ 无超时（确保压到最优）
+    let mut opts = oxipng::Options::from_preset(4);
+    opts.bit_depth_reduction = false;
+    opts.color_type_reduction = false;
+    opts.palette_reduction = false;
+    opts.grayscale_reduction = false;
+    if let oxipng::Deflaters::Libdeflater { compression } = &mut opts.deflate {
+        *compression = 12;
+    }
+    opts.timeout = None;
+    match oxipng::optimize_from_memory(&buf, &opts) {
+        Ok(optimized) if optimized.len() < buf.len() => Some(optimized),
+        _ => Some(buf),
+    }
 }
 
 /// image crate 兜底：JPEG 按质量重编码（RGB8）。
@@ -224,17 +315,43 @@ fn compress_gif_with_image(file: &Path) -> Option<Vec<u8>> {
     if buf.is_empty() { None } else { Some(buf) }
 }
 
-/// GIF：进程内重编码（对齐 cli 版 gifsicle 接口）。成功判定 < original_size。
+/// GIF：优先调打包的 gifsicle CLI（与 Direct 版完全一致），找不到降级 gif crate。
+/// gifsicle 是自包含二进制（仅依赖 libSystem），沙盒可直接 spawn。
 async fn compress_gif(file: &Path, options: &CompressOptions) -> EngineResult {
     let original = fs::read(file).unwrap_or_default();
     let original_size = original.len() as u64;
-    let _quality = options.quality;
-    if let Some(data) = compress_gif_with_image(file) {
-        if (data.len() as u64) < original_size {
-            return ok(data, "gif", "gifsicle (inproc)");
+    let quality = options.quality;
+
+    // 1. gifsicle CLI（与 Direct 版 engine.rs 完全一致的调用方式）
+    if let Some(tool) = super::find_tool("gifsicle") {
+        let tmp = tempfile::tempdir().ok();
+        if let Some(ref td) = tmp {
+            let out = td.path().join("c.gif");
+            let colors = ((quality as f64 / 100.0) * 256.0).floor().max(32.0) as u32;
+            let args = vec![
+                format!("--optimize=3"),
+                format!("--colors={}", colors),
+                "--no-comments".into(),
+                "--output".into(),
+                out.to_string_lossy().into(),
+                file.to_string_lossy().into(),
+            ];
+            if let Some(data) = super::cli_to_file(&tool, &args, &out).await {
+                if (data.len() as u64) < original_size {
+                    return ok(data, "gif", "gifsicle");
+                }
+            }
         }
     }
-    no_improvement(original, "gif", "gifsicle (inproc)", original_size, original_size)
+
+    // 2. gif crate 降级（gifsicle 未找到时，如 dev 模式）
+    if let Some(data) = compress_gif_with_image(file) {
+        if (data.len() as u64) < original_size {
+            return ok(data, "gif", "gifsicle (gif-crate fallback)");
+        }
+    }
+
+    no_improvement(original, "gif", "gifsicle", original_size, original_size)
 }
 
 /// ravif crate 编码（同源 AV1/rav1e，对齐 avifenc）：with_quality + with_speed(6)。
@@ -306,8 +423,50 @@ pub async fn compress_to_format(file: &Path, target: &str, options: &CompressOpt
 }
 
 pub async fn compress_smart(file: &Path, options: &CompressOptions) -> EngineResult {
-    // 骨架：先按 compress_image 的结果走；后续接入多引擎候选挑选
-    compress_image(file, options).await
+    // 多格式候选挑选（与 Direct 版 engine.rs compress_smart 逻辑一致）
+    let img_type = detect_image_type(file);
+    let quality = options.quality;
+
+    let mut opts = options.clone();
+    opts.quality = quality;
+
+    // 如果指定了输出格式，走格式转换路径
+    if opts.output_format != "original" {
+        return compress_to_format(file, &opts.output_format, &opts).await;
+    }
+
+    let mut candidates: Vec<EngineResult> = Vec::new();
+
+    match img_type.as_str() {
+        "png" => {
+            // PNG 同时尝试原格式 + WebP，选最小
+            let r = compress_png(file, &opts).await;
+            if r.success { candidates.push(r); }
+            let w = compress_to_webp(file, &opts).await;
+            if w.success { candidates.push(w); }
+        }
+        "jpg" => {
+            let r = compress_jpg(file, &opts).await;
+            if r.success { candidates.push(r); }
+        }
+        "gif" => {
+            let r = compress_gif(file, &opts).await;
+            if r.success { candidates.push(r); }
+        }
+        "webp" => {
+            let r = compress_to_webp(file, &opts).await;
+            if r.success { candidates.push(r); }
+        }
+        _ => {}
+    }
+
+    // 选最小的结果
+    if let Some(best) = candidates.into_iter().min_by_key(|r| r.compressed.len()) {
+        return best;
+    }
+
+    // 兜底
+    compress_image(file, &opts).await
 }
 
 #[cfg(test)]
