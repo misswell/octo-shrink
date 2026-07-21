@@ -137,6 +137,16 @@ cargo test --features inproc-backends          # 进程内版
 - 🟡 App Store 审核待提交：2.2.9 已上传 ASC，需补全元数据 + 回复 network.server 解释（路径B）后提交审核
 - ⬜ 引擎迁移后续：JXL（未来接入 jpegxl-sys 后可恢复 UI 选项）；GIF 减色优化（未来可用 imagequant 逐帧量化，当前有帧间闪烁风险暂不做）
 
+### 8. 每次编译必须同时构建两条产物线（强制）
+
+日常开发首选 `bash scripts/build_all.sh`，一次编译两版：
+- **Direct 版**（default=cli-backends）→ 产物 `OctoShrink_direct.app`（加 `_direct` 后缀，与 App Store 版区分）
+- **App Store 版**（appstore=inproc-backends）→ 产物 `OctoShrink.app`（原名）
+
+两条线的 `productName` 都是 "OctoShrink"，Tauri 输出到同一路径。build_all.sh 先建 Direct 再重命名，避免覆盖。**不要只编译一版**——改完代码必须两版都过 `cargo check`，发布时用 `build_all.sh` 同时出两版。单独发布某一条线时用 `notarize.sh`（Direct）或 `build_appstore.sh`（App Store）。
+
+---
+
 ## 文件访问差异表（随改动更新）
 
 | 功能 | Direct 版（feature=default） | App Store 版（feature=appstore） | 差异原因 |
