@@ -18,7 +18,7 @@ export CARGO_PROFILE_RELEASE_PANIC=unwind
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TAURI_DIR="$PROJECT_DIR/src-tauri"
 APP_NAME="OctoShrink"
-APP_VERSION="2.2.7"
+APP_VERSION="2.2.8"
 APP="$TAURI_DIR/target/release/bundle/macos/$APP_NAME.app"
 BUNDLE_ID="com.misswell.octoshrink.appstore"
 ENTITLEMENTS="$TAURI_DIR/entitlements-appstore.plist"
@@ -55,7 +55,7 @@ ok "$APP 已签名"
 # ---------- 3. productbuild 打包 .pkg ----------
 PKG="$PROJECT_DIR/OctoShrink-${APP_VERSION}.pkg"
 INSTALLER_IDENTITY="${APPSTORE_INSTALLER_IDENTITY:-3rd Party Mac Developer Installer: Guofeng Liu (U8U443D7ZL)}"
-log "productbuild: ${PKG}（installer: $INSTALLER_IDENTITY）"
+log "productbuild: ${PKG}（installer: ${INSTALLER_IDENTITY}）"
 xcrun productbuild --component "$APP" /Applications --sign "$INSTALLER_IDENTITY" "$PKG" \
   || fail "productbuild 失败：确认有 3rd Party Mac Developer Installer 证书"
 ok "${PKG}"

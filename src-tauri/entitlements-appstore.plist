@@ -14,6 +14,11 @@
     <!-- 允许直接写「下载」目录（输出模式 folder=Downloads 场景） -->
     <key>com.apple.security.files.downloads.read-write</key>
     <true/>
-    <!-- 不含 com.apple.security.network.* ：回归 tauri://localhost（local origin），IPC 经 __TAURI__ 注入，无需本地 HTTP 服务器。曾用 HTTP 服务器绕过 macOS 27 沙盒白屏，Tauri 2.11.5+ 已根治；network.server 反触发 App Store 自动分析驳回（2026-07） -->
+    <!-- 允许本地 HTTP 服务器（绕过 macOS 沙盒阻止的 tauri:// 自定义协议 → 白屏） -->
+    <key>com.apple.security.network.server</key>
+    <true/>
+    <!-- 允许 WebContent 进程连接本地 HTTP 服务器 -->
+    <key>com.apple.security.network.client</key>
+    <true/>
 </dict>
 </plist>
