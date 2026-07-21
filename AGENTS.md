@@ -149,7 +149,7 @@ cargo test --features inproc-backends          # 进程内版
 | app-sandbox | 关 | 强制开 |
 | files.user-selected.read-write | 不需要 | 需要 |
 | files.bookmarks.app-scope | 不需要 | 需要 |
-| files.downloads.read-write | 不需要 | 需要 |
+| files.downloads.read-write | 不需要 | 不需要（代码无写下载目录逻辑，曾误开 → Apple "minimum entitlements" 自动分析风险；2.2.9 已移除） |
 | network.server | 不需要 | 需要（本地 HTTP 服务器绕过沙盒阻止的 tauri://，见第 3 节终极解法） |
 | network.client | 不需要 | 需要（WebContent 进程连本地 HTTP 服务器） |
 | cs.disable-library-validation | 需要（加载内置 dylib） | 不允许（沙盒禁用） |
@@ -315,9 +315,16 @@ xcrun altool --upload-app \
 `network.server` 是 HTTP 服务器方案必需。Apple 自动分析可能标记"有 entitlement 但无匹配功能"（v2.2.7 曾因此被拒）。
 
 - ❌ **不要走路径 A（移除 network.server）**——移除后沙盒白屏回归（tauri:// 不工作）。
-- ✅ **走路径 B（回复解释用途）**：提交审核时在 App Store Connect > App Review Information 附上：
 
-> `com.apple.security.network.server` 用于 app 内本地 HTTP 服务器（仅监听 127.0.0.1 随机端口）向 WKWebView 提供打包在 Resources 目录内的前端资源（index.html/app.js/style.css）。macOS App Sandbox 在 macOS 27 阻止 `tauri://localhost` 自定义协议（WKURLSchemeHandler）导致白屏，本地 HTTP 服务器是唯一加载前端的方式。仅监听 localhost、只服务 app 自带资源（带路径穿越防护）、不发起任何出站连接。`network.client` 允许 WebContent 进程连此本地服务器。
+- ✅ **走路径 B（保留 + 解释用途）**，需完成 Apple 要求的**两步**（缺一不可，否则视为未回应驳回）：
+  1. **回复驳回消息**：在 App Store Connect 该提交的消息线程直接 reply，描述 app 如何使用 `network.server`。
+  2. **写入 App Review Information**：App Store Connect > App Review Information 附上同样说明。
+
+回复 / App Review Information 文本（直接复制，已对齐 Apple 原话措辞）：
+
+> `com.apple.security.network.server` — 本 app 运行时 **listen for and respond to incoming network connections**：在 app 进程内启动本地 HTTP 服务器（`TcpListener::bind("localhost:41845")`，带 41846/41847 fallback），仅监听 127.0.0.1，向 app 自身 WKWebView 提供打包在 Resources 目录内的前端资源（index.html / app.js / style.css）。必须保留：macOS 27 App Sandbox 阻止 `tauri://localhost` 自定义协议（WKURLSchemeHandler）导致白屏，本地 HTTP 服务器是 app 加载自身前端界面的唯一方式。该服务器仅监听 localhost、只服务 app 自带资源（带路径穿越防护）、不发起任何出站连接、不接受外部请求。`com.apple.security.network.client` 允许 app 的 WebContent 进程连此本地服务器获取前端资源。
+
+> ⚠️ **与全局 AGENTS.md 冲突**：全局 `~/.codex/AGENTS.md` 有一条（2026-07-21）称"tauri:// 沙盒下正常、白屏是 visible:false 导致、应删 HTTP 服务器"。经实测（v2.2.8 HTTP 服务器版正常，b21cc53 删 HTTP 后白屏），**以本节为准：HTTP 服务器 + network.server 必需，勿删、勿走路径 A**。全局那条疑在非沙盒环境验证，不可信。
 
 ### 11. TestFlight 需 provisioning profile（build_appstore.sh 当前漏嵌）
 
