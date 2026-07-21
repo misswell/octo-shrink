@@ -340,13 +340,15 @@ async fn compress_batch(
 
 #[tauri::command]
 pub async fn select_files(app: AppHandle) -> Result<Vec<String>, String> {
-    let files = app
-        .dialog()
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
         .file()
         .add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
-        .blocking_pick_files();
+        .pick_files(move |files| {
+            let _ = tx.send(files);
+        });
+    let files = rx.await.map_err(|e| e.to_string())?.unwrap_or_default();
     Ok(files
-        .unwrap_or_default()
         .into_iter()
         .filter_map(|fp| fp.into_path().ok().map(|p| p.to_string_lossy().into_owned()))
         .collect())
@@ -354,7 +356,11 @@ pub async fn select_files(app: AppHandle) -> Result<Vec<String>, String> {
 
 #[tauri::command]
 pub async fn select_folder(app: AppHandle) -> Result<Vec<String>, String> {
-    let folder = app.dialog().file().blocking_pick_folder();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog().file().pick_folder(move |folder| {
+        let _ = tx.send(folder);
+    });
+    let folder = rx.await.map_err(|e| e.to_string())?;
     Ok(folder
         .into_iter()
         .filter_map(|fp| fp.into_path().ok().map(|p| p.to_string_lossy().into_owned()))
@@ -363,7 +369,11 @@ pub async fn select_folder(app: AppHandle) -> Result<Vec<String>, String> {
 
 #[tauri::command]
 pub async fn select_output_dir(app: AppHandle) -> Result<Vec<String>, String> {
-    let folder = app.dialog().file().blocking_pick_folder();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog().file().pick_folder(move |folder| {
+        let _ = tx.send(folder);
+    });
+    let folder = rx.await.map_err(|e| e.to_string())?;
     Ok(folder
         .into_iter()
         .filter_map(|fp| fp.into_path().ok().map(|p| p.to_string_lossy().into_owned()))
