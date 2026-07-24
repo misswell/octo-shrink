@@ -7,33 +7,39 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- Shared monochrome icon set, drawn on one 16pt grid for a native macOS feel. -->
+  <!-- A calm, Lucide-inspired 24pt icon system: simple shapes, generous counters. -->
   <svg class="icon-library" aria-hidden="true">
     <defs>
-      <symbol id="icon-info" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 7.25v4M8 4.75v.01"/></symbol>
-      <symbol id="icon-sun" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.75"/><path d="M8 1.5v1.25M8 13.25v1.25M1.5 8h1.25M13.25 8h1.25M3.4 3.4l.9.9M11.7 11.7l.9.9M12.6 3.4l-.9.9M4.3 11.7l-.9.9"/></symbol>
-      <symbol id="icon-moon" viewBox="0 0 16 16"><path d="M13.65 9.8A6 6 0 0 1 6.2 2.35 6 6 0 1 0 13.65 9.8Z"/></symbol>
-      <symbol id="icon-add-images" viewBox="0 0 16 16"><rect x="1.5" y="3" width="10" height="9.5" rx="1.6"/><path d="m3.4 10 2.1-2.25 1.65 1.6 1.35-1.2 3 2.85M4.75 5.75h.01M13.25 2v4M11.25 4h4"/></symbol>
-      <symbol id="icon-folder-add" viewBox="0 0 16 16"><path d="M1.5 4.25A1.75 1.75 0 0 1 3.25 2.5h2.1l1.4 1.5h6A1.75 1.75 0 0 1 14.5 5.75v5.5A1.75 1.75 0 0 1 12.75 13h-9.5a1.75 1.75 0 0 1-1.75-1.75Z"/><path d="M8 6.25v4M6 8.25h4"/></symbol>
-      <symbol id="icon-queue" viewBox="0 0 16 16"><circle cx="2.5" cy="4" r=".65" fill="currentColor" stroke="none"/><circle cx="2.5" cy="8" r=".65" fill="currentColor" stroke="none"/><circle cx="2.5" cy="12" r=".65" fill="currentColor" stroke="none"/><path d="M5 4h8.5M5 8h8.5M5 12h6"/></symbol>
-      <symbol id="icon-compress" viewBox="0 0 16 16"><path d="M2.25 5V2.25H5M11 2.25h2.75V5M13.75 11v2.75H11M5 13.75H2.25V11"/><path d="m3 3 3.25 3.25M6.25 4.25v2h-2M13 3 9.75 6.25M11.75 6.25h-2v-2M13 13l-3.25-3.25M9.75 11.75v-2h2M3 13l3.25-3.25M4.25 9.75h2v2"/></symbol>
-      <symbol id="icon-sliders" viewBox="0 0 16 16"><path d="M2 4h3M8 4h6M2 8h7M12 8h2M2 12h2M7 12h7"/><circle cx="6.5" cy="4" r="1.5"/><circle cx="10.5" cy="8" r="1.5"/><circle cx="5.5" cy="12" r="1.5"/></symbol>
-      <symbol id="icon-results" viewBox="0 0 16 16"><circle cx="3" cy="4" r="1.5"/><path d="m2.35 4 .45.45.9-.95M6 4h8M2 8h12M2 12h9"/></symbol>
-      <symbol id="icon-trash" viewBox="0 0 16 16"><path d="M2.5 4h11M6 1.75h4M4 4l.65 9.25a1 1 0 0 0 1 .93h4.7a1 1 0 0 0 1-.93L12 4M6.5 6.5v5M9.5 6.5v5"/></symbol>
-      <symbol id="icon-restore" viewBox="0 0 16 16"><path d="M4.25 4.25A5.25 5.25 0 1 1 3 10.5"/><path d="M1.75 3.25v3.5h3.5"/></symbol>
-      <symbol id="icon-export" viewBox="0 0 16 16"><path d="M8 10V1.75M5.25 4.5 8 1.75l2.75 2.75"/><path d="M4 6.75H2.75a1 1 0 0 0-1 1v5.5a1 1 0 0 0 1 1h10.5a1 1 0 0 0 1-1v-5.5a1 1 0 0 0-1-1H12"/></symbol>
-      <symbol id="icon-save" viewBox="0 0 16 16"><path d="M8 1.75V10M5.25 7.25 8 10l2.75-2.75"/><path d="M2.25 11v2.25a1 1 0 0 0 1 1h9.5a1 1 0 0 0 1-1V11"/></symbol>
-      <symbol id="icon-compare" viewBox="0 0 16 16"><rect x="1.5" y="2.25" width="13" height="11.5" rx="2"/><path d="M8 2.25v11.5M5 6.25 3.5 8 5 9.75M11 6.25 12.5 8 11 9.75"/></symbol>
-      <symbol id="icon-finder" viewBox="0 0 16 16"><path d="M1.5 4.25A1.75 1.75 0 0 1 3.25 2.5h2.1l1.4 1.5h6A1.75 1.75 0 0 1 14.5 5.75v5.5A1.75 1.75 0 0 1 12.75 13h-9.5a1.75 1.75 0 0 1-1.75-1.75Z"/><circle cx="8.25" cy="8.25" r="2"/><path d="m9.7 9.7 1.55 1.55"/></symbol>
-      <symbol id="icon-refresh" viewBox="0 0 16 16"><path d="M13.4 6A5.75 5.75 0 0 0 3.5 3.8L2 5.25M2.6 10A5.75 5.75 0 0 0 12.5 12.2l1.5-1.45"/><path d="M2 2.25v3h3M14 13.75v-3h-3"/></symbol>
-      <symbol id="icon-fullscreen" viewBox="0 0 16 16"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/></symbol>
-      <symbol id="icon-close" viewBox="0 0 16 16"><path d="m3.5 3.5 9 9M12.5 3.5l-9 9"/></symbol>
-      <symbol id="icon-check" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="m5 8.1 2 2 4-4.25"/></symbol>
-      <symbol id="icon-error" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="m5.75 5.75 4.5 4.5M10.25 5.75l-4.5 4.5"/></symbol>
-      <symbol id="icon-warning" viewBox="0 0 16 16"><path d="M7.1 2.25 1.65 12a1.15 1.15 0 0 0 1 1.75h10.7a1.15 1.15 0 0 0 1-1.75L8.9 2.25a1.03 1.03 0 0 0-1.8 0Z"/><path d="M8 6v3.25M8 11.6v.01"/></symbol>
-      <symbol id="icon-minus" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M5 8h6"/></symbol>
-      <symbol id="icon-chevron-down" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></symbol>
-      <symbol id="icon-split-grip" viewBox="0 0 16 16"><path d="m5.5 4-3 4 3 4M10.5 4l3 4-3 4"/></symbol>
+      <symbol id="icon-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
+      <symbol id="icon-theme-auto" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M12 7a3.5 3.5 0 0 1 0 7Z" fill="currentColor" stroke="none"/></symbol>
+      <symbol id="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.65 17.65l1.42 1.42M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.65 6.35l1.42-1.42"/></symbol>
+      <symbol id="icon-moon" viewBox="0 0 24 24"><path d="M20.5 14.2A8.5 8.5 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7Z"/></symbol>
+      <symbol id="icon-add-images" viewBox="0 0 24 24"><rect x="3" y="4" width="15" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m4 17 4.5-4.5 3 3 2-2 4.5 4.5M21 5v6M18 8h6"/></symbol>
+      <symbol id="icon-folder-add" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M12 11v6M9 14h6"/></symbol>
+      <symbol id="icon-folder-open" viewBox="0 0 24 24"><path d="M3 8V6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v2"/><path d="M3.2 10h18.3l-2 8a2 2 0 0 1-2 1.5H5.4a2 2 0 0 1-2-1.6L2 12.4A2 2 0 0 1 3.2 10Z"/></symbol>
+      <symbol id="icon-queue" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h9M3 6h.01M3 12h.01M3 18h.01"/></symbol>
+      <symbol id="icon-compress" viewBox="0 0 24 24"><path d="M3 3l7 7M10 6v4H6M21 3l-7 7M18 10h-4V6M3 21l7-7M6 14h4v4M21 21l-7-7M14 18v-4h4"/></symbol>
+      <symbol id="icon-recompress" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7L20 14"/><path d="M20 5v6h-6M12 8v8M8 12h8"/></symbol>
+      <symbol id="icon-sliders" viewBox="0 0 24 24"><path d="M4 7h5M15 7h5M4 17h9M19 17h1"/><circle cx="12" cy="7" r="3"/><circle cx="16" cy="17" r="3"/></symbol>
+      <symbol id="icon-results" viewBox="0 0 24 24"><path d="M10 6h11M10 12h11M10 18h7"/><path d="m3 6 1 1 2-2M3 12l1 1 2-2M3 18l1 1 2-2"/></symbol>
+      <symbol id="icon-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 10v6M14 10v6"/></symbol>
+      <symbol id="icon-restore" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 6 6v3"/></symbol>
+      <symbol id="icon-export" viewBox="0 0 24 24"><path d="M12 16V3M7 8l5-5 5 5"/><path d="M5 14v6h14v-6"/></symbol>
+      <symbol id="icon-save" viewBox="0 0 24 24"><path d="M12 3v13M7 11l5 5 5-5"/><path d="M5 20h14"/></symbol>
+      <symbol id="icon-compare" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16M8 9l-2 3 2 3M16 9l2 3-2 3"/></symbol>
+      <symbol id="icon-finder" viewBox="0 0 24 24"><path d="M3 8V6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><circle cx="13" cy="13" r="3"/><path d="m15.2 15.2 2.3 2.3"/></symbol>
+      <symbol id="icon-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
+      <symbol id="icon-reset-view" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></symbol>
+      <symbol id="icon-zoom-in" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="7.5"/><path d="m16 16 5 5M7.5 10.5h6M10.5 7.5v6"/></symbol>
+      <symbol id="icon-zoom-out" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="7.5"/><path d="m16 16 5 5M7.5 10.5h6"/></symbol>
+      <symbol id="icon-fullscreen" viewBox="0 0 24 24"><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5"/></symbol>
+      <symbol id="icon-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+      <symbol id="icon-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/></symbol>
+      <symbol id="icon-error" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6M15 9l-6 6"/></symbol>
+      <symbol id="icon-warning" viewBox="0 0 24 24"><path d="m12 3 10 18H2Z"/><path d="M12 9v4M12 17h.01"/></symbol>
+      <symbol id="icon-minus" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></symbol>
+      <symbol id="icon-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+      <symbol id="icon-split-grip" viewBox="0 0 24 24"><path d="m8 7-5 5 5 5M16 7l5 5-5 5"/></symbol>
     </defs>
   </svg>
   <!-- Title Bar -->
@@ -48,7 +54,7 @@
         <svg class="symbol-icon"><use href="#icon-info"/></svg>
       </button>
       <button class="tb-btn" id="themeToggleBtn" onclick="cycleTheme()" title="切换主题">
-        <svg class="symbol-icon theme-icon theme-icon-auto"><use href="#icon-sun"/></svg>
+        <svg class="symbol-icon theme-icon theme-icon-auto"><use href="#icon-theme-auto"/></svg>
         <svg class="symbol-icon theme-icon theme-icon-light" style="display:none"><use href="#icon-sun"/></svg>
         <svg class="symbol-icon theme-icon theme-icon-dark" style="display:none"><use href="#icon-moon"/></svg>
       </button>
@@ -88,7 +94,10 @@
         <div class="queue-header-right">
           <span class="queue-summary" id="queueSummary">0 个文件</span>
           <span class="progress-summary" id="progressSummary" style="display:none;"></span>
-          <button class="btn btn-small btn-ghost" onclick="clearAllFiles()" title="清空列表">清除全部</button>
+          <button class="btn btn-small btn-ghost" onclick="clearAllFiles()" title="清空列表">
+            <svg class="symbol-icon symbol-icon-small"><use href="#icon-trash"/></svg>
+            清除全部
+          </button>
         </div>
       </div>
       <div class="queue-stats" id="queueStats" style="display:none;">
@@ -132,10 +141,21 @@
         <h3>
           <svg class="symbol-icon"><use href="#icon-sliders"/></svg>
           压缩设置
+          <span class="settings-summary" id="settingsSummary"></span>
         </h3>
         <svg class="symbol-icon settings-chevron"><use href="#icon-chevron-down"/></svg>
       </div>
       <div class="settings-body">
+        <div class="settings-row">
+          <label>自动处理</label>
+          <div class="toggle-wrapper">
+            <label class="toggle">
+              <input type="checkbox" id="autoCompress">
+              <span class="toggle-slider"></span>
+            </label>
+            <span class="toggle-label">拖入或选择后自动压缩</span>
+          </div>
+        </div>
         <div class="settings-row">
           <label>压缩质量</label>
           <div class="quality-control">
@@ -167,7 +187,10 @@
           <label>输出目录</label>
           <div class="dir-picker">
             <span id="outputDirDisplay" class="dir-display">未选择</span>
-            <button class="btn btn-small" onclick="selectOutputDir()">浏览</button>
+            <button class="btn btn-small" onclick="selectOutputDir()">
+              <svg class="symbol-icon symbol-icon-small"><use href="#icon-folder-open"/></svg>
+              浏览
+            </button>
           </div>
         </div>
         <div class="settings-row">
@@ -268,11 +291,11 @@
      </h3>
      <div class="compare-toolbar-right">
        <div class="compare-zoom-control">
-         <button class="zoom-step-btn" onclick="stepZoom(-0.25)" title="缩小">−</button>
+         <button class="zoom-step-btn" onclick="stepZoom(-0.25)" title="缩小" aria-label="缩小"><svg class="symbol-icon symbol-icon-small"><use href="#icon-zoom-out"/></svg></button>
          <input type="range" class="zoom-slider" id="zoomSlider" min="0.1" max="8" step="0.1" value="1">
-         <button class="zoom-step-btn" onclick="stepZoom(0.25)" title="放大">+</button>
+         <button class="zoom-step-btn" onclick="stepZoom(0.25)" title="放大" aria-label="放大"><svg class="symbol-icon symbol-icon-small"><use href="#icon-zoom-in"/></svg></button>
          <span class="zoom-value" id="zoomValue">100%</span>
-         <button class="zoom-reset-btn" onclick="setCompareZoom(1)" title="重置缩放"><svg class="symbol-icon symbol-icon-small"><use href="#icon-refresh"/></svg></button>
+         <button class="zoom-reset-btn" onclick="setCompareZoom(1)" title="重置缩放" aria-label="重置缩放"><svg class="symbol-icon symbol-icon-small"><use href="#icon-reset-view"/></svg></button>
        </div>
        <button class="btn btn-icon-close compare-fullscreen-btn" id="fullscreenBtn" onclick="toggleFullscreen()" title="全屏">
          <svg class="symbol-icon"><use href="#icon-fullscreen"/></svg>
@@ -288,16 +311,16 @@
           <div class="compare-img-wrapper" id="compareImgWrapper">
             <img id="compareCompressedImg" class="compare-img-base" alt="压缩后" draggable="false">
             <img id="compareOriginalImg" class="compare-img-overlay" alt="原图" draggable="false">
+            <div class="compare-handle" id="compareHandle">
+              <div class="compare-handle-line"></div>
+              <div class="compare-handle-circle">
+                <svg class="symbol-icon"><use href="#icon-split-grip"/></svg>
+              </div>
+            </div>
           </div>
         </div>
         <div class="compare-label label-left">原图</div>
         <div class="compare-label label-right">压缩后</div>
-        <div class="compare-handle" id="compareHandle">
-          <div class="compare-handle-line"></div>
-          <div class="compare-handle-circle">
-            <svg class="symbol-icon"><use href="#icon-split-grip"/></svg>
-          </div>
-        </div>
         <input type="range" class="compare-slider-bar" id="compareRange" min="0" max="100" value="50">
       </div>
 <div class="compare-info">
@@ -330,7 +353,7 @@
        <input type="range" id="recompressQuality" min="10" max="100" value="75">
        <span id="recompressQualityValue">75%</span>
        <button class="btn btn-primary btn-recompress" id="recompressBtn" onclick="recompressWithQuality(document.getElementById('recompressQuality').value)">
-         <svg class="symbol-icon symbol-icon-small"><use href="#icon-refresh"/></svg>
+         <svg class="symbol-icon symbol-icon-small"><use href="#icon-recompress"/></svg>
          重新压缩
        </button>
      </div>
@@ -340,7 +363,10 @@
        <svg class="symbol-icon"><use href="#icon-restore"/></svg>
        恢复原图
      </button>
-     <button class="btn btn-primary" onclick="closeCompare()">关闭</button>
+     <button class="btn btn-primary" onclick="closeCompare()">
+       <svg class="symbol-icon"><use href="#icon-close"/></svg>
+       关闭
+     </button>
    </div>
     </div>
   </div>

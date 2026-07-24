@@ -148,6 +148,7 @@ let files = [];
 let inputPaths = [];
 let results = [];
 let isCompressing = false;
+let pendingAutoCompress = false;
 let outputDir = null;
 let currentCompressOptions = null;
 
@@ -286,6 +287,9 @@ async function handleFilePaths(filePaths) {
   }
 
   files = expanded;
+  if (isCompressing) {
+    totalFiles = files.length;
+  }
 
   var queuePanel = document.getElementById('queuePanel');
   if (queuePanel) queuePanel.style.display = 'block';
@@ -294,6 +298,14 @@ async function handleFilePaths(filePaths) {
   updateQueueSummary();
   renderFileQueue();
   document.querySelector('.container').scrollTop = 0;
+  var ac = document.getElementById('autoCompress');
+  if (ac && ac.checked && files.length > 0) {
+    if (isCompressing) {
+      pendingAutoCompress = true;
+    } else {
+      startCompression(false);
+    }
+  }
 }
 
 // Global state for compression
@@ -324,19 +336,21 @@ function updateBulkActionButtons() {
 async function renderFileQueue() {
   var list = document.getElementById('fileQueueList');
   if (!list) return;
-  list.innerHTML = '';
-  fileRows = {};
+  var newFiles = [];
   for (var i = 0; i < files.length; i++) {
-    var row = createQueueRow(files[i]);
-    fileRows[files[i]] = row;
-    list.appendChild(row);
+    if (!fileRows[files[i]]) {
+      var row = createQueueRow(files[i]);
+      fileRows[files[i]] = row;
+      list.appendChild(row);
+      newFiles.push(files[i]);
+    }
   }
-  // Fetch file sizes in batch
-  if (files.length > 0) {
+  // Fetch file sizes for newly added rows only (preserve existing row state)
+  if (newFiles.length > 0) {
     try {
-      const sizes = await invoke('get_file_sizes', { filePaths: files });
-      for (var j = 0; j < files.length; j++) {
-        var row = fileRows[files[j]];
+      const sizes = await invoke('get_file_sizes', { filePaths: newFiles });
+      for (var j = 0; j < newFiles.length; j++) {
+        var row = fileRows[newFiles[j]];
         if (row && sizes[j] !== undefined) {
           var sizeEl = row.querySelector('.queue-item-size');
           if (sizeEl) sizeEl.textContent = formatBytes(sizes[j]);
@@ -401,7 +415,7 @@ function renderQueueResultActions(row, result) {
       { action: 'finder', title: '在访达中显示', icon: iconMarkup('finder', true) },
     ];
   }
-  actionDefs.push({ action: 'log', title: '复制日志', icon: iconMarkup('info', true) });
+  actionDefs.push({ action: 'log', title: '复制日志', icon: iconMarkup('copy', true) });
 
   actionDefs.forEach(function(def) {
     var btn = document.createElement('button');
@@ -477,7 +491,7 @@ function renderRestoredActions(row, filePath) {
   btn.className = 'queue-action-btn';
   btn.type = 'button';
   btn.title = '重新压缩';
-  btn.innerHTML = iconMarkup('refresh', true);
+  btn.innerHTML = iconMarkup('recompress', true);
   btn.addEventListener('click', function(e) {
     e.stopPropagation();
     compressOneFile(filePath);
@@ -531,7 +545,7 @@ function clearAllFiles() {
   isCompressing = false;
   var queuePanel = document.getElementById('queuePanel');
   if (queuePanel) queuePanel.style.display = 'none';
-  settingsPanel.style.display = 'none';
+  settingsPanel.style.display = 'block';
   resultsPanel.style.display = 'none';
   var list = document.getElementById('fileQueueList');
   if (list) list.innerHTML = '';
@@ -541,10 +555,10 @@ function clearAllFiles() {
 }
 
 // ─── Compression ────────────────────────────────────────────────
-async function startCompression() {
+async function startCompression(isIncrement) {
   if (isCompressing || files.length === 0) return;
   isCompressing = true;
-  results = [];
+  if (!isIncrement) results = [];
   currentCompressOptions = null;
 
   const config = getCurrentCompressionConfig();
@@ -563,7 +577,7 @@ async function startCompression() {
   totalRate.textContent = '0%';
 
   cancelledFiles.clear();
-  totalDone = 0;
+  totalDone = isIncrement ? results.length : 0;
   totalFiles = files.length;
   updateQueueSummary();
 
@@ -588,6 +602,7 @@ async function startCompression() {
     }
 
     if (result) {
+      if (results.some(function(r) { return r.file === result.file; })) return;
       row.classList.remove('compressing');
       row.classList.add(result.success ? 'done' : 'failed');
       row.querySelector('.queue-item-icon').innerHTML = iconMarkup(result.success ? 'check' : 'error', true);
@@ -631,7 +646,10 @@ async function startCompression() {
   });
 
   try {
-    const pathsForCompression = (!queueWasEdited && inputPaths.length > 0) ? inputPaths : files;
+    const allPaths = (!queueWasEdited && inputPaths.length > 0) ? inputPaths : files;
+    const alreadyDone = new Set(results.map(function(r) { return r.file; }));
+    const pathsForCompression = allPaths.filter(function(f) { return !alreadyDone.has(f); });
+    if (pathsForCompression.length === 0) { return; }
     await invoke(config.useSmartIpc ? 'compress_smart' : 'compress_files', { filePaths: pathsForCompression, options: config.options });
     updateStats();
     showResults();
@@ -641,8 +659,13 @@ async function startCompression() {
   } finally {
     unlisten();
     isCompressing = false;
-    if (startBtn) startBtn.disabled = false;
-    updateQueueSummary();
+    if (pendingAutoCompress) {
+      pendingAutoCompress = false;
+      startCompression(true);
+    } else {
+      if (startBtn) startBtn.disabled = false;
+      updateQueueSummary();
+    }
   }
 }
 
@@ -823,7 +846,7 @@ function clearResults() {
   if (queuePanel) queuePanel.style.display = 'none';
   var queueStats = document.getElementById('queueStats');
   if (queueStats) queueStats.style.display = 'none';
-  settingsPanel.style.display = 'none';
+  settingsPanel.style.display = 'block';
   var list = document.getElementById('fileQueueList');
   if (list) list.innerHTML = '';
   updateQueueSummary();
@@ -908,7 +931,11 @@ async function openCompare(result) {
   if (compareOriginalImg.naturalWidth) setRatio();
   else compareOriginalImg.onload = setRatio;
 
-  setCompareZoom(1);
+  var fitW = compareOriginalImg.naturalWidth || compareCompressedImg.naturalWidth || 1;
+  var fitH = compareOriginalImg.naturalHeight || compareCompressedImg.naturalHeight || 1;
+  var fitZoom = Math.min(outer.clientWidth / fitW, outer.clientHeight / fitH, 1);
+  if (!isFinite(fitZoom) || fitZoom <= 0) fitZoom = 1;
+  setCompareZoom(fitZoom);
   updateCompareSlider(50);
 
   compareFilename.textContent = basename(result.file);
@@ -933,14 +960,15 @@ function updateCompareSlider(value) {
   var zoom = currentCompareZoom || 1;
   var cw = outer.clientWidth;
   var sl = container.scrollLeft;
+  var imgW = compareOriginalImg.naturalWidth || compareCompressedImg.naturalWidth || cw;
 
   var clipLinePx = sl + (value / 100) * cw;
-  var imgWidth = cw * zoom;
+  var imgWidth = imgW * zoom;
   var clipLinePct = (clipLinePx / imgWidth) * 100;
   var clipRight = Math.max(0, Math.min(100, 100 - clipLinePct));
 
   compareOriginalImg.style.clipPath = 'inset(0 ' + clipRight + '% 0 0)';
-  compareHandle.style.left = value + '%';
+  compareHandle.style.left = clipLinePct + '%';
   compareHandle.style.display = 'block';
 }
 
@@ -948,24 +976,29 @@ function setCompareZoom(level) {
   level = Math.max(0.1, Math.min(8, level));
   var outer = document.getElementById('compareSliderOuter');
   var container = document.getElementById('compareSliderContainer');
+  var wrapper = document.getElementById('compareImgWrapper');
   var oldZoom = currentCompareZoom || 1;
   var cw = outer.clientWidth;
   var ch = outer.clientHeight;
+  var imgW = compareOriginalImg.naturalWidth || compareCompressedImg.naturalWidth || 1;
+  var imgH = compareOriginalImg.naturalHeight || compareCompressedImg.naturalHeight || 1;
 
   var sliderBar = document.getElementById('compareRange');
   var sliderVal = sliderBar ? parseFloat(sliderBar.value) : 50;
 
-  var axisImgX = (container.scrollLeft + (sliderVal / 100) * cw) / (cw * oldZoom);
-  var centerY = (container.scrollTop + ch / 2) / (ch * oldZoom);
+  var oldImgW = imgW * oldZoom;
+  var oldImgH = imgH * oldZoom;
+  var axisRatio = (container.scrollLeft + (sliderVal / 100) * cw) / oldImgW;
+  var centerYRatio = (container.scrollTop + ch / 2) / oldImgH;
 
   currentCompareZoom = level;
-  container.style.setProperty('--zoom', level);
-  outer.style.setProperty('--zoom', level);
+  wrapper.style.width = (imgW * level) + 'px';
+  wrapper.style.height = (imgH * level) + 'px';
 
-  var newImgW = cw * level;
-  var newImgH = ch * level;
-  container.scrollLeft = axisImgX * newImgW - (sliderVal / 100) * cw;
-  container.scrollTop = centerY * newImgH - ch / 2;
+  var newImgW = imgW * level;
+  var newImgH = imgH * level;
+  container.scrollLeft = axisRatio * newImgW - (sliderVal / 100) * cw;
+  container.scrollTop = centerYRatio * newImgH - ch / 2;
 
   var zoomSlider = document.getElementById('zoomSlider');
   if (zoomSlider) zoomSlider.value = level;
@@ -1069,8 +1102,11 @@ if (recompressQualitySlider) {
   }
 
   outer.addEventListener('wheel', function(e) {
-    if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
+    if (e.metaKey) {
+      navigateCompare(e.deltaY < 0 ? -1 : 1);
+      return;
+    }
     var oldZoom = currentCompareZoom || 1;
     var delta = e.deltaY < 0 ? 0.25 : -0.25;
     var newZoom = Math.max(0.1, Math.min(8, oldZoom + delta));
@@ -1079,13 +1115,17 @@ if (recompressQualitySlider) {
     var mouseX = e.clientX - rect.left;
     var cw = outer.clientWidth;
     var ch = outer.clientHeight;
-    var mouseImgX = (container.scrollLeft + mouseX) / (cw * oldZoom);
-    var mouseImgY = (container.scrollTop + (e.clientY - rect.top)) / (ch * oldZoom);
+    var imgW = compareOriginalImg.naturalWidth || compareCompressedImg.naturalWidth || cw;
+    var imgH = compareOriginalImg.naturalHeight || compareCompressedImg.naturalHeight || ch;
+    var mouseImgX = (container.scrollLeft + mouseX) / (imgW * oldZoom);
+    var mouseImgY = (container.scrollTop + (e.clientY - rect.top)) / (imgH * oldZoom);
 
     currentCompareZoom = newZoom;
-    container.style.setProperty('--zoom', newZoom);
-    container.scrollLeft = mouseImgX * (cw * newZoom) - mouseX;
-    container.scrollTop = mouseImgY * (ch * newZoom) - (e.clientY - rect.top);
+    var wrapper = document.getElementById('compareImgWrapper');
+    wrapper.style.width = (imgW * newZoom) + 'px';
+    wrapper.style.height = (imgH * newZoom) + 'px';
+    container.scrollLeft = mouseImgX * (imgW * newZoom) - mouseX;
+    container.scrollTop = mouseImgY * (imgH * newZoom) - (e.clientY - rect.top);
 
     var zoomSlider = document.getElementById('zoomSlider');
     if (zoomSlider) zoomSlider.value = newZoom;
@@ -1145,17 +1185,89 @@ function toggleWindowControls() {
   showToast('OctoShrink v' + (window.appVersion || '2.0.0'));
 }
 
+function navigateCompare(direction) {
+  if (!currentCompareResult) return;
+  var okResults = results.filter(function(r) { return r && r.success; });
+  if (okResults.length === 0) return;
+  var idx = okResults.indexOf(currentCompareResult);
+  if (idx < 0) idx = 0;
+  var newIdx = Math.max(0, Math.min(okResults.length - 1, idx + direction));
+  if (newIdx === idx) return;
+  openCompare(okResults[newIdx]);
+}
+
 function openCompareByFile(filePath) {
   const result = results.find(r => r.file === filePath);
   if (result) openCompare(result);
 }
 
+function updateSettingsSummary() {
+  var ac = document.getElementById('autoCompress');
+  var q = document.getElementById('qualitySlider');
+  var of = document.getElementById('outputFormat');
+  var sm = document.getElementById('smartMode');
+  var om = document.querySelector('input[name="outputMode"]:checked');
+  var parts = [];
+  if (ac && ac.checked) parts.push('自动');
+  if (q) parts.push('Q' + q.value);
+  if (of) parts.push(of.value === 'original' ? '\u539f\u683c\u5f0f' : of.value.toUpperCase());
+  if (sm) parts.push(sm.checked ? '\u667a\u80fd' : '\u6807\u51c6');
+  if (om) parts.push(om.value === 'replace' ? '\u8986\u76d6' : (om.value === 'suffix' ? '\u540e\u7f00' : '\u76ee\u5f55'));
+  var el = document.getElementById('settingsSummary');
+  if (el) el.textContent = parts.join(' \u00b7 ');
+}
+
+function saveCompressSettings() {
+  var data = {};
+  var q = document.getElementById('qualitySlider');
+  if (q) data.quality = q.value;
+  var of = document.getElementById('outputFormat');
+  if (of) data.outputFormat = of.value;
+  var cb = document.getElementById('compressionBackend');
+  if (cb) data.backend = cb.value;
+  var ce = document.getElementById('compressionEffort');
+  if (ce) data.effort = ce.value;
+  var ac = document.getElementById('autoCompress');
+  if (ac) data.autoCompress = ac.checked;
+  var sm = document.getElementById('smartMode');
+  if (sm) data.smartMode = sm.checked;
+  var cw = document.getElementById('convertToWebp');
+  if (cw) data.convertToWebp = cw.checked;
+  var om = document.querySelector('input[name="outputMode"]:checked');
+  if (om) data.outputMode = om.value;
+  try { localStorage.setItem('octoshrink-settings', JSON.stringify(data)); } catch(e) {}
+}
+
+function loadCompressSettings() {
+  var raw;
+  try { raw = localStorage.getItem('octoshrink-settings'); } catch(e) { return; }
+  if (!raw) return;
+  var data;
+  try { data = JSON.parse(raw); } catch(e) { return; }
+  if (!data) return;
+  if (data.quality != null) { var q = document.getElementById('qualitySlider'); if (q) q.value = data.quality; }
+  if (data.outputFormat != null) { var of = document.getElementById('outputFormat'); if (of) of.value = data.outputFormat; }
+  if (data.backend != null) { var cb = document.getElementById('compressionBackend'); if (cb) cb.value = data.backend; }
+  if (data.effort != null) { var ce = document.getElementById('compressionEffort'); if (ce) ce.value = data.effort; }
+  if (data.autoCompress != null) { var ac = document.getElementById('autoCompress'); if (ac) ac.checked = data.autoCompress; }
+  if (data.smartMode != null) { var sm = document.getElementById('smartMode'); if (sm) sm.checked = data.smartMode; }
+  if (data.convertToWebp != null) { var cw = document.getElementById('convertToWebp'); if (cw) cw.checked = data.convertToWebp; }
+  if (data.outputMode != null) { var om = document.querySelector('input[name="outputMode"][value="' + data.outputMode + '"]'); if (om) om.checked = true; }
+}
+
 // Init
 (function() {
-  const qs = document.getElementById('qualitySlider');
-  if (qs) {
-    updateQualitySlider();
-  }
-  // Fetch app version
+  loadCompressSettings();
+  var sp = document.getElementById('settingsPanel');
+  if (sp) sp.style.display = 'block';
+  ['autoCompress','qualitySlider','outputFormat','compressionBackend','compressionEffort','smartMode','convertToWebp'].forEach(function(id){
+    var el = document.getElementById(id);
+    if (el) el.addEventListener('change', function(){ saveCompressSettings(); updateSettingsSummary(); });
+  });
+  document.querySelectorAll('input[name="outputMode"]').forEach(function(r){
+    r.addEventListener('change', function(){ saveCompressSettings(); updateSettingsSummary(); });
+  });
+  updateSettingsSummary();
+  updateQualitySlider();
   invoke('get_app_version').then(v => { window.appVersion = v; }).catch(() => {});
 })();
