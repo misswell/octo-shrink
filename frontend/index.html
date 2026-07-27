@@ -4,6 +4,27 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>章小压 · OctoShrink</title>
+  <script>
+    // 在外链 CSS / JS 加载前同步确定首帧主题，避免 WebView 默认白色画布闪烁。
+    (() => {
+      let mode = 'auto';
+      try {
+        const stored = localStorage.getItem('octoshrink-theme');
+        if (stored === 'light' || stored === 'dark') mode = stored;
+      } catch (_) {}
+      const resolved = mode === 'auto'
+        ? (window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+        : mode;
+      document.documentElement.dataset.themeMode = mode;
+      document.documentElement.dataset.theme = resolved;
+      document.documentElement.style.colorScheme = resolved;
+      document.documentElement.style.backgroundColor = resolved === 'dark' ? '#1c1c1e' : '#ececed';
+    })();
+  </script>
+  <style>
+    html, body { background: #ececed; }
+    html[data-theme="dark"], html[data-theme="dark"] body { background: #1c1c1e; }
+  </style>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
