@@ -68,7 +68,7 @@
 # src-tauri/Cargo.toml
 [features]
 default = ["cli-backends"]        # Direct（DMG 直发，现状）
-cli-backends = []                  # 调 7 个外部 CLI + 内置 17 dylib
+cli-backends = ["dep:tauri-plugin-updater"] # 7 个 CLI + macOS GitHub 在线更新
 appstore = ["inproc-backends"]     # App Store
 inproc-backends = []               # 进程内 Rust 库（沙盒友好）
 ```
@@ -98,7 +98,7 @@ cargo tauri build                              # 或 cargo tauri build --feature
 bash scripts/notarize.sh                       # 一键：构建→签名→公证→装订→DMG
 
 # App Store（开发循环）
-cargo tauri build --features appstore --bundles app
+cargo tauri build --features appstore --bundles app -- --no-default-features
 bash scripts/build_appstore.sh                 # 一键：构建→签名→productbuild→PKG（待落地）
 
 # 单元测试
@@ -224,7 +224,7 @@ cd src-tauri
 export CARGO_PROFILE_RELEASE_PANIC=unwind
 
 # 构建 app bundle（App Store feature）
-cargo tauri build --bundles app --features appstore --config tauri.conf.appstore.json
+cargo tauri build --bundles app --features appstore --config tauri.conf.appstore.json -- --no-default-features
 
 # 手动复制前端资源到 Resources（Tauri 默认不打前端进 app bundle）
 cp -R ../frontend/. target/release/bundle/macos/OctoShrink.app/Contents/Resources/
@@ -250,12 +250,13 @@ xcrun productbuild --component \
 
 **「来回修」真相**：历史上两个 commit 各解决一半，从未合并，故反复：
 - `2672532`/`10e56fc`：有 HTTP 服务器（白屏解决）但 capabilities 只有 4 项 → app 命令不在 ACL → IPC 全失效（选图/拖图/移窗口失效）
-- `b21cc53`：补全 17 个 `allow-*` + `remote.urls`（IPC 解决）但删了 HTTP 服务器 → 沙盒白屏
+- `b21cc53`：补全基础 `allow-*` + `remote.urls`（IPC 解决）但删了 HTTP 服务器 → 沙盒白屏
 
 **正确方案（v2.2.9，缺一不可）**：
 - `lib.rs` `#[cfg(feature = "inproc-backends")]` 块：`TcpListener::bind` **固定端口段** `[41845u16, 41846, 41847]`（带 fallback 防冲突），serve resource_dir 前端，`window.navigate("http://localhost:PORT/")`
 - `entitlements-appstore.plist`：`network.server` + `network.client` 必需
-- `capabilities/default.json`：17 个 `allow-*` app 命令权限 + `remote.urls: ["http://localhost:41845","http://localhost:41846","http://localhost:41847"]`（**精确匹配带端口 origin**）+ `core:window:allow-start-dragging`
+- `capabilities/default.json`：当前 20 个 `allow-*` app 命令权限 + `remote.urls: ["http://localhost:41845","http://localhost:41846","http://localhost:41847"]`（**精确匹配带端口 origin**）+ `core:window:allow-start-dragging`
+- 启动白闪：前端把最终解析出的 `light/dark` 通过 `set_startup_theme` 写入 `NSHomeDirectory()/Library/Application Support/OctoShrink/startup-theme`（App Store 自动落入沙盒容器）；Rust 在 `Builder::run` 创建窗口前读取主题（首次使用 macOS 系统外观）并改写运行时 `WindowConfig.background_color`。本地 HTTP 资源必须返回 `Cache-Control: no-store`，否则 WKWebView 可能复用旧版主题脚本。不要等到 `setup()` 后才设置背景，窗口创建瞬间会漏出静态浅色帧。
 
 **勿再犯**：
 - ❌ 「tauri://localhost 在沙盒下正常工作，不需要 HTTP fallback」—— 错！macOS 27 沙盒阻止它。此断言曾写入本文件，导致 b21cc53 删 HTTP 服务器 → 白屏回归。
@@ -267,7 +268,7 @@ xcrun productbuild --component \
 
 ### 4. IPC 权限（App Store 版必须配置）
 
-- 在 `capabilities/default.json` 中显式声明所有 app 命令的 permission（约 17 个）
+- 在 `capabilities/default.json` 中显式声明所有 app 命令的 permission（当前 20 个）
 - 创建 `permissions/commands.toml` 定义权限 schema
 - 不配置 → 前端 invoke 全部失败（静默，不报错）
 - Direct 版不需要此配置（非沙盒，不检查 ACL）
@@ -363,3 +364,10 @@ xcrun altool --upload-app \
 ### 12. build_appstore.sh 变量引用必须用花括号
 
 `set -u` 模式下，`$VAR` 后紧跟非 ASCII 字符（如全角括号 `）`）会被 bash 误解析为变量名延续 → unbound variable。**变量引用一律 `${VAR}` 花括号界定**。曾因 `log "...$INSTALLER_IDENTITY）"`（全角右括号）报 `INSTALLER_IDENTITY unbound` 卡住 productbuild。
+
+### 13. Direct 在线更新与 macOS 架构发布
+
+- macOS Direct 版通过 `tauri-plugin-updater` 检查 GitHub Release 的 `latest.json`，更新包必须使用项目 updater 私钥签名；仓库只保存 `tauri.conf.json` 中的公钥，私钥不得提交。
+- App Store 版不加载 updater 插件，继续由 Mac App Store 负责更新。
+- GitHub Release 必须同时提供 macOS arm64、x86_64 与 Universal 2；Universal 内的主程序、CLI 工具和非系统 dylib 都必须包含双架构，不能只合并主程序。
+- Windows 与 Linux 产物继续由 `.github/workflows/release.yml` 并行构建。

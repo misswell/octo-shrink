@@ -7,43 +7,118 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ═══ macOS 构建 ═══
+  # ═══ macOS ARM64 / Intel 分别构建，确保内置 CLI 与主程序架构一致 ═══
   build-macos:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+            runner: macos-latest
+          - arch: x86_64
+            target: x86_64-apple-darwin
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Install CLI tools
         run: |
-          brew install pngquant oxipng mozjpeg gifsicle webp jpeg-xl libavif
+          brew install pngquant oxipng mozjpeg gifsicle webp jpeg-xl libavif dylibbundler
+          bash scripts/collect_macos_tools.sh src-tauri/resources
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2.0" --locked
 
       - name: Build
-        run: cargo tauri build
+        working-directory: src-tauri
+        run: |
+          cargo tauri build --target "${{ matrix.target }}" --bundles app \
+            --config '{"bundle":{"resources":["resources/bin/*","resources/lib/*"]}}'
         env:
           CODE_SIGN_IDENTITY: ""
 
-      - name: Bundle CLI tools
-        run: bash scripts/package.sh
-
       - name: Create DMG
         run: |
+          APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/OctoShrink.app"
           hdiutil create -volname "OctoShrink" \
-            -srcfolder "src-tauri/target/release/bundle/macos/OctoShrink.app" \
+            -srcfolder "$APP" \
             -ov -format UDZO \
-            "src-tauri/target/release/bundle/OctoShrink_${{ github.ref_name }}_macos.dmg"
+            "src-tauri/target/${{ matrix.target }}/release/bundle/OctoShrink_${{ github.ref_name }}_macos_${{ matrix.arch }}.dmg"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" \
+            "src-tauri/target/${{ matrix.target }}/release/bundle/OctoShrink_${{ matrix.arch }}.app.zip"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: macos-build
+          name: macos-${{ matrix.arch }}-build
           path: |
-            src-tauri/target/release/bundle/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/*.app.zip
+
+  # ═══ macOS Universal 2：合并完整 app（主程序 + CLI + dylib） ═══
+  build-macos-universal:
+    needs: build-macos
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-arm64-build
+          path: artifacts/arm64
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-x86_64-build
+          path: artifacts/x86_64
+
+      - name: Merge Universal app
+        run: |
+          mkdir -p work/arm64 work/x86_64 work/universal release
+          ditto -x -k artifacts/arm64/OctoShrink_arm64.app.zip work/arm64
+          ditto -x -k artifacts/x86_64/OctoShrink_x86_64.app.zip work/x86_64
+          bash scripts/merge_macos_universal.sh \
+            work/arm64/OctoShrink.app \
+            work/x86_64/OctoShrink.app \
+            work/universal/OctoShrink.app
+          hdiutil create -volname "OctoShrink" \
+            -srcfolder work/universal/OctoShrink.app -ov -format UDZO \
+            "release/OctoShrink_${{ github.ref_name }}_macos_universal.dmg"
+          tar -czf "release/OctoShrink_${{ github.ref_name }}_macos_universal.app.tar.gz" \
+            -C work/universal OctoShrink.app
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2.0" --locked
+
+      - name: Sign updater archive
+        run: cargo tauri signer sign "release/OctoShrink_${{ github.ref_name }}_macos_universal.app.tar.gz"
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal-build
+          path: release/*
+
+  # App Store 不随 GitHub Release 分发，但每次发布必须验证独立 feature 线。
+  verify-appstore:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check App Store feature line
+        working-directory: src-tauri
+        env:
+          CARGO_PROFILE_RELEASE_PANIC: unwind
+        run: cargo check --no-default-features --features appstore
 
   # ═══ Windows 构建 ═══
   build-windows:
@@ -200,7 +275,7 @@ jobs:
 
   # ═══ 发布 Release ═══
   release:
-    needs: [build-macos, build-windows, build-linux]
+    needs: [build-macos, build-macos-universal, verify-appstore, build-windows, build-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -220,6 +295,20 @@ jobs:
           find artifacts -name "*.msi" -exec cp {} release/ \;
           find artifacts -name "*.deb" -exec cp {} release/ \;
           find artifacts -name "*.AppImage" -exec cp {} release/ \;
+          find artifacts -name "*.tar.gz" -exec cp {} release/ \;
+          find artifacts -name "*.sig" -exec cp {} release/ \;
+          VERSION="${GITHUB_REF_NAME#v}"
+          ARCHIVE="OctoShrink_${GITHUB_REF_NAME}_macos_universal.app.tar.gz"
+          SIGNATURE="$(cat "release/${ARCHIVE}.sig")"
+          DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${ARCHIVE}"
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "OctoShrink ${VERSION}: Intel/Apple Silicon/Universal 2、Direct 在线更新与启动体验修复。" \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg signature "$SIGNATURE" \
+            --arg url "$DOWNLOAD_URL" \
+            '{version:$version,notes:$notes,pub_date:$pub_date,platforms:{"darwin-aarch64":{signature:$signature,url:$url},"darwin-x86_64":{signature:$signature,url:$url}}}' \
+            > release/latest.json
           ls -la release/
 
       - name: Create GitHub Release
@@ -236,7 +325,9 @@ jobs:
 
             | 平台 | 文件 | 说明 |
             |------|------|------|
-            | macOS | `.dmg` | 内置全部压缩工具，开箱即用 |
+            | macOS Universal 2 | `_universal.dmg` | 推荐，兼容 Apple Silicon 与 Intel |
+            | macOS Apple Silicon | `_arm64.dmg` | M 系列芯片专用 |
+            | macOS Intel | `_x86_64.dmg` | Intel 芯片专用 |
             | Windows | `.exe` / `.msi` | 内置压缩工具，开箱即用 |
             | Linux | `.deb` / `.AppImage` | 内置压缩工具，开箱即用 |
 
@@ -244,9 +335,12 @@ jobs:
             - 支持 PNG/JPG/GIF/WebP/AVIF/JPEG XL 压缩
             - 3 线程并发批量处理
             - 暗黑模式（自动/亮色/暗黑）
+            - macOS Direct 版支持签名校验的在线更新
             - 压缩前后实时对比
             - 一键恢复全部原图
             - 压缩失败显示错误详情
           files: release/*
-          draft: false
+          # macOS 资产仍需发布者以 Developer ID 重签并完成 Apple 公证；
+          # 草稿可防止 updater 将正式签名应用替换为 CI 临时签名应用。
+          draft: true
           prerelease: false

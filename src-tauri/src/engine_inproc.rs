@@ -388,6 +388,9 @@ async fn compress_to_jxl(file: &Path, _options: &CompressOptions) -> EngineResul
 }
 
 pub async fn compress_image(file: &Path, options: &CompressOptions) -> EngineResult {
+    if options.output_format != "original" {
+        return compress_to_format(file, &options.output_format, options).await;
+    }
     let img_type = detect_image_type(file);
     eprintln!("[DEBUG] inproc compress_image: {:?} type={}", file, img_type);
     match img_type.as_str() {

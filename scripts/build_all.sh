@@ -70,7 +70,8 @@ ok "Direct: $DIRECT_RENAMED"
 log "构建 App Store 版（appstore=inproc-backends）"
 # Cargo 1.90.0 regression：panic=abort 损坏 proc-macro dylib，用 unwind 绕过（仅 appstore 线）
 export CARGO_PROFILE_RELEASE_PANIC=unwind
-cargo tauri build --bundles app --features appstore --config tauri.conf.appstore.json || fail "App Store 构建失败"
+cargo tauri build --bundles app --features appstore --config tauri.conf.appstore.json -- --no-default-features \
+  || fail "App Store 构建失败"
 APPSTORE_APP="$BUNDLE_DIR/${APP_NAME}.app"
 [ -d "$APPSTORE_APP" ] || fail "App Store 产物不存在：$APPSTORE_APP"
 

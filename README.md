@@ -134,6 +134,8 @@ APPLE_ID="you@example.com" APPLE_APP_SPECIFIC_PASSWORD="xxxx-xxxx-xxxx-xxxx" \
 SIGN_ONLY=1 bash scripts/notarize.sh
 ```
 
+macOS Direct 版会在启动后静默检查 GitHub Release 更新；发现新版本后由用户确认下载并安装。发布的更新包使用 Tauri updater 签名校验，App Store 版仍由 Mac App Store 更新。
+
 产物：
 - `src-tauri/target/release/bundle/macos/OctoShrink.app`（已签名 + 装订）
 - `src-tauri/target/release/bundle/macos/OctoShrink-<version>-macos.dmg`（已签名 + 装订）

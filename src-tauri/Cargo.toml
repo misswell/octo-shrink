@@ -1,6 +1,6 @@
 [package]
 name = "octoshrink"
-version = "2.2.0"
+version = "2.5.0"
 description = "OctoShrink"
 authors = ["Octor Team"]
 license = "MIT"
@@ -30,10 +30,16 @@ mozjpeg = { version = "0.10", optional = true }
 webp = { version = "0.2", optional = true, default-features = false }
 ravif = { version = "0.11", optional = true, default-features = false }
 png = { version = "0.18", optional = true, features = ["zlib-rs"] }
+tauri-plugin-updater = { version = "2", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSAppearance", "NSApplication", "NSResponder"] }
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSPathUtilities", "NSString"] }
 
 [features]
 default = ["cli-backends"]
-cli-backends = []                  # Direct 产物线：调外部 CLI + 内置 dylib（现状）
+cli-backends = ["dep:tauri-plugin-updater"] # Direct 产物线：外部 CLI + GitHub 在线更新
 appstore = ["inproc-backends"]     # App Store 产物线：进程内 Rust 库 + 沙盒
 inproc-backends = ["dep:imagequant", "dep:oxipng", "dep:mozjpeg", "dep:webp", "dep:ravif", "dep:png"]  # 进程内 Rust 库（沙盒友好）
 custom-protocol = ["tauri/custom-protocol"]

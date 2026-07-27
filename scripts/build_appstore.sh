@@ -18,7 +18,7 @@ export CARGO_PROFILE_RELEASE_PANIC=unwind
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TAURI_DIR="$PROJECT_DIR/src-tauri"
 APP_NAME="OctoShrink"
-APP_VERSION="2.4.0"
+APP_VERSION="2.5.0"
 APP="$TAURI_DIR/target/release/bundle/macos/$APP_NAME.app"
 BUNDLE_ID="com.misswell.octoshrink.appstore"
 ENTITLEMENTS="$TAURI_DIR/entitlements-appstore.plist"
@@ -35,7 +35,8 @@ fail() { echo "✗ $*" >&2; exit 1; }
 log "cargo tauri build --bundles app --features appstore（进程内 Rust 库，无外部 CLI/dylib）"
 # 用 tauri.conf.appstore.json 作为配置基准（identifier=appstore Bundle ID）
 cd "$TAURI_DIR"
-cargo tauri build --bundles app --features appstore --config "$CONF" || fail "构建失败"
+cargo tauri build --bundles app --features appstore --config "$CONF" -- --no-default-features \
+  || fail "构建失败"
 [ -d "$APP" ] || fail "构建产物不存在：$APP"
 ok "$APP"
 

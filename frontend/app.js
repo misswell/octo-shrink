@@ -83,6 +83,7 @@ function applyTheme(theme) {
   localStorage.setItem('octoshrink-theme', theme);
 
   const resolvedTheme = getResolvedTheme(theme);
+  invoke('set_startup_theme', { theme: resolvedTheme }).catch(() => {});
   document.documentElement.setAttribute('data-theme-mode', theme);
   if (resolvedTheme === 'dark') {
     document.documentElement.setAttribute('data-theme', 'dark');
@@ -1185,6 +1186,24 @@ function toggleWindowControls() {
   showToast('OctoShrink v' + (window.appVersion || '2.0.0'));
 }
 
+async function checkDirectUpdate() {
+  if (BUILD_VARIANT !== 'Direct' || window.updateCheckStarted) return;
+  window.updateCheckStarted = true;
+  try {
+    const update = await invoke('check_for_update');
+    if (!update) return;
+    const accepted = window.confirm(
+      'OctoShrink ' + update.version + ' 已发布，是否立即下载并安装？' +
+      (update.notes ? '\n\n' + update.notes : '')
+    );
+    if (!accepted) return;
+    showToast('正在下载更新…');
+    await invoke('install_update');
+  } catch (error) {
+    console.warn('在线更新检查失败:', error);
+  }
+}
+
 function navigateCompare(direction) {
   if (!currentCompareResult) return;
   var okResults = results.filter(function(r) { return r && r.success; });
@@ -1269,5 +1288,8 @@ function loadCompressSettings() {
   });
   updateSettingsSummary();
   updateQualitySlider();
-  invoke('get_app_version').then(v => { window.appVersion = v; }).catch(() => {});
+  invoke('get_app_version').then(v => {
+    window.appVersion = v;
+    setTimeout(checkDirectUpdate, 1500);
+  }).catch(() => {});
 })();

@@ -18,6 +18,9 @@ permissions = [
   "allow-export-all",
   "allow-get-file-sizes",
   "allow-restore-all",
+  "allow-set-startup-theme",
+  "allow-check-for-update",
+  "allow-install-update",
 ]
 
 [[permission]]
@@ -104,3 +107,18 @@ commands.allow = ["get_file_sizes"]
 identifier = "allow-restore-all"
 description = "Restore all files from backup"
 commands.allow = ["restore_all"]
+
+[[permission]]
+identifier = "allow-set-startup-theme"
+description = "Persist the resolved startup theme before the next window is created"
+commands.allow = ["set_startup_theme"]
+
+[[permission]]
+identifier = "allow-check-for-update"
+description = "Check for a signed Direct release update"
+commands.allow = ["check_for_update"]
+
+[[permission]]
+identifier = "allow-install-update"
+description = "Download and install a signed Direct release update"
+commands.allow = ["install_update"]
