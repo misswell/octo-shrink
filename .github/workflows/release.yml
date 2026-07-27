@@ -30,7 +30,7 @@ jobs:
 
       - name: Install CLI tools
         run: |
-          brew install pngquant oxipng mozjpeg gifsicle webp jpeg-xl libavif dylibbundler
+          brew install pngquant oxipng mozjpeg gifsicle webp jpeg-xl libavif
           bash scripts/collect_macos_tools.sh src-tauri/resources
 
       - name: Install Tauri CLI
