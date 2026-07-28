@@ -17,3 +17,6 @@ electron/
 
 # Local updater signing key (public key is embedded in tauri.conf.json)
 src-tauri/.tauri/
+release-v2.5.*/
+output/
+OctoShrink-*.pkg
