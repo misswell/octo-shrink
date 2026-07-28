@@ -26,7 +26,8 @@
     "allow-restore-all",
     "allow-set-startup-theme",
     "allow-check-for-update",
-    "allow-install-update"
+    "allow-install-update",
+    "allow-cancel-update"
   ],
   "remote": {
     "urls": ["http://localhost:41845", "http://localhost:41846", "http://localhost:41847"]

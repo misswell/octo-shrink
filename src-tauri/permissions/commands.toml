@@ -122,3 +122,8 @@ commands.allow = ["check_for_update"]
 identifier = "allow-install-update"
 description = "Download and install a signed Direct release update"
 commands.allow = ["install_update"]
+
+[[permission]]
+identifier = "allow-cancel-update"
+description = "Cancel an in-progress update download"
+commands.allow = ["cancel_update"]
