@@ -1247,46 +1247,45 @@ async function manualCheckUpdate() {
 }
 
 function startUpdateDownload(btn, statusEl, version) {
-  btn.dataset.mode = 'downloading';
-  btn.disabled = false;
-  btn.textContent = '取消';
-  statusEl.textContent = '下载中… 0%';
-  statusEl.classList.add('has-update');
+  var tbUpdate = document.getElementById('titlebarUpdate');
+  var tbText = document.getElementById('titlebarUpdateText');
+  var tbBar = document.getElementById('titlebarProgress');
+  if (tbUpdate) tbUpdate.style.display = 'inline-flex';
+  if (tbBar) tbBar.style.width = '0%';
+  if (tbText) tbText.textContent = '下载中 0%';
+  if (statusEl) statusEl.textContent = '';
+  btn.disabled = true;
 
   var onProgress = function(e) {
     var pct = e.payload || 0;
-    statusEl.textContent = '下载中… ' + pct + '%';
-  };
-  window.__updateProgressListener && window.__updateProgressListener();
-  window.__updateProgressListener = function() {
-    document.removeEventListener('update-progress', onProgress);
+    if (tbBar) tbBar.style.width = pct + '%';
+    if (tbText) tbText.textContent = '下载中 ' + pct + '%';
   };
   document.addEventListener('update-progress', onProgress);
 
-  btn.onclick = function() {
-    btn.dataset.mode = '';
-    btn.textContent = '立即更新';
-    btn.disabled = false;
-    statusEl.textContent = 'v' + version + ' 可用';
-    invoke('cancel_update').catch(function(){});
-    document.removeEventListener('update-progress', onProgress);
-  };
-
   invoke('install_update')
     .then(function() {
-      btn.textContent = '安装中…';
-      btn.disabled = true;
-      statusEl.textContent = '即将重启…';
+      if (tbText) tbText.textContent = '安装中…';
+      if (tbBar) tbBar.style.width = '100%';
     })
     .catch(function(err) {
-      btn.dataset.mode = '';
-      btn.textContent = '立即更新';
+      document.removeEventListener('update-progress', onProgress);
+      if (tbUpdate) tbUpdate.style.display = 'none';
+      if (tbBar) tbBar.style.width = '0%';
       btn.disabled = false;
-      statusEl.textContent = String(err).indexOf('取消') >= 0
+      var cancelled = String(err).indexOf('取消') >= 0;
+      if (statusEl) statusEl.textContent = cancelled
         ? '已取消 · v' + version + ' 可用'
         : '更新失败';
-      document.removeEventListener('update-progress', onProgress);
     });
+}
+
+function cancelUpdateDownload() {
+  invoke('cancel_update').catch(function(){});
+  var tbUpdate = document.getElementById('titlebarUpdate');
+  var tbBar = document.getElementById('titlebarProgress');
+  if (tbUpdate) tbUpdate.style.display = 'none';
+  if (tbBar) tbBar.style.width = '0%';
 }
 
 async function checkDirectUpdate() {
