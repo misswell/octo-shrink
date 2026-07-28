@@ -132,7 +132,9 @@ async fn check_for_update(app: tauri::AppHandle) -> Result<Option<DirectUpdateIn
     use tauri_plugin_updater::UpdaterExt;
 
     let update = app
-        .updater()
+        .updater_builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
         .map_err(|error| error.to_string())?
         .check()
         .await
@@ -165,7 +167,9 @@ async fn install_update(app: tauri::AppHandle) -> Result<bool, String> {
     UPDATE_CANCELLED.store(false, Ordering::SeqCst);
 
     let Some(update) = app
-        .updater()
+        .updater_builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
         .map_err(|error| error.to_string())?
         .check()
         .await
