@@ -1208,14 +1208,20 @@ function closeAboutPanel() {
   if (panel) panel.style.display = 'none';
 }
 
-async function manualCheckUpdate() {
-  var btn = document.getElementById('aboutUpdateBtn');
+function ensureUpdateStatusEl(btn) {
   var statusEl = document.querySelector('.about-update-status');
   if (!statusEl) {
     statusEl = document.createElement('div');
     statusEl.className = 'about-update-status';
     btn.parentNode.insertBefore(statusEl, btn.nextSibling);
   }
+  return statusEl;
+}
+
+async function manualCheckUpdate() {
+  var btn = document.getElementById('aboutUpdateBtn');
+  if (!btn || btn.dataset.mode === 'downloading') return;
+  var statusEl = ensureUpdateStatusEl(btn);
   btn.disabled = true;
   btn.textContent = '正在检查…';
   statusEl.textContent = '';
@@ -1227,17 +1233,7 @@ async function manualCheckUpdate() {
       btn.disabled = false;
       statusEl.textContent = 'v' + update.version + ' 可用';
       statusEl.classList.add('has-update');
-      btn.onclick = async function() {
-        btn.disabled = true;
-        btn.textContent = '下载中…';
-        statusEl.textContent = '正在下载并安装更新…';
-        try { await invoke('install_update'); }
-        catch(err) {
-          btn.disabled = false;
-          btn.textContent = '立即更新';
-          statusEl.textContent = '更新失败: ' + err;
-        }
-      };
+      btn.onclick = function() { startUpdateDownload(btn, statusEl, update.version); };
     } else {
       btn.textContent = '检查更新';
       btn.disabled = false;
@@ -1250,6 +1246,49 @@ async function manualCheckUpdate() {
   }
 }
 
+function startUpdateDownload(btn, statusEl, version) {
+  btn.dataset.mode = 'downloading';
+  btn.disabled = false;
+  btn.textContent = '取消';
+  statusEl.textContent = '下载中… 0%';
+  statusEl.classList.add('has-update');
+
+  var onProgress = function(e) {
+    var pct = e.payload || 0;
+    statusEl.textContent = '下载中… ' + pct + '%';
+  };
+  window.__updateProgressListener && window.__updateProgressListener();
+  window.__updateProgressListener = function() {
+    document.removeEventListener('update-progress', onProgress);
+  };
+  document.addEventListener('update-progress', onProgress);
+
+  btn.onclick = function() {
+    btn.dataset.mode = '';
+    btn.textContent = '立即更新';
+    btn.disabled = false;
+    statusEl.textContent = 'v' + version + ' 可用';
+    invoke('cancel_update').catch(function(){});
+    document.removeEventListener('update-progress', onProgress);
+  };
+
+  invoke('install_update')
+    .then(function() {
+      btn.textContent = '安装中…';
+      btn.disabled = true;
+      statusEl.textContent = '即将重启…';
+    })
+    .catch(function(err) {
+      btn.dataset.mode = '';
+      btn.textContent = '立即更新';
+      btn.disabled = false;
+      statusEl.textContent = String(err).indexOf('取消') >= 0
+        ? '已取消 · v' + version + ' 可用'
+        : '更新失败';
+      document.removeEventListener('update-progress', onProgress);
+    });
+}
+
 async function checkDirectUpdate() {
   if (BUILD_VARIANT !== 'Direct' || window.updateCheckStarted) return;
   window.updateCheckStarted = true;
@@ -1258,21 +1297,11 @@ async function checkDirectUpdate() {
     if (!update) return;
     var btn = document.getElementById('aboutUpdateBtn');
     if (btn) {
+      var statusEl = ensureUpdateStatusEl(btn);
       btn.textContent = '立即更新';
-      var statusEl = document.querySelector('.about-update-status');
-      if (!statusEl) {
-        statusEl = document.createElement('div');
-        statusEl.className = 'about-update-status';
-        btn.parentNode.insertBefore(statusEl, btn.nextSibling);
-      }
       statusEl.textContent = 'v' + update.version + ' 可用';
       statusEl.classList.add('has-update');
-      btn.onclick = async function() {
-        btn.disabled = true;
-        btn.textContent = '下载中…';
-        try { await invoke('install_update'); }
-        catch(err) { btn.disabled = false; btn.textContent = '立即更新'; }
-      };
+      btn.onclick = function() { startUpdateDownload(btn, statusEl, update.version); };
     }
     showToast('发现新版本 v' + update.version + '，点击右上角 ⓘ 更新');
   } catch (error) {
