@@ -69,6 +69,12 @@ fn make_command(tool: &Path) -> Command {
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 pub struct CompressOptions {
+    #[serde(default = "default_processing_mode")]
+    pub processing_mode: String,
+    #[serde(default = "default_system_image_size")]
+    pub system_image_size: String,
+    #[serde(default = "default_true")]
+    pub preserve_metadata: bool,
     #[serde(default = "default_quality")]
     pub quality: u32,
     #[serde(default)]
@@ -90,6 +96,9 @@ pub struct CompressOptions {
 }
 
 fn default_quality() -> u32 { 75 }
+fn default_processing_mode() -> String { "advanced".into() }
+fn default_system_image_size() -> String { "actual".into() }
+fn default_true() -> bool { true }
 fn default_format() -> String { "original".into() }
 fn default_backend() -> String { "auto".into() }
 fn default_effort() -> u32 { 6 }
@@ -98,6 +107,8 @@ fn default_mode() -> String { "suffix".into() }
 impl Default for CompressOptions {
     fn default() -> Self {
         Self {
+            processing_mode: "advanced".into(), system_image_size: "actual".into(),
+            preserve_metadata: true,
             quality: 75, smart_mode: false, output_format: "original".into(),
             backend: "auto".into(), effort: 6, convert_to_webp: false,
             output_mode: "suffix".into(), output_dir: None, lossless: None,
@@ -640,10 +651,27 @@ async fn compress_to_jxl(file: &Path, options: &CompressOptions) -> EngineResult
 
 // ─── Dispatcher ─────────────────────────────────────────────────
 
+#[cfg(target_os = "macos")]
+fn convert_with_system(file: &Path, options: &CompressOptions, target: &str) -> EngineResult {
+    let mut system_options = options.clone();
+    system_options.output_format = target.into();
+    crate::system_image::convert(file, &system_options)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn convert_with_system(file: &Path, _options: &CompressOptions, target: &str) -> EngineResult {
+    let original = fs::read(file).unwrap_or_default();
+    fallback_engine(original, target, "system", "系统转换仅支持 macOS")
+}
+
 // 函数级 allow：inproc-backends 模式下提前 return 会让后续 cli 代码被判为 unreachable；
 // 放在 fn 签名上方而非语句级，避免 cfg 消除该 return 时属性也跟着消失。
 #[allow(unreachable_code)]
 pub async fn compress_image(file: &Path, options: &CompressOptions) -> EngineResult {
+    if options.processing_mode == "system" {
+        return convert_with_system(file, options, &options.output_format);
+    }
+
     // 双线骨架：inproc 模式提前 return；cli 模式走下面默认实现（见 AGENTS.md 强制规则 1-3）
     // App Store 产物线：路由到进程内实现
     #[cfg(feature = "inproc-backends")]
@@ -671,6 +699,10 @@ pub async fn compress_image(file: &Path, options: &CompressOptions) -> EngineRes
 
 #[allow(unreachable_code)]
 pub async fn compress_to_format(file: &Path, target: &str, options: &CompressOptions) -> EngineResult {
+    if options.processing_mode == "system" {
+        return convert_with_system(file, options, target);
+    }
+
     // App Store 产物线：路由到进程内实现
     #[cfg(feature = "inproc-backends")]
     return engine_inproc::compress_to_format(file, target, options).await;
@@ -692,6 +724,10 @@ pub async fn compress_to_format(file: &Path, target: &str, options: &CompressOpt
 /// Smart mode: try the natural compressor; if smart, also try alternatives and pick best.
 #[allow(unreachable_code)]
 pub async fn compress_smart(file: &Path, options: &CompressOptions) -> EngineResult {
+    if options.processing_mode == "system" {
+        return compress_image(file, options).await;
+    }
+
     // App Store 产物线：路由到进程内实现
     #[cfg(feature = "inproc-backends")]
     return engine_inproc::compress_smart(file, options).await;

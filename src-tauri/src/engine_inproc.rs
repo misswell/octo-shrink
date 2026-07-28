@@ -485,6 +485,9 @@ mod tests {
             return;
         }
         let opts = CompressOptions {
+            processing_mode: "advanced".into(),
+            system_image_size: "actual".into(),
+            preserve_metadata: true,
             quality: 80,
             output_format: "original".into(),
             smart_mode: false,

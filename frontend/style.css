@@ -605,6 +605,33 @@ body {
 .settings-panel.collapsed .settings-summary { display: inline; color: var(--text-tertiary, #999); font-weight: 400; font-size: 11px; margin-left: 6px; }
 .settings-panel:not(.collapsed) .settings-summary { display: none; }
 .settings-body { padding: 2px 14px; }
+.processing-mode-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  margin: 10px 0 2px;
+  padding: 2px;
+  border-radius: 7px;
+  background: var(--input-bg);
+  border: 0.5px solid var(--border-light);
+}
+.processing-mode-option {
+  appearance: none;
+  border: none;
+  border-radius: 5px;
+  padding: 5px 12px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: 500 11px/1.3 inherit;
+  cursor: pointer;
+}
+.processing-mode-option:hover { color: var(--text); }
+.processing-mode-option.active {
+  color: var(--text);
+  background: var(--bg-content);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 0 0 0.5px var(--border);
+}
+[data-processing-mode="system"] { display: none; }
 .settings-row {
   display: flex;
   align-items: center;

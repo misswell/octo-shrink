@@ -133,6 +133,7 @@ cargo test --features inproc-backends          # 进程内版
 - ✅ 沙盒文件访问已修复：security-scoped bookmarks + 弹窗授权 + 清理旧授权功能
 - ✅ PNG 进程内化已完成（阶段 1.1）：imagequant + oxipng crate 接入
 - ✅ JPG/WebP/AVIF 进程内化已完成：mozjpeg / webp / ravif crate 接入
+- ✅ macOS 系统转换模式已接入：两条产物线共用 ImageIO/CoreGraphics，支持 JPEG/PNG/HEIF、Finder 尺寸档位和元数据保留，不调用外部进程
 - ✅ 两条产物线功能对齐：JXL 已从前端输出格式下拉移除（两版一致）；GIF 两版均有压缩功能（Direct gifsicle 减色更优，App Store image crate 重编码，属质量差异非功能差异）
 - 🟡 App Store 审核待提交：2.2.9 已上传 ASC，需补全元数据 + 回复 network.server 解释（路径B）后提交审核
 - ⬜ 引擎迁移后续：JXL（未来接入 jpegxl-sys 后可恢复 UI 选项）；GIF 减色优化（未来可用 imagequant 逐帧量化，当前有帧间闪烁风险暂不做）
@@ -154,8 +155,8 @@ cargo test --features inproc-backends          # 进程内版
 | 选文件/文件夹 | tauri_plugin_dialog::pick_* 无限制 | 同上 + 写入 BookmarkStore | 沙盒需书签才能续访 |
 | 拖放（drag-drop） | Tauri drop payload 直给路径 | 同上 + bookmark 化 | 沙盒需 security-scoped URL |
 | walk_dir 递归 | fs::read_dir 任意路径 | 仅在已书签根内递归 | 沙盒只认授权范围 |
-| write_output_file | fs::write 原路径 | 同上，前提路径已授权 | 沙盒 fs 检查 |
-| restore_original | fs::copy(backup, original) | 同上，原路径需 bookmark | 沙盒 |
+| write_output_file | fs::write；系统跨格式覆盖时改扩展名并避让同名目标 | 系统转换开始前强制经文件夹选择器授权，随后写入已授权目录 | 沙盒不能依赖单文件授权写入旁路新文件 |
+| restore_original | fs::copy(backup, original)；删除本次生成的 output_path | 同上，原路径及输出路径需 bookmark | 沙盒；两版恢复语义一致 |
 | open_in_finder | Command::new("open").arg("-R") | tauri-plugin-opener（NSWorkspace）| 沙盒禁 spawn Finder |
 | ~/Library/... 访问 | 任意 | 仅 App Support / Caches / Tmp（sandbox 允许子集）| 沙盒 |
 
@@ -183,6 +184,7 @@ cargo test --features inproc-backends          # 进程内版
 | avifenc | ravif crate | ✅ 已完成 |
 | cjxl | jpegxl-sys | ⬜ 已从前端移除（两版一致）；engine 代码保留，未来接入后可恢复 UI |
 | gifsicle | image crate（无减色优化）| ✅ 已完成（质量降级：无 gifsicle --colors=N 减色，两版均有 GIF 压缩功能）|
+| Finder「转换图像」 | macOS ImageIO/CoreGraphics（两版共用） | ✅ 系统转换模式：JPEG/PNG/HEIF + 实际/1280/640/320 px + 元数据开关 |
 
 ## 变更本文件的规定
 
