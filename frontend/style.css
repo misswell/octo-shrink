@@ -246,7 +246,8 @@ body {
 }
 .about-update-btn:hover { background: var(--bg-secondary); }
 .about-update-btn:disabled { opacity: .5; cursor: default; }
-.about-update-status { font-size: 11px; color: var(--text-secondary); margin-top: 6px; }
+.about-update-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; }
+.about-update-status { font-size: 11px; color: var(--text-secondary); flex: 1; min-width: 0; }
 .about-update-status.has-update { color: var(--accent, #4a9eff); font-weight: 600; }
 .tb-btn:focus-visible,
 .btn:focus-visible,

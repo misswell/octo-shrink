@@ -1208,41 +1208,33 @@ function closeAboutPanel() {
   if (panel) panel.style.display = 'none';
 }
 
-function ensureUpdateStatusEl(btn) {
-  var statusEl = document.querySelector('.about-update-status');
-  if (!statusEl) {
-    statusEl = document.createElement('div');
-    statusEl.className = 'about-update-status';
-    btn.parentNode.insertBefore(statusEl, btn.nextSibling);
-  }
-  return statusEl;
+function getUpdateStatusEl() {
+  return document.getElementById('aboutUpdateStatus');
 }
 
 async function manualCheckUpdate() {
   var btn = document.getElementById('aboutUpdateBtn');
   if (!btn || btn.dataset.mode === 'downloading') return;
-  var statusEl = ensureUpdateStatusEl(btn);
+  var statusEl = getUpdateStatusEl();
   btn.disabled = true;
-  btn.textContent = '正在检查…';
-  statusEl.textContent = '';
-  statusEl.classList.remove('has-update');
+  btn.textContent = '检查中';
+  if (statusEl) { statusEl.textContent = ''; statusEl.classList.remove('has-update'); }
   try {
     const update = await invoke('check_for_update');
     if (update) {
       btn.textContent = '立即更新';
       btn.disabled = false;
-      statusEl.textContent = 'v' + update.version + ' 可用';
-      statusEl.classList.add('has-update');
+      if (statusEl) { statusEl.textContent = 'v' + update.version + ' 可用'; statusEl.classList.add('has-update'); }
       btn.onclick = function() { startUpdateDownload(btn, statusEl, update.version); };
     } else {
       btn.textContent = '检查更新';
       btn.disabled = false;
-      statusEl.textContent = '已是最新版本';
+      if (statusEl) statusEl.textContent = '已是最新版本';
     }
   } catch (error) {
     btn.textContent = '检查更新';
     btn.disabled = false;
-    statusEl.textContent = '检查失败';
+    if (statusEl) statusEl.textContent = '检查失败';
   }
 }
 
@@ -1296,13 +1288,11 @@ async function checkDirectUpdate() {
     if (!update) return;
     var btn = document.getElementById('aboutUpdateBtn');
     if (btn) {
-      var statusEl = ensureUpdateStatusEl(btn);
+      var statusEl = getUpdateStatusEl();
       btn.textContent = '立即更新';
-      statusEl.textContent = 'v' + update.version + ' 可用';
-      statusEl.classList.add('has-update');
+      if (statusEl) { statusEl.textContent = 'v' + update.version + ' 可用'; statusEl.classList.add('has-update'); }
       btn.onclick = function() { startUpdateDownload(btn, statusEl, update.version); };
     }
-    showToast('发现新版本 v' + update.version + '，点击右上角 ⓘ 更新');
   } catch (error) {
     console.warn('在线更新检查失败:', error);
   }
