@@ -71,9 +71,16 @@
       <span class="titlebar-text">OctoShrink</span>
     </div>
     <div class="titlebar-actions">
-      <button class="tb-btn" onclick="toggleWindowControls()" title="关于">
-        <svg class="symbol-icon"><use href="#icon-info"/></svg>
-      </button>
+      <div class="about-wrap">
+        <button class="tb-btn" onclick="toggleAboutPanel(event)" title="关于">
+          <svg class="symbol-icon"><use href="#icon-info"/></svg>
+        </button>
+        <div class="about-panel" id="aboutPanel" style="display:none;">
+          <div class="about-version">OctoShrink <span id="aboutVersion">v2.0.0</span></div>
+          <div class="about-variant" id="aboutVariant"></div>
+          <button class="about-update-btn" id="aboutUpdateBtn" onclick="manualCheckUpdate()">检查更新</button>
+        </div>
+      </div>
       <button class="tb-btn" id="themeToggleBtn" onclick="cycleTheme()" title="切换主题">
         <svg class="symbol-icon theme-icon theme-icon-auto"><use href="#icon-theme-auto"/></svg>
         <svg class="symbol-icon theme-icon theme-icon-light" style="display:none"><use href="#icon-sun"/></svg>

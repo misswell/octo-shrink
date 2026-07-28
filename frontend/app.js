@@ -1182,8 +1182,72 @@ async function restoreFromCompare() {
   closeCompare();
 }
 
-function toggleWindowControls() {
-  showToast('OctoShrink v' + (window.appVersion || '2.0.0'));
+function toggleAboutPanel(e) {
+  if (e) e.stopPropagation();
+  var panel = document.getElementById('aboutPanel');
+  if (!panel) return;
+  var open = panel.style.display !== 'none';
+  panel.style.display = open ? 'none' : 'block';
+  if (!open) {
+    var ver = document.getElementById('aboutVersion');
+    if (ver) ver.textContent = 'v' + (window.appVersion || '2.0.0');
+    var variant = document.getElementById('aboutVariant');
+    if (variant) variant.textContent = BUILD_VARIANT + ' 版';
+    var btn = document.getElementById('aboutUpdateBtn');
+    if (btn && BUILD_VARIANT !== 'Direct') {
+      btn.style.display = 'none';
+    }
+    setTimeout(function(){
+      document.addEventListener('click', closeAboutPanel, { once: true });
+    }, 0);
+  }
+}
+
+function closeAboutPanel() {
+  var panel = document.getElementById('aboutPanel');
+  if (panel) panel.style.display = 'none';
+}
+
+async function manualCheckUpdate() {
+  var btn = document.getElementById('aboutUpdateBtn');
+  var statusEl = document.querySelector('.about-update-status');
+  if (!statusEl) {
+    statusEl = document.createElement('div');
+    statusEl.className = 'about-update-status';
+    btn.parentNode.insertBefore(statusEl, btn.nextSibling);
+  }
+  btn.disabled = true;
+  btn.textContent = '正在检查…';
+  statusEl.textContent = '';
+  statusEl.classList.remove('has-update');
+  try {
+    const update = await invoke('check_for_update');
+    if (update) {
+      btn.textContent = '立即更新';
+      btn.disabled = false;
+      statusEl.textContent = 'v' + update.version + ' 可用';
+      statusEl.classList.add('has-update');
+      btn.onclick = async function() {
+        btn.disabled = true;
+        btn.textContent = '下载中…';
+        statusEl.textContent = '正在下载并安装更新…';
+        try { await invoke('install_update'); }
+        catch(err) {
+          btn.disabled = false;
+          btn.textContent = '立即更新';
+          statusEl.textContent = '更新失败: ' + err;
+        }
+      };
+    } else {
+      btn.textContent = '检查更新';
+      btn.disabled = false;
+      statusEl.textContent = '已是最新版本';
+    }
+  } catch (error) {
+    btn.textContent = '检查更新';
+    btn.disabled = false;
+    statusEl.textContent = '检查失败';
+  }
 }
 
 async function checkDirectUpdate() {
@@ -1192,13 +1256,25 @@ async function checkDirectUpdate() {
   try {
     const update = await invoke('check_for_update');
     if (!update) return;
-    const accepted = window.confirm(
-      'OctoShrink ' + update.version + ' 已发布，是否立即下载并安装？' +
-      (update.notes ? '\n\n' + update.notes : '')
-    );
-    if (!accepted) return;
-    showToast('正在下载更新…');
-    await invoke('install_update');
+    var btn = document.getElementById('aboutUpdateBtn');
+    if (btn) {
+      btn.textContent = '立即更新';
+      var statusEl = document.querySelector('.about-update-status');
+      if (!statusEl) {
+        statusEl = document.createElement('div');
+        statusEl.className = 'about-update-status';
+        btn.parentNode.insertBefore(statusEl, btn.nextSibling);
+      }
+      statusEl.textContent = 'v' + update.version + ' 可用';
+      statusEl.classList.add('has-update');
+      btn.onclick = async function() {
+        btn.disabled = true;
+        btn.textContent = '下载中…';
+        try { await invoke('install_update'); }
+        catch(err) { btn.disabled = false; btn.textContent = '立即更新'; }
+      };
+    }
+    showToast('发现新版本 v' + update.version + '，点击右上角 ⓘ 更新');
   } catch (error) {
     console.warn('在线更新检查失败:', error);
   }
