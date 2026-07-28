@@ -303,7 +303,7 @@ jobs:
           DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${ARCHIVE}"
           jq -n \
             --arg version "$VERSION" \
-            --arg notes "OctoShrink ${VERSION}: Intel/Apple Silicon/Universal 2、Direct 在线更新与启动体验修复。" \
+            --arg notes "OctoShrink ${VERSION}: 新增 macOS 系统原生图片转换，支持 JPEG/PNG/HEIF 与 Finder 尺寸档位。" \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg signature "$SIGNATURE" \
             --arg url "$DOWNLOAD_URL" \
@@ -333,6 +333,7 @@ jobs:
 
             ### 功能
             - 支持 PNG/JPG/GIF/WebP/AVIF/JPEG XL 压缩
+            - macOS 支持系统原生 JPEG/PNG/HEIF 转换与 Finder 尺寸档位
             - 3 线程并发批量处理
             - 暗黑模式（自动/亮色/暗黑）
             - macOS Direct 版支持签名校验的在线更新
