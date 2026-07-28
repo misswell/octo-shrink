@@ -215,6 +215,40 @@ body {
 }
 .tb-btn:hover { background: var(--bg-hover); color: var(--text); }
 .tb-btn:active { background: var(--bg-secondary); }
+.compress-progress-btn {
+  position: relative;
+  overflow: hidden;
+}
+.compress-btn-fill {
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  width: 0%;
+  background: rgba(255,255,255,.18);
+  transition: width .3s ease-out, background .3s;
+  z-index: 0;
+}
+.compress-progress-btn.compressing .compress-btn-fill {
+  width: 100%;
+  background: rgba(70,130,255,.35);
+  animation: compress-pulse 1.5s ease-in-out infinite;
+}
+.compress-progress-btn.done .compress-btn-fill {
+  width: 100%;
+  background: rgba(52,199,89,.35);
+  animation: none;
+}
+@keyframes compress-pulse {
+  0%, 100% { opacity: .6; }
+  50% { opacity: 1; }
+}
+.compress-btn-text {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.compress-progress-btn.done .compress-btn-text { color: #34c759; }
 .titlebar-info {
   display: inline-flex;
   align-items: center;

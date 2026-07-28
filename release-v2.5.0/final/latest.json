@@ -1,0 +1,15 @@
+{
+  "version": "2.5.0",
+  "notes": "OctoShrink 2.5.0：Intel/Apple Silicon/Universal 2、Direct 在线更新与启动体验修复。",
+  "pub_date": "2026-07-28T00:43:59Z",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTSFhRQTVtU1g4QXc2L2xreEJLNWxKencxNW1KRndMdVcrQ2NjeG81Y3pSUTVFYTNQUzEvMEdPZFRwQUovTklYdXNiSW95ZWVaU3B4UWRycFdpZ0xyeEhEa0JOTTFJNUFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg1MTk5NDI2CWZpbGU6T2N0b1Nocmlua192Mi41LjBfbWFjb3NfdW5pdmVyc2FsLmFwcC50YXIuZ3oKT0tOLzAzRUYyMWIxWDhqbG12cmtNTjA3VjFqbVl2cDJjeDZHMzREbkVHeEV2QWpEYWJ3dm9rMFVhUnRsVm5sRlkrZkpFYjFKSmNVNTd0TTBZcDVvQ0E9PQo=",
+      "url": "https://github.com/misswell/octo-shrink/releases/download/v2.5.0/OctoShrink_v2.5.0_macos_universal.app.tar.gz"
+    },
+    "darwin-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTSFhRQTVtU1g4QXc2L2xreEJLNWxKencxNW1KRndMdVcrQ2NjeG81Y3pSUTVFYTNQUzEvMEdPZFRwQUovTklYdXNiSW95ZWVaU3B4UWRycFdpZ0xyeEhEa0JOTTFJNUFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg1MTk5NDI2CWZpbGU6T2N0b1Nocmlua192Mi41LjBfbWFjb3NfdW5pdmVyc2FsLmFwcC50YXIuZ3oKT0tOLzAzRUYyMWIxWDhqbG12cmtNTjA3VjFqbVl2cDJjeDZHMzREbkVHeEV2QWpEYWJ3dm9rMFVhUnRsVm5sRlkrZkpFYjFKSmNVNTd0TTBZcDVvQ0E9PQo=",
+      "url": "https://github.com/misswell/octo-shrink/releases/download/v2.5.0/OctoShrink_v2.5.0_macos_universal.app.tar.gz"
+    }
+  }
+}

@@ -168,6 +168,13 @@ pub fn detect_image_type(path: &Path) -> String {
     } else if b.len() >= 2 && b[0] == 0x42 && b[1] == 0x4D {
         "bmp".into()
     } else {
+        // HEIC/HEIF: ftyp box at offset 4
+        if b.len() >= 12 && &b[4..8] == b"ftyp" {
+            let brand = &b[8..12];
+            if brand == b"heic" || brand == b"heix" || brand == b"mif1" || brand == b"hevc" {
+                return "heic".into();
+            }
+        }
         "unknown".into()
     }
 }
@@ -547,14 +554,57 @@ async fn compress_to_avif(file: &Path, options: &CompressOptions) -> EngineResul
                 file.to_string_lossy().into(),
             ];
             if let Some(data) = cli_to_file(&tool, &args, &out).await {
-                if (data.len() as u64) < original_size {
-                    return make_engine_result(original_size, data, "avif", "avifenc");
-                }
+                // Format conversion: return AVIF data even if larger than original
+                return make_engine_result(original_size, data, "avif", "avifenc");
             }
         }
     }
 
     no_improvement(original, "avif", "avifenc", original_size, original_size)
+}
+
+// ─── HEIC ───────────────────────────────────────────────────────
+
+async fn compress_heic(file: &Path, options: &CompressOptions) -> EngineResult {
+    let original = fs::read(file).unwrap_or_default();
+    let original_size = original.len() as u64;
+
+    let tmp = tempfile::tempdir().ok();
+    if let Some(ref td) = tmp {
+        let jpeg_path = td.path().join("converted.jpg");
+        let output = tokio::process::Command::new("sips")
+            .arg("-s").arg("format").arg("jpeg")
+            .arg(file).arg("--out").arg(&jpeg_path)
+            .output().await;
+        if let Ok(out) = output {
+            if out.status.success() && jpeg_path.exists() {
+                let mut opts = options.clone();
+                opts.output_format = "original".into();
+                // If target format specified, convert the JPEG intermediate directly
+                match options.output_format.as_str() {
+                    "webp" => return compress_to_webp(&jpeg_path, &opts).await,
+                    "avif" => return compress_to_avif(&jpeg_path, &opts).await,
+                    "png" => return compress_png(&jpeg_path, &opts).await,
+                    "jpg" | "jpeg" => return compress_jpg(&jpeg_path, &opts).await,
+                    _ => {}
+                }
+                // No specific format: compress as JPEG
+                let r = compress_jpg(&jpeg_path, &opts).await;
+                if r.success {
+                    return EngineResult {
+                        success: true, compressed: r.compressed,
+                        out_type: "jpg".into(), algorithm: format!("sips+{}", r.algorithm),
+                        error: r.error,
+                    };
+                }
+                let data = fs::read(&jpeg_path).unwrap_or_default();
+                if !data.is_empty() {
+                    return make_engine_result(original_size, data, "jpg", "sips");
+                }
+            }
+        }
+    }
+    no_improvement(original, "heic", "sips", original_size, original_size)
 }
 
 // ─── JPEG XL ────────────────────────────────────────────────────
@@ -611,6 +661,7 @@ pub async fn compress_image(file: &Path, options: &CompressOptions) -> EngineRes
         "jpg" => compress_jpg(file, options).await,
         "gif" => compress_gif(file, options).await,
         "webp" => compress_to_webp(file, options).await,
+        "heic" => compress_heic(file, options).await,
         _ => {
             let original = fs::read(file).unwrap_or_default();
             fallback_engine(original, &img_type, "none", &format!("Unsupported image type: {}", img_type))
@@ -630,6 +681,7 @@ pub async fn compress_to_format(file: &Path, target: &str, options: &CompressOpt
         "jxl" => compress_to_jxl(file, options).await,
         "jpg" | "jpeg" => compress_jpg(file, options).await,
         "png" => compress_png(file, options).await,
+        "heic" | "heif" => compress_heic(file, options).await,
         _ => {
             let original = fs::read(file).unwrap_or_default();
             fallback_engine(original, target, "none", &format!("Unsupported target format: {}", target))
@@ -676,6 +728,10 @@ pub async fn compress_smart(file: &Path, options: &CompressOptions) -> EngineRes
         }
         "webp" => {
             let r = compress_to_webp(file, &opts).await;
+            if r.success { candidates.push(r); }
+        }
+        "heic" => {
+            let r = compress_heic(file, &opts).await;
             if r.success { candidates.push(r); }
         }
         _ => {}

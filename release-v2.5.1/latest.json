@@ -1,0 +1,15 @@
+{
+  "version": "2.5.1",
+  "notes": "OctoShrink 2.5.1：新增在线更新检测按钮。",
+  "pub_date": "2026-07-28T02:44:37Z",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTSFhRQTVtU1g4QTM2VUJGS2t2VXprRlQ1a3ZBL2t6cjBTd1c1M3JaNWlJdkVGNXkxMzRMQklXViszWnJxZWpjKzR0d29KcGZVeEVweDM4Ti9hd0ZyU0RQQUd6NCtOK3c0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg1MjA2NjcwCWZpbGU6T2N0b1Nocmlua192Mi41LjFfbWFjb3NfdW5pdmVyc2FsLmFwcC50YXIuZ3oKdmQ3cDQzVkhkTDQ1QkMyWGU4L1AxS3J1TEVLRDBMZ3B6SWNReVJoaThOWmRzMjBycjVXSnpWRHQ1Z0ViQVEzdFBkVVBJc1FiTGtzUkdDY1Y4TDlTQVE9PQo=",
+      "url": "https://github.com/misswell/octo-shrink/releases/download/v2.5.1/OctoShrink_v2.5.1_macos_universal.app.tar.gz"
+    },
+    "darwin-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTSFhRQTVtU1g4QTM2VUJGS2t2VXprRlQ1a3ZBL2t6cjBTd1c1M3JaNWlJdkVGNXkxMzRMQklXViszWnJxZWpjKzR0d29KcGZVeEVweDM4Ti9hd0ZyU0RQQUd6NCtOK3c0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg1MjA2NjcwCWZpbGU6T2N0b1Nocmlua192Mi41LjFfbWFjb3NfdW5pdmVyc2FsLmFwcC50YXIuZ3oKdmQ3cDQzVkhkTDQ1QkMyWGU4L1AxS3J1TEVLRDBMZ3B6SWNReVJoaThOWmRzMjBycjVXSnpWRHQ1Z0ViQVEzdFBkVVBJc1FiTGtzUkdDY1Y4TDlTQVE9PQo=",
+      "url": "https://github.com/misswell/octo-shrink/releases/download/v2.5.1/OctoShrink_v2.5.1_macos_universal.app.tar.gz"
+    }
+  }
+}
