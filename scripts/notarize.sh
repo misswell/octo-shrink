@@ -9,6 +9,7 @@
 # 环境变量（可选覆盖）：
 #   SIGNING_IDENTITY          指定 codesign 签名身份；默认自动检测 Developer ID Application
 #   NOTARY_PROFILE            notarytool keychain 凭据 profile（推荐：先 notarytool store-credentials）
+#                            默认值 octoshrink-notary（已通过 xcrun notarytool store-credentials 保存在钥匙串）
 #   APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID   不用 profile 时的公证凭据
 #   SKIP_BUILD=1              跳过 cargo tauri build，复用已有 .app
 #   VERBOSE=1                 输出签名详情
@@ -140,11 +141,12 @@ if [ "${SIGN_ONLY:-0}" = "1" ]; then
 fi
 
 # ---------- 6. 公证凭据前置检查 ----------
+NOTARY_PROFILE="${NOTARY_PROFILE:-octoshrink-notary}"
 TEAM_ID="${APPLE_TEAM_ID:-$DEFAULT_TEAM_ID}"
-if [ -z "${NOTARY_PROFILE:-}" ] && [ -z "${APPLE_ID:-}" ]; then
-  echo "✗ 未提供公证凭据。" >&2
-  echo "  方式 A（推荐）：先执行一次 'xcrun notarytool store-credentials <profile>'，然后 NOTARY_PROFILE=<profile> $0" >&2
-  echo "  方式 B：设置 APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID（=U8U443D7ZL）后运行" >&2
+if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
+  echo "✗ 钥匙串中未找到公证凭据 profile: $NOTARY_PROFILE" >&2
+  echo "  请先执行一次：" >&2
+  echo "    xcrun notarytool store-credentials $NOTARY_PROFILE --apple-id misswell@foxmail.com --team-id U8U443D7ZL" >&2
   echo "  本地已签名产物保留在：$APP" >&2
   exit 3
 fi
