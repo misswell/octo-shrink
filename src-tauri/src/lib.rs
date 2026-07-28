@@ -4,10 +4,13 @@ pub mod engine;
 use commands::AppState;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 const STARTUP_THEME_FILE: &str = "startup-theme";
+
+static UPDATE_CANCELLED: AtomicBool = AtomicBool::new(false);
 
 fn supported_theme(theme: &str) -> Option<&'static str> {
     match theme.trim() {
@@ -159,6 +162,8 @@ async fn check_for_update(_app: tauri::AppHandle) -> Result<Option<DirectUpdateI
 async fn install_update(app: tauri::AppHandle) -> Result<bool, String> {
     use tauri_plugin_updater::UpdaterExt;
 
+    UPDATE_CANCELLED.store(false, Ordering::SeqCst);
+
     let Some(update) = app
         .updater()
         .map_err(|error| error.to_string())?
@@ -168,10 +173,39 @@ async fn install_update(app: tauri::AppHandle) -> Result<bool, String> {
     else {
         return Ok(false);
     };
-    update
-        .download_and_install(|_, _| {}, || {})
-        .await
-        .map_err(|error| error.to_string())?;
+    let total = std::sync::Arc::new(AtomicU64::new(0));
+    let downloaded = std::sync::Arc::new(AtomicU64::new(0));
+    let app_clone = app.clone();
+    let total_clone = total.clone();
+    let downloaded_clone = downloaded.clone();
+    let result = update
+        .download_and_install(
+            move |chunk_len: usize, total: Option<u64>| {
+                if UPDATE_CANCELLED.load(Ordering::SeqCst) {
+                    return;
+                }
+                if let Some(t) = total {
+                    total_clone.store(t, Ordering::Relaxed);
+                }
+                let dl = downloaded_clone.fetch_add(chunk_len as u64, Ordering::Relaxed)
+                    + chunk_len as u64;
+                let t = total_clone.load(Ordering::Relaxed);
+                let pct: u8 = if t > 0 {
+                    ((dl as f64 / t as f64) * 100.0).min(100.0) as u8
+                } else {
+                    0
+                };
+                let _ = app_clone.emit("update-progress", pct);
+            },
+            || {},
+        )
+        .await;
+
+    if UPDATE_CANCELLED.load(Ordering::SeqCst) {
+        return Err("已取消".into());
+    }
+
+    result.map_err(|error| error.to_string())?;
     app.restart();
 }
 
@@ -183,6 +217,27 @@ async fn install_update(app: tauri::AppHandle) -> Result<bool, String> {
 #[tauri::command]
 async fn install_update(_app: tauri::AppHandle) -> Result<bool, String> {
     Ok(false)
+}
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "cli-backends",
+    not(feature = "inproc-backends")
+))]
+#[tauri::command]
+async fn cancel_update() -> Result<(), String> {
+    UPDATE_CANCELLED.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+#[cfg(not(all(
+    target_os = "macos",
+    feature = "cli-backends",
+    not(feature = "inproc-backends")
+)))]
+#[tauri::command]
+async fn cancel_update() -> Result<(), String> {
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -244,6 +299,7 @@ pub fn run() {
             set_startup_theme,
             check_for_update,
             install_update,
+            cancel_update,
         ])
         .setup(move |app| {
             // 初始化压缩工具资源目录
