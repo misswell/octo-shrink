@@ -1237,12 +1237,12 @@ function startUpdateDownload(btn, statusEl, version) {
   if (statusEl) statusEl.textContent = '';
   btn.disabled = true;
 
-  var onProgress = function(e) {
-    var pct = e.payload || 0;
+  var unlistenFn = null;
+  listen('update-progress', function(event) {
+    var pct = event.payload || 0;
     if (tbBar) tbBar.style.width = pct + '%';
     if (tbText) tbText.textContent = '下载中 ' + pct + '%';
-  };
-  document.addEventListener('update-progress', onProgress);
+  }).then(function(fn) { unlistenFn = fn; });
 
   invoke('install_update')
     .then(function() {
@@ -1250,7 +1250,7 @@ function startUpdateDownload(btn, statusEl, version) {
       if (tbBar) tbBar.style.width = '100%';
     })
     .catch(function(err) {
-      document.removeEventListener('update-progress', onProgress);
+      if (unlistenFn) unlistenFn();
       if (tbUpdate) tbUpdate.style.display = 'none';
       if (tbBar) tbBar.style.width = '0%';
       btn.disabled = false;
