@@ -32,7 +32,7 @@ struct ProgressPayload {
 
 // ─── File collection ────────────────────────────────────────────
 fn collect_image_files(file_paths: &[String]) -> Vec<String> {
-    let exts = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "avif", "jxl"];
+    let exts = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "avif", "jxl", "heic", "heif"];
     let mut all = Vec::new();
     for fp in file_paths {
         let path = PathBuf::from(fp);
@@ -107,8 +107,9 @@ fn write_output_file(
     if !result.success || compressed.is_empty() {
         return;
     }
-    // 如果压缩后体积没有变小，不写入文件（原图已是最优）
-    if (compressed.len() as u64) >= result.original_size {
+    // 格式转换时跳过大小检查（用户明确要求转换为目标格式）
+    let is_format_conversion = options.output_format != "original";
+    if !is_format_conversion && (compressed.len() as u64) >= result.original_size {
         result.error = Some("原图已是最优，无需替换".into());
         return;
     }

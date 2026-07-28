@@ -267,13 +267,8 @@ function handleFiles(fileList) {
 async function handleFilePaths(filePaths) {
   if (filePaths.length === 0) return;
 
-  var rootSet = new Set(inputPaths);
-  for (var i = 0; i < filePaths.length; i++) {
-    if (!rootSet.has(filePaths[i])) {
-      inputPaths.push(filePaths[i]);
-      rootSet.add(filePaths[i]);
-    }
-  }
+  // Replace, not accumulate — dragging new files means starting fresh
+  inputPaths = filePaths.slice();
 
   var expanded = [];
   try {
@@ -288,6 +283,7 @@ async function handleFilePaths(filePaths) {
   }
 
   files = expanded;
+  results = [];
   if (isCompressing) {
     totalFiles = files.length;
   }
@@ -583,7 +579,13 @@ async function startCompression(isIncrement) {
   updateQueueSummary();
 
   var startBtn = document.getElementById('startCompressBtn');
-  if (startBtn) startBtn.disabled = true;
+  if (startBtn) {
+    startBtn.disabled = true;
+    startBtn.classList.remove('done');
+    startBtn.classList.add('compressing');
+    var btnText = document.getElementById('compressBtnText');
+    if (btnText) btnText.innerHTML = '<span class="progress-file-spinner"></span> 压缩中…';
+  }
 
   renderFileQueue();
 
@@ -660,11 +662,21 @@ async function startCompression(isIncrement) {
   } finally {
     unlisten();
     isCompressing = false;
+    if (startBtn) {
+      startBtn.classList.remove('compressing');
+      startBtn.classList.add('done');
+      var btnText = document.getElementById('compressBtnText');
+      if (btnText) btnText.innerHTML = '<svg class="symbol-icon"><use href="#icon-check"/></svg> 压缩完成';
+      setTimeout(function() {
+        startBtn.classList.remove('done');
+        startBtn.disabled = false;
+        if (btnText) btnText.innerHTML = '<svg class="symbol-icon"><use href="#icon-compress"/></svg> 开始压缩';
+      }, 2000);
+    }
     if (pendingAutoCompress) {
       pendingAutoCompress = false;
       startCompression(true);
     } else {
-      if (startBtn) startBtn.disabled = false;
       updateQueueSummary();
     }
   }
