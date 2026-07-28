@@ -1182,30 +1182,19 @@ async function restoreFromCompare() {
   closeCompare();
 }
 
-function toggleAboutPanel(e) {
-  if (e) e.stopPropagation();
-  var panel = document.getElementById('aboutPanel');
-  if (!panel) return;
-  var open = panel.style.display !== 'none';
-  panel.style.display = open ? 'none' : 'block';
-  if (!open) {
-    var ver = document.getElementById('aboutVersion');
-    if (ver) ver.textContent = 'v' + (window.appVersion || '2.0.0');
-    var variant = document.getElementById('aboutVariant');
-    if (variant) variant.textContent = BUILD_VARIANT + ' 版';
-    var btn = document.getElementById('aboutUpdateBtn');
-    if (btn && BUILD_VARIANT !== 'Direct') {
-      btn.style.display = 'none';
-    }
-    setTimeout(function(){
-      document.addEventListener('click', closeAboutPanel, { once: true });
-    }, 0);
+function toggleTitlebarInfo() {
+  var info = document.getElementById('titlebarInfo');
+  if (!info) return;
+  var open = info.style.display !== 'none';
+  if (open) {
+    info.style.display = 'none';
+    return;
   }
-}
-
-function closeAboutPanel() {
-  var panel = document.getElementById('aboutPanel');
-  if (panel) panel.style.display = 'none';
+  info.style.display = 'inline-flex';
+  var ver = document.getElementById('titlebarInfoVersion');
+  if (ver) ver.textContent = 'v' + (window.appVersion || '2.0.0') + ' ' + BUILD_VARIANT;
+  var btn = document.getElementById('aboutUpdateBtn');
+  if (btn && BUILD_VARIANT !== 'Direct') btn.style.display = 'none';
 }
 
 function getUpdateStatusEl() {
