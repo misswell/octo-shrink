@@ -152,6 +152,7 @@ let isCompressing = false;
 let pendingAutoCompress = false;
 let outputDir = null;
 let currentCompressOptions = null;
+let processingMode = 'advanced';
 
 // DOM Elements
 const dropzone = document.getElementById('dropzone');
@@ -190,6 +191,36 @@ function updateQualitySlider() {
   qualityValue.textContent = qualitySlider.value + '%';
   const pct = qualitySlider.value;
   qualitySlider.style.background = 'linear-gradient(90deg, var(--primary) ' + pct + '%, var(--slider-track) ' + pct + '%)';
+}
+
+function processingActionText(stage) {
+  var systemMode = processingMode === 'system';
+  if (stage === 'progress') return systemMode ? '转换中…' : '压缩中…';
+  if (stage === 'done') return systemMode ? '转换完成' : '压缩完成';
+  return systemMode ? '开始转换' : '开始压缩';
+}
+
+function setProcessingMode(mode, skipSave) {
+  var isMac = /Macintosh|Mac OS X/.test(navigator.userAgent);
+  processingMode = (mode === 'system' && isMac) ? 'system' : 'advanced';
+
+  document.querySelectorAll('.processing-mode-option').forEach(function(button) {
+    button.classList.toggle('active', button.dataset.mode === processingMode);
+  });
+  document.querySelectorAll('[data-processing-mode]').forEach(function(row) {
+    row.style.display = row.dataset.processingMode === processingMode ? 'flex' : 'none';
+  });
+
+  var autoLabel = document.getElementById('autoCompressLabel');
+  if (autoLabel) autoLabel.textContent = processingMode === 'system'
+    ? '拖入或选择后自动转换'
+    : '拖入或选择后自动压缩';
+  if (!isCompressing) {
+    var btnText = document.getElementById('compressBtnText');
+    if (btnText) btnText.innerHTML = '<svg class="symbol-icon"><use href="#icon-compress"/></svg> ' + processingActionText('idle');
+  }
+  if (!skipSave) saveCompressSettings();
+  updateSettingsSummary();
 }
 
 // Output mode radio
@@ -253,7 +284,24 @@ async function selectOutputDir() {
     outputDir = dirs[0];
     outputDirDisplay.textContent = outputDir;
     outputDirDisplay.title = outputDir;
+    return true;
   }
+  return false;
+}
+
+async function ensureSystemOutputAccess() {
+  if (processingMode !== 'system' || BUILD_VARIANT !== 'App Store') return true;
+  var selectedMode = document.querySelector('input[name="outputMode"]:checked');
+  if (selectedMode && selectedMode.value === 'folder' && outputDir) return true;
+
+  showToast('请选择系统转换文件的输出文件夹');
+  if (!await selectOutputDir()) return false;
+  var folderMode = document.querySelector('input[name="outputMode"][value="folder"]');
+  if (folderMode) folderMode.checked = true;
+  if (outputDirRow) outputDirRow.style.display = 'flex';
+  saveCompressSettings();
+  updateSettingsSummary();
+  return true;
 }
 
 function handleFiles(fileList) {
@@ -424,7 +472,7 @@ function renderQueueResultActions(row, result) {
       e.stopPropagation();
       if (def.action === 'save') saveResult(result.file);
       else if (def.action === 'compare') openCompareByFile(result.file);
-      else if (def.action === 'restore') restoreOriginal(result.file, result.backupPath || '', result.outputMode || 'suffix');
+      else if (def.action === 'restore') restoreOriginal(result.file, result.backupPath || '', result.outputMode || 'suffix', result.outputPath || '');
       else if (def.action === 'finder') openInFinder(result.file);
       else if (def.action === 'log') copyCompressLog(result);
     });
@@ -498,14 +546,16 @@ function renderRestoredActions(row, filePath) {
 
 function getCurrentCompressionConfig() {
   const outputMode = document.querySelector('input[name="outputMode"]:checked').value;
-  const outputFormat = document.getElementById('outputFormat').value;
+  const outputFormat = processingMode === 'system'
+    ? document.getElementById('systemOutputFormat').value
+    : document.getElementById('outputFormat').value;
   const backend = document.getElementById('compressionBackend').value;
   const effort = parseInt(document.getElementById('compressionEffort').value);
   const smartMode = document.getElementById('smartMode').checked;
   const convertToWebp = document.getElementById('convertToWebp').checked;
 
   let effectiveFormat = outputFormat;
-  if (convertToWebp && outputFormat === 'original') {
+  if (processingMode === 'advanced' && convertToWebp && outputFormat === 'original') {
     effectiveFormat = 'webp';
   }
 
@@ -514,14 +564,17 @@ function getCurrentCompressionConfig() {
   }
 
   return {
-    useSmartIpc: smartMode || effectiveFormat !== 'original',
+    useSmartIpc: processingMode === 'advanced' && (smartMode || effectiveFormat !== 'original'),
     options: {
+      processingMode,
+      systemImageSize: document.getElementById('systemImageSize').value,
+      preserveMetadata: document.getElementById('preserveMetadata').checked,
       quality: parseInt(qualitySlider.value),
-      smartMode,
+      smartMode: processingMode === 'advanced' && smartMode,
       outputFormat: effectiveFormat,
       backend,
       effort,
-      convertToWebp,
+      convertToWebp: processingMode === 'advanced' && convertToWebp,
       outputMode,
       outputDir: outputMode === 'folder' ? outputDir : null,
     },
@@ -554,6 +607,7 @@ function clearAllFiles() {
 // ─── Compression ────────────────────────────────────────────────
 async function startCompression(isIncrement) {
   if (isCompressing || files.length === 0) return;
+  if (!await ensureSystemOutputAccess()) return;
   isCompressing = true;
   if (!isIncrement) results = [];
   currentCompressOptions = null;
@@ -584,7 +638,7 @@ async function startCompression(isIncrement) {
     startBtn.classList.remove('done');
     startBtn.classList.add('compressing');
     var btnText = document.getElementById('compressBtnText');
-    if (btnText) btnText.innerHTML = '<span class="progress-file-spinner"></span> 压缩中…';
+    if (btnText) btnText.innerHTML = '<span class="progress-file-spinner"></span> ' + processingActionText('progress');
   }
 
   renderFileQueue();
@@ -599,7 +653,7 @@ async function startCompression(isIncrement) {
       row.classList.remove('waiting');
       row.classList.add('compressing');
       row.querySelector('.queue-item-icon').innerHTML = '<span class="progress-file-spinner"></span>';
-      row.querySelector('.queue-item-status').textContent = '压缩中…';
+      row.querySelector('.queue-item-status').textContent = processingActionText('progress');
       var rmBtn = row.querySelector('.queue-item-remove');
       if (rmBtn) rmBtn.style.display = 'none';
     }
@@ -658,7 +712,7 @@ async function startCompression(isIncrement) {
     showResults();
   } catch (err) {
     console.error('Compression error:', err);
-    showToast('压缩出错: ' + (err.message || err));
+    showToast((processingMode === 'system' ? '转换出错: ' : '压缩出错: ') + (err.message || err));
   } finally {
     unlisten();
     isCompressing = false;
@@ -666,11 +720,11 @@ async function startCompression(isIncrement) {
       startBtn.classList.remove('compressing');
       startBtn.classList.add('done');
       var btnText = document.getElementById('compressBtnText');
-      if (btnText) btnText.innerHTML = '<svg class="symbol-icon"><use href="#icon-check"/></svg> 压缩完成';
+      if (btnText) btnText.innerHTML = '<svg class="symbol-icon"><use href="#icon-check"/></svg> ' + processingActionText('done');
       setTimeout(function() {
         startBtn.classList.remove('done');
         startBtn.disabled = false;
-        if (btnText) btnText.innerHTML = '<svg class="symbol-icon"><use href="#icon-compress"/></svg> 开始压缩';
+        if (btnText) btnText.innerHTML = '<svg class="symbol-icon"><use href="#icon-compress"/></svg> ' + processingActionText('idle');
       }, 2000);
     }
     if (pendingAutoCompress) {
@@ -788,8 +842,8 @@ function openInFinder(filePath) {
   invoke('open_in_finder', { filePath: target });
 }
 
-async function restoreOriginal(filePath, backupPath, outputMode) {
-  const result = await invoke('restore_original', { filePath, backupPath: backupPath || null, outputMode });
+async function restoreOriginal(filePath, backupPath, outputMode, outputPath) {
+  const result = await invoke('restore_original', { filePath, backupPath: backupPath || null, outputMode, outputPath: outputPath || null });
   if (result.success) {
     showToast('已恢复原图: ' + basename(filePath));
     results = results.filter(r => r.file !== filePath);
@@ -825,7 +879,8 @@ async function restoreAllOriginals() {
       await invoke('restore_original', {
         filePath: r.file,
         backupPath: r.backupPath || null,
-        outputMode: r.outputMode || 'suffix'
+        outputMode: r.outputMode || 'suffix',
+        outputPath: r.outputPath || null
       });
       successCount++;
       restoredFiles.push(r.file);
@@ -1190,7 +1245,7 @@ function showToast(message) {
 async function restoreFromCompare() {
   if (!currentCompareResult) return;
   const r = currentCompareResult;
-  await restoreOriginal(r.file, r.backupPath || '', r.outputMode || 'suffix');
+  await restoreOriginal(r.file, r.backupPath || '', r.outputMode || 'suffix', r.outputPath || '');
   closeCompare();
 }
 
@@ -1335,9 +1390,17 @@ function updateSettingsSummary() {
   var om = document.querySelector('input[name="outputMode"]:checked');
   var parts = [];
   if (ac && ac.checked) parts.push('自动');
-  if (q) parts.push('Q' + q.value);
-  if (of) parts.push(of.value === 'original' ? '\u539f\u683c\u5f0f' : of.value.toUpperCase());
-  if (sm) parts.push(sm.checked ? '\u667a\u80fd' : '\u6807\u51c6');
+  if (processingMode === 'system') {
+    var systemFormatSelect = document.getElementById('systemOutputFormat');
+    var systemSizeSelect = document.getElementById('systemImageSize');
+    parts.push('系统');
+    if (systemFormatSelect) parts.push(systemFormatSelect.options[systemFormatSelect.selectedIndex].text);
+    if (systemSizeSelect) parts.push(systemSizeSelect.options[systemSizeSelect.selectedIndex].text.split('（')[0]);
+  } else {
+    if (q) parts.push('Q' + q.value);
+    if (of) parts.push(of.value === 'original' ? '\u539f\u683c\u5f0f' : of.value.toUpperCase());
+    if (sm) parts.push(sm.checked ? '\u667a\u80fd' : '\u6807\u51c6');
+  }
   if (om) parts.push(om.value === 'replace' ? '\u8986\u76d6' : (om.value === 'suffix' ? '\u540e\u7f00' : '\u76ee\u5f55'));
   var el = document.getElementById('settingsSummary');
   if (el) el.textContent = parts.join(' \u00b7 ');
@@ -1345,6 +1408,13 @@ function updateSettingsSummary() {
 
 function saveCompressSettings() {
   var data = {};
+  data.processingMode = processingMode;
+  var systemFormatSelect = document.getElementById('systemOutputFormat');
+  if (systemFormatSelect) data.systemOutputFormat = systemFormatSelect.value;
+  var systemSizeSelect = document.getElementById('systemImageSize');
+  if (systemSizeSelect) data.systemImageSize = systemSizeSelect.value;
+  var preserveMetadataToggle = document.getElementById('preserveMetadata');
+  if (preserveMetadataToggle) data.preserveMetadata = preserveMetadataToggle.checked;
   var q = document.getElementById('qualitySlider');
   if (q) data.quality = q.value;
   var of = document.getElementById('outputFormat');
@@ -1371,6 +1441,9 @@ function loadCompressSettings() {
   var data;
   try { data = JSON.parse(raw); } catch(e) { return; }
   if (!data) return;
+  if (data.systemOutputFormat != null) { var systemFormatSelect = document.getElementById('systemOutputFormat'); if (systemFormatSelect) systemFormatSelect.value = data.systemOutputFormat; }
+  if (data.systemImageSize != null) { var systemSizeSelect = document.getElementById('systemImageSize'); if (systemSizeSelect) systemSizeSelect.value = data.systemImageSize; }
+  if (data.preserveMetadata != null) { var preserveMetadataToggle = document.getElementById('preserveMetadata'); if (preserveMetadataToggle) preserveMetadataToggle.checked = data.preserveMetadata; }
   if (data.quality != null) { var q = document.getElementById('qualitySlider'); if (q) q.value = data.quality; }
   if (data.outputFormat != null) { var of = document.getElementById('outputFormat'); if (of) of.value = data.outputFormat; }
   if (data.backend != null) { var cb = document.getElementById('compressionBackend'); if (cb) cb.value = data.backend; }
@@ -1379,14 +1452,19 @@ function loadCompressSettings() {
   if (data.smartMode != null) { var sm = document.getElementById('smartMode'); if (sm) sm.checked = data.smartMode; }
   if (data.convertToWebp != null) { var cw = document.getElementById('convertToWebp'); if (cw) cw.checked = data.convertToWebp; }
   if (data.outputMode != null) { var om = document.querySelector('input[name="outputMode"][value="' + data.outputMode + '"]'); if (om) om.checked = true; }
+  processingMode = data.processingMode === 'system' ? 'system' : 'advanced';
 }
 
 // Init
 (function() {
   loadCompressSettings();
+  var modeSwitch = document.getElementById('processingModeSwitch');
+  var isMac = /Macintosh|Mac OS X/.test(navigator.userAgent);
+  if (modeSwitch && !isMac) modeSwitch.style.display = 'none';
+  setProcessingMode(processingMode, true);
   var sp = document.getElementById('settingsPanel');
   if (sp) sp.style.display = 'block';
-  ['autoCompress','qualitySlider','outputFormat','compressionBackend','compressionEffort','smartMode','convertToWebp'].forEach(function(id){
+  ['autoCompress','qualitySlider','outputFormat','compressionBackend','compressionEffort','smartMode','convertToWebp','systemOutputFormat','systemImageSize','preserveMetadata'].forEach(function(id){
     var el = document.getElementById(id);
     if (el) el.addEventListener('change', function(){ saveCompressSettings(); updateSettingsSummary(); });
   });

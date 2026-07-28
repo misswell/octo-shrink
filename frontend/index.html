@@ -180,6 +180,14 @@
         <svg class="symbol-icon settings-chevron"><use href="#icon-chevron-down"/></svg>
       </div>
       <div class="settings-body">
+        <div class="processing-mode-switch" id="processingModeSwitch" role="group" aria-label="处理方式">
+          <button type="button" class="processing-mode-option" data-mode="system" onclick="setProcessingMode('system')">
+            系统转换
+          </button>
+          <button type="button" class="processing-mode-option active" data-mode="advanced" onclick="setProcessingMode('advanced')">
+            高级压缩
+          </button>
+        </div>
         <div class="settings-row">
           <label>自动处理</label>
           <div class="toggle-wrapper">
@@ -187,10 +195,41 @@
               <input type="checkbox" id="autoCompress">
               <span class="toggle-slider"></span>
             </label>
-            <span class="toggle-label">拖入或选择后自动压缩</span>
+            <span class="toggle-label" id="autoCompressLabel">拖入或选择后自动压缩</span>
           </div>
         </div>
-        <div class="settings-row">
+        <div class="settings-row" data-processing-mode="system">
+          <label>格式</label>
+          <div class="select-wrapper">
+            <select id="systemOutputFormat" class="settings-select">
+              <option value="jpg">JPEG</option>
+              <option value="png">PNG</option>
+              <option value="heif">HEIF</option>
+            </select>
+          </div>
+        </div>
+        <div class="settings-row" data-processing-mode="system">
+          <label>图像大小</label>
+          <div class="select-wrapper">
+            <select id="systemImageSize" class="settings-select">
+              <option value="actual">实际大小</option>
+              <option value="large">大（最长边 1280 px）</option>
+              <option value="medium">中（最长边 640 px）</option>
+              <option value="small">小（最长边 320 px）</option>
+            </select>
+          </div>
+        </div>
+        <div class="settings-row" data-processing-mode="system">
+          <label>元数据</label>
+          <div class="toggle-wrapper">
+            <label class="toggle">
+              <input type="checkbox" id="preserveMetadata" checked>
+              <span class="toggle-slider"></span>
+            </label>
+            <span class="toggle-label">保留元数据</span>
+          </div>
+        </div>
+        <div class="settings-row" data-processing-mode="advanced">
           <label>压缩质量</label>
           <div class="quality-control">
             <input type="range" id="qualitySlider" min="10" max="100" value="75">
@@ -227,7 +266,7 @@
             </button>
           </div>
         </div>
-        <div class="settings-row">
+        <div class="settings-row" data-processing-mode="advanced">
           <label>智能模式</label>
           <div class="toggle-wrapper">
             <label class="toggle">
@@ -237,7 +276,7 @@
             <span class="toggle-label">自动选择最佳算法和参数</span>
           </div>
         </div>
-        <div class="settings-row">
+        <div class="settings-row" data-processing-mode="advanced">
           <label>转换为 WebP</label>
           <div class="toggle-wrapper">
             <label class="toggle">
@@ -247,7 +286,7 @@
             <span class="toggle-label">输出为 WebP 格式（更小体积）</span>
           </div>
         </div>
-        <div class="settings-row">
+        <div class="settings-row" data-processing-mode="advanced">
           <label>输出格式</label>
           <div class="select-wrapper">
             <select id="outputFormat" class="settings-select">
@@ -259,7 +298,7 @@
             </select>
           </div>
         </div>
-        <div class="settings-row">
+        <div class="settings-row" data-processing-mode="advanced">
           <label>压缩引擎</label>
           <div class="select-wrapper">
             <select id="compressionBackend" class="settings-select">
@@ -269,7 +308,7 @@
             </select>
           </div>
         </div>
-        <div class="settings-row">
+        <div class="settings-row" data-processing-mode="advanced">
           <label>压缩力度</label>
           <div class="select-wrapper">
             <select id="compressionEffort" class="settings-select">

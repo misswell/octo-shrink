@@ -1,5 +1,7 @@
 mod commands;
 pub mod engine;
+#[cfg(target_os = "macos")]
+mod system_image;
 
 use commands::AppState;
 use std::collections::HashSet;

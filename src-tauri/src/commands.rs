@@ -32,7 +32,10 @@ struct ProgressPayload {
 
 // ─── File collection ────────────────────────────────────────────
 fn collect_image_files(file_paths: &[String]) -> Vec<String> {
-    let exts = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "avif", "jxl", "heic", "heif"];
+    let exts = [
+        "png", "jpg", "jpeg", "gif", "webp", "bmp", "avif", "jxl", "heic", "heif", "tif",
+        "tiff",
+    ];
     let mut all = Vec::new();
     for fp in file_paths {
         let path = PathBuf::from(fp);
@@ -96,6 +99,31 @@ fn base64_url_name(path: &Path) -> String {
         .encode(path.to_string_lossy().as_bytes())
 }
 
+fn available_system_conversion_path(file_path: &Path, out_type: &str) -> PathBuf {
+    let preferred = file_path.with_extension(out_type);
+    if !preferred.exists() {
+        return preferred;
+    }
+
+    let stem = file_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("image");
+    let parent = file_path.parent().unwrap_or(Path::new("."));
+    for index in 1.. {
+        let suffix = if index == 1 {
+            "_converted".to_string()
+        } else {
+            format!("_converted_{}", index)
+        };
+        let candidate = parent.join(format!("{}{}.{}", stem, suffix, out_type));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!()
+}
+
 /// Write the compressed bytes to disk according to the output mode.
 fn write_output_file(
     result: &mut CompressResult,
@@ -123,7 +151,21 @@ fn write_output_file(
                 let _ = fs::copy(file_path, &backup_path);
             }
             result.backup_path = Some(backup_path.to_string_lossy().into());
-            Some(file_path.to_path_buf())
+            let current_ext = file_path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            let same_format = current_ext == result.out_type
+                || (current_ext == "jpeg" && result.out_type == "jpg")
+                || (current_ext == "jpg" && result.out_type == "jpeg")
+                || (current_ext == "heif" && result.out_type == "heic")
+                || (current_ext == "heic" && result.out_type == "heif");
+            if options.processing_mode == "system" && is_format_conversion && !same_format {
+                Some(available_system_conversion_path(file_path, &result.out_type))
+            } else {
+                Some(file_path.to_path_buf())
+            }
         }
         "suffix" => {
             let stem = file_path
@@ -159,6 +201,9 @@ fn write_output_file(
 
     if let Some(out_path) = out_path {
         if fs::write(&out_path, compressed).is_ok() {
+            if options.output_mode == "replace" && out_path != file_path {
+                let _ = fs::remove_file(file_path);
+            }
             result.output_path = Some(out_path.to_string_lossy().into());
             result.output_mode = Some(options.output_mode.clone());
         }
@@ -344,7 +389,13 @@ pub async fn select_files(app: AppHandle) -> Result<Vec<String>, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
-        .add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
+        .add_filter(
+            "Images",
+            &[
+                "png", "jpg", "jpeg", "gif", "webp", "bmp", "avif", "jxl", "heic", "heif",
+                "tif", "tiff",
+            ],
+        )
         .pick_files(move |files| {
             let _ = tx.send(files);
         });
@@ -627,11 +678,17 @@ pub fn restore_original(
     file_path: String,
     backup_path: Option<String>,
     output_mode: String,
+    output_path: Option<String>,
 ) -> RestoreResult {
     match output_mode.as_str() {
         "replace" => {
             if let Some(bp) = &backup_path {
                 if Path::new(bp).exists() {
+                    if let Some(ref output) = output_path {
+                        if output != &file_path {
+                            let _ = fs::remove_file(output);
+                        }
+                    }
                     let _ = fs::copy(bp, &file_path);
                     let _ = fs::remove_file(bp);
                     return RestoreResult {
@@ -643,11 +700,13 @@ pub fn restore_original(
             }
         }
         "suffix" => {
-            let path = PathBuf::from(&file_path);
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
-            let dir = path.parent().unwrap_or(Path::new("."));
-            let compressed = dir.join(format!("{}_compressed.{}", stem, ext));
+            let compressed = output_path.map(PathBuf::from).unwrap_or_else(|| {
+                let path = PathBuf::from(&file_path);
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+                let dir = path.parent().unwrap_or(Path::new("."));
+                dir.join(format!("{}_compressed.{}", stem, ext))
+            });
             if compressed.exists() {
                 let _ = fs::remove_file(&compressed);
             }
@@ -658,6 +717,9 @@ pub fn restore_original(
             };
         }
         "folder" => {
+            if let Some(ref output) = output_path {
+                let _ = fs::remove_file(output);
+            }
             if let Some(bp) = &backup_path {
                 if Path::new(bp).exists() {
                     let _ = fs::remove_file(bp);
@@ -701,6 +763,7 @@ pub fn restore_all(results: Vec<CompressResult>) -> RestoreAllResult {
             r.file.clone(),
             r.backup_path.clone(),
             r.output_mode.clone().unwrap_or_else(|| "suffix".into()),
+            r.output_path.clone(),
         );
         if single.success {
             restored += 1;
@@ -751,4 +814,52 @@ pub fn export_all(results: Vec<CompressResult>) -> usize {
         }
     }
     count
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn system_conversion_never_overwrites_an_existing_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("photo.png");
+        fs::write(&input, b"png").unwrap();
+        assert_eq!(
+            available_system_conversion_path(&input, "jpg"),
+            temp.path().join("photo.jpg")
+        );
+
+        fs::write(temp.path().join("photo.jpg"), b"existing").unwrap();
+        assert_eq!(
+            available_system_conversion_path(&input, "jpg"),
+            temp.path().join("photo_converted.jpg")
+        );
+
+        fs::write(temp.path().join("photo_converted.jpg"), b"existing").unwrap();
+        assert_eq!(
+            available_system_conversion_path(&input, "jpg"),
+            temp.path().join("photo_converted_2.jpg")
+        );
+    }
+
+    #[test]
+    fn restore_removes_cross_format_output_before_restoring_original() {
+        let temp = tempfile::tempdir().unwrap();
+        let original = temp.path().join("photo.png");
+        let backup = temp.path().join("backup");
+        let output = temp.path().join("photo.jpg");
+        fs::write(&backup, b"original").unwrap();
+        fs::write(&output, b"converted").unwrap();
+
+        let restored = restore_original(
+            original.to_string_lossy().into_owned(),
+            Some(backup.to_string_lossy().into_owned()),
+            "replace".into(),
+            Some(output.to_string_lossy().into_owned()),
+        );
+        assert!(restored.success);
+        assert_eq!(fs::read(original).unwrap(), b"original");
+        assert!(!output.exists());
+    }
 }
