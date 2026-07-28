@@ -115,7 +115,6 @@ body {
   right: 0;
   z-index: 100;
   padding: 0 8px;
-  overflow: hidden;
 }
 .titlebar-progress {
   position: absolute;
