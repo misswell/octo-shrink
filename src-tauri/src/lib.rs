@@ -11,6 +11,7 @@ use tauri::{Emitter, Manager};
 const STARTUP_THEME_FILE: &str = "startup-theme";
 
 static UPDATE_CANCELLED: AtomicBool = AtomicBool::new(false);
+static UPDATE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn supported_theme(theme: &str) -> Option<&'static str> {
     match theme.trim() {
@@ -165,6 +166,7 @@ async fn install_update(app: tauri::AppHandle) -> Result<bool, String> {
     use tauri_plugin_updater::UpdaterExt;
 
     UPDATE_CANCELLED.store(false, Ordering::SeqCst);
+    let my_gen = UPDATE_GENERATION.fetch_add(1, Ordering::SeqCst);
 
     let Some(update) = app
         .updater_builder()
@@ -206,6 +208,9 @@ async fn install_update(app: tauri::AppHandle) -> Result<bool, String> {
         .await;
 
     if UPDATE_CANCELLED.load(Ordering::SeqCst) {
+        return Err("已取消".into());
+    }
+    if UPDATE_GENERATION.load(Ordering::SeqCst) != my_gen + 1 {
         return Err("已取消".into());
     }
 

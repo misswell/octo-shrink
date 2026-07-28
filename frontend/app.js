@@ -1228,6 +1228,7 @@ async function manualCheckUpdate() {
 }
 
 function startUpdateDownload(btn, statusEl, version) {
+  btn.dataset.downloading = '1';
   var tbUpdate = document.getElementById('titlebarUpdate');
   var tbText = document.getElementById('titlebarUpdateText');
   var tbBar = document.getElementById('titlebarProgress');
@@ -1251,12 +1252,15 @@ function startUpdateDownload(btn, statusEl, version) {
     })
     .catch(function(err) {
       if (unlistenFn) unlistenFn();
+      if (btn.dataset.downloading !== '1') return;
+      btn.dataset.downloading = '';
       if (tbUpdate) tbUpdate.style.display = 'none';
       if (tbBar) tbBar.style.width = '0%';
       btn.disabled = false;
+      btn.textContent = '立即更新';
       var cancelled = String(err).indexOf('取消') >= 0;
       if (statusEl) statusEl.textContent = cancelled
-        ? '已取消 · v' + version + ' 可用'
+        ? 'v' + version + ' 可用'
         : '更新失败';
     });
 }
@@ -1265,8 +1269,16 @@ function cancelUpdateDownload() {
   invoke('cancel_update').catch(function(){});
   var tbUpdate = document.getElementById('titlebarUpdate');
   var tbBar = document.getElementById('titlebarProgress');
+  var btn = document.getElementById('aboutUpdateBtn');
+  var statusEl = getUpdateStatusEl();
   if (tbUpdate) tbUpdate.style.display = 'none';
   if (tbBar) tbBar.style.width = '0%';
+  if (btn && btn.dataset.downloading === '1') {
+    btn.dataset.downloading = '';
+    btn.disabled = false;
+    btn.textContent = '立即更新';
+    if (statusEl) statusEl.textContent = '已取消';
+  }
 }
 
 async function checkDirectUpdate() {
