@@ -35,6 +35,8 @@ fn target_type(target: &str) -> Option<(&'static str, &'static str)> {
         "jpg" | "jpeg" => Some(("public.jpeg", "jpg")),
         "png" => Some(("public.png", "png")),
         "heic" | "heif" => Some(("public.heic", "heic")),
+        // "original" 由 convert() 根据输入图片类型动态决定
+        "original" => None,
         _ => None,
     }
 }
@@ -90,12 +92,32 @@ pub fn convert(file: &Path, options: &CompressOptions) -> EngineResult {
         Ok(data) => data,
         Err(error) => return fail(Vec::new(), &options.output_format, error.to_string()),
     };
-    let Some((uti, out_type)) = target_type(&options.output_format) else {
-        return fail(
-            original,
-            &options.output_format,
-            "系统转换仅支持 JPEG、PNG 和 HEIF",
-        );
+
+    // 原格式：从文件扩展名推断输入图片格式
+    let (uti, out_type): (&str, &str) = if options.output_format == "original" {
+        let ext = file
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase())
+            .unwrap_or_default();
+        match ext.as_str() {
+            "jpg" | "jpeg" => ("public.jpeg", "jpg"),
+            "png" => ("public.png", "png"),
+            "heic" | "heif" => ("public.heic", "heic"),
+            // 其他格式（如 webp、avif、gif、tiff 等）回退到 JPEG
+            _ => ("public.jpeg", "jpg"),
+        }
+    } else {
+        match target_type(&options.output_format) {
+            Some((uti, out_type)) => (uti, out_type),
+            None => {
+                return fail(
+                    original,
+                    &options.output_format,
+                    "系统转换仅支持 JPEG、PNG 和 HEIF",
+                );
+            }
+        }
     };
 
     let input = CFData::from_bytes(&original);
