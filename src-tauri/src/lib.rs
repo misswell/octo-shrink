@@ -12,6 +12,67 @@ use tauri::{Emitter, Manager};
 
 const STARTUP_THEME_FILE: &str = "startup-theme";
 
+/// 获取系统 HTTPS 代理地址（macOS 系统代理或环境变量）
+/// tauri-plugin-updater 禁用了 reqwest 的 system-proxy feature，
+/// 不会自动读取 macOS 系统代理，需要手动设置。
+#[cfg(all(
+    target_os = "macos",
+    feature = "cli-backends",
+    not(feature = "inproc-backends")
+))]
+fn get_system_proxy() -> Option<String> {
+    // 1. 先检查环境变量
+    if let Ok(proxy) = std::env::var("HTTPS_PROXY")
+        .or_else(|_| std::env::var("https_proxy"))
+        .or_else(|_| std::env::var("ALL_PROXY"))
+        .or_else(|_| std::env::var("all_proxy"))
+    {
+        if !proxy.is_empty() {
+            return Some(proxy);
+        }
+    }
+    // 2. 从 macOS 系统配置读取（scutil --proxy）
+    let output = std::process::Command::new("scutil")
+        .arg("--proxy")
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut https_enabled = false;
+    let mut https_host: Option<String> = None;
+    let mut https_port: Option<String> = None;
+    let mut http_enabled = false;
+    let mut http_host: Option<String> = None;
+    let mut http_port: Option<String> = None;
+    for line in text.lines() {
+        let parts: Vec<&str> = line.splitn(2, ':').collect();
+        if parts.len() != 2 {
+            continue;
+        }
+        let key = parts[0].trim();
+        let val = parts[1].trim();
+        match key {
+            "HTTPSEnable" => https_enabled = val == "1",
+            "HTTPSProxy" => https_host = Some(val.to_string()),
+            "HTTPSPort" => https_port = Some(val.to_string()),
+            "HTTPEnable" => http_enabled = val == "1",
+            "HTTPProxy" => http_host = Some(val.to_string()),
+            "HTTPPort" => http_port = Some(val.to_string()),
+            _ => {}
+        }
+    }
+    if https_enabled {
+        if let (Some(h), Some(p)) = (https_host, https_port) {
+            return Some(format!("http://{}:{}", h, p));
+        }
+    }
+    if http_enabled {
+        if let (Some(h), Some(p)) = (http_host, http_port) {
+            return Some(format!("http://{}:{}", h, p));
+        }
+    }
+    None
+}
+
 static UPDATE_CANCELLED: AtomicBool = AtomicBool::new(false);
 static UPDATE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -134,9 +195,15 @@ struct DirectUpdateInfo {
 async fn check_for_update(app: tauri::AppHandle) -> Result<Option<DirectUpdateInfo>, String> {
     use tauri_plugin_updater::UpdaterExt;
 
-    let update = app
+    let mut builder = app
         .updater_builder()
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(15));
+    if let Some(proxy_url) = get_system_proxy() {
+        if let Ok(url) = url::Url::parse(&proxy_url) {
+            builder = builder.proxy(url);
+        }
+    }
+    let update = builder
         .build()
         .map_err(|error| error.to_string())?
         .check()
@@ -170,9 +237,15 @@ async fn install_update(app: tauri::AppHandle) -> Result<bool, String> {
     UPDATE_CANCELLED.store(false, Ordering::SeqCst);
     let my_gen = UPDATE_GENERATION.fetch_add(1, Ordering::SeqCst);
 
-    let Some(update) = app
+    let mut builder = app
         .updater_builder()
-        .timeout(std::time::Duration::from_secs(60))
+        .timeout(std::time::Duration::from_secs(60));
+    if let Some(proxy_url) = get_system_proxy() {
+        if let Ok(url) = url::Url::parse(&proxy_url) {
+            builder = builder.proxy(url);
+        }
+    }
+    let Some(update) = builder
         .build()
         .map_err(|error| error.to_string())?
         .check()

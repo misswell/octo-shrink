@@ -1325,11 +1325,11 @@ function startUpdateDownload(btn, statusEl, version) {
       if (tbBar) tbBar.style.width = '0%';
       btn.disabled = false;
       btn.textContent = '立即更新';
-      var cancelled = String(err).indexOf('取消') >= 0;
-      if (statusEl) statusEl.textContent = cancelled
-        ? 'v' + version + ' 可用'
-        : '更新失败';
-    });
+        var cancelled = String(err).indexOf('取消') >= 0;
+        if (statusEl) statusEl.textContent = cancelled
+          ? 'v' + version + ' 可用'
+         : '更新失败';
+     });
 }
 
 function cancelUpdateDownload() {
