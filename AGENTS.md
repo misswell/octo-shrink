@@ -374,7 +374,7 @@ xcrun altool --upload-app \
 - GitHub Release 必须同时提供 macOS arm64、x86_64 与 Universal 2；Universal 内的主程序、CLI 工具和非系统 dylib 都必须包含双架构，不能只合并主程序。
 - Windows 与 Linux 产物继续由 `.github/workflows/release.yml` 并行构建。
 
-### 14. 发布流程全凭据速查（全部已保存在本机，无需向用户索要）
+### 14. 发布流程全凭据速查（本机与 GitHub Actions 均已配置，无需向用户索要）
 
 > ⚠️ 本节记录所有发布相关凭据的存储位置和使用方式。用户经常不在电脑旁，**禁止向用户索要任何密码**，所有凭据均已在以下位置：
 
@@ -386,7 +386,9 @@ xcrun altool --upload-app \
 | 3rd Party Mac Developer Installer | 钥匙串 | `productbuild` 打 PKG，`scripts/build_appstore.sh` 自动引用 | ❌ 自动检测 |
 | Tauri updater 私钥 | `src-tauri/.tauri/octoshrink-updater.key` | `cargo tauri signer sign`（设置 `TAURI_SIGNING_PRIVATE_KEY` 环境变量） | ❌ 本地文件 |
 | Tauri updater 密码 | `src-tauri/.tauri/octoshrink-updater.password` | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 环境变量 | ❌ 本地文件 |
-| GitHub Secrets（CI 签名） | `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | CI 自动使用 | ❌ 已配置 |
+| GitHub Secrets（Developer ID） | `APPLE_DEVELOPER_ID_P12_BASE64` / `APPLE_DEVELOPER_ID_P12_PASSWORD` | CI 导入临时钥匙串，仅包含 Developer ID Application 身份 | ❌ 已配置 |
+| GitHub Secrets（Apple 公证） | `APPLE_ID` / `APPLE_TEAM_ID` / `APPLE_APP_SPECIFIC_PASSWORD` | CI 用 `notarytool` 公证三个 macOS DMG | ❌ 已配置 |
+| GitHub Secrets（更新签名） | `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | CI 签 Universal 在线更新包 | ❌ 已配置 |
 | GitHub 推送 | SSH key（`git@github.com:misswell/octo-shrink.git`） | `git push origin master` | ❌ SSH 自动认证 |
 
 #### 发布新版本完整流程（无密码）
@@ -401,33 +403,16 @@ git tag vX.Y.Z
 git push origin master
 git push origin vX.Y.Z
 
-# 3. CI 自动构建多平台产物（ARM/Intel/Universal/Windows/Linux）
-#    监控: gh run watch
-
-# 4. 下载 CI 产物
-gh run download <run-id> --dir release-vX.Y.Z/ci-artifacts
-
-# 5. 解包 + Developer ID 重签三个 macOS app
-#    见 scripts/notarize.sh 的签名逻辑（先 dylib -> CLI -> 主程序）
-
-# 6. Apple 公证（无密码，钥匙串自动读取）
-xcrun notarytool submit <dmg> --keychain-profile octoshrink-notary --wait
-
-# 7. 装订
-xcrun stapler staple <app>
-xcrun stapler staple <dmg>
-
-# 8. 重建 Universal 更新包 + 签名（无密码，本地私钥文件）
-tar -czf OctoShrink_vX.Y.Z_macos_universal.app.tar.gz -C work/universal OctoShrink.app
-TAURI_SIGNING_PRIVATE_KEY="$(<src-tauri/.tauri/octoshrink-updater.key)" \
-TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(<src-tauri/.tauri/octoshrink-updater.password)" \
-cargo tauri signer sign OctoShrink_vX.Y.Z_macos_universal.app.tar.gz
-
-# 9. 生成 latest.json（用更新包签名）
-# 10. 上传到 GitHub Release + 发布
-gh release upload vX.Y.Z <files> --clobber
-gh release edit vX.Y.Z --draft=false
+# 3. GitHub Actions 自动完成全部发布工作：
+#    - ARM / Intel / Universal 2 / Windows / Linux 编译
+#    - macOS 全部 Mach-O Developer ID 重签
+#    - 三个 macOS DMG 并行 Apple 公证 + app/DMG 装订
+#    - Universal 在线更新包签名 + latest.json
+#    - 所有步骤成功后直接发布正式 GitHub Release
+gh run watch --exit-status
 ```
+
+也可在 GitHub Actions 手动运行 `Release` workflow：输入 `vX.Y.Z` 作为产物版本标签；`publish=false`（默认）只完整验证构建、签名与公证，`publish=true` 才正式发布。CI 签名公证实现位于 `scripts/sign_notarize_macos_ci.sh`；本地不再需要下载、重签或覆盖 Release 资产。
 
 **如果钥匙串 profile 过期或丢失**（极少发生）：
 用户需要在终端执行一次 `xcrun notarytool store-credentials octoshrink-notary --apple-id misswell@foxmail.com --team-id U8U443D7ZL`，输入 App 专用密码。这是唯一可能需要用户输入的情况。

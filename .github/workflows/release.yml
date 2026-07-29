@@ -5,6 +5,20 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Version label used for generated artifacts (for example v2.5.7)
+        required: true
+        type: string
+      publish:
+        description: Publish the GitHub Release after validation succeeds
+        required: true
+        default: false
+        type: boolean
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.ref_name }}
 
 jobs:
   # ═══ macOS ARM64 / Intel 分别构建，确保内置 CLI 与主程序架构一致 ═══
@@ -22,6 +36,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_REF }}
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -44,13 +60,9 @@ jobs:
         env:
           CODE_SIGN_IDENTITY: ""
 
-      - name: Create DMG
+      - name: Package app for signing
         run: |
           APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/OctoShrink.app"
-          hdiutil create -volname "OctoShrink" \
-            -srcfolder "$APP" \
-            -ov -format UDZO \
-            "src-tauri/target/${{ matrix.target }}/release/bundle/OctoShrink_${{ github.ref_name }}_macos_${{ matrix.arch }}.dmg"
           ditto -c -k --sequesterRsrc --keepParent "$APP" \
             "src-tauri/target/${{ matrix.target }}/release/bundle/OctoShrink_${{ matrix.arch }}.app.zip"
 
@@ -58,16 +70,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: macos-${{ matrix.arch }}-build
-          path: |
-            src-tauri/target/${{ matrix.target }}/release/bundle/*.dmg
-            src-tauri/target/${{ matrix.target }}/release/bundle/*.app.zip
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/*.app.zip
 
-  # ═══ macOS Universal 2：合并完整 app（主程序 + CLI + dylib） ═══
+  # ═══ macOS：合并 Universal 2，并自动完成 Developer ID 签名、公证与装订 ═══
   build-macos-universal:
     needs: build-macos
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_REF }}
 
       - uses: actions/download-artifact@v4
         with:
@@ -79,6 +91,35 @@ jobs:
           name: macos-x86_64-build
           path: artifacts/x86_64
 
+      - name: Import Developer ID certificate
+        env:
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${DEVELOPER_ID_P12_BASE64:?Missing APPLE_DEVELOPER_ID_P12_BASE64 secret}"
+          : "${DEVELOPER_ID_P12_PASSWORD:?Missing APPLE_DEVELOPER_ID_P12_PASSWORD secret}"
+
+          KEYCHAIN_PATH="${RUNNER_TEMP}/octoshrink-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+          P12_PATH="${RUNNER_TEMP}/developer-id.p12"
+
+          printf '%s' "${DEVELOPER_ID_P12_BASE64}" | base64 -D > "${P12_PATH}"
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security import "${P12_PATH}" \
+            -k "${KEYCHAIN_PATH}" \
+            -P "${DEVELOPER_ID_P12_PASSWORD}" \
+            -T /usr/bin/codesign
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security find-identity -v -p codesigning "${KEYCHAIN_PATH}" \
+            | grep 'Developer ID Application: Guofeng Liu (U8U443D7ZL)'
+
+          echo "SIGNING_KEYCHAIN=${KEYCHAIN_PATH}" >> "${GITHUB_ENV}"
+
       - name: Merge Universal app
         run: |
           mkdir -p work/arm64 work/x86_64 work/universal release
@@ -88,17 +129,25 @@ jobs:
             work/arm64/OctoShrink.app \
             work/x86_64/OctoShrink.app \
             work/universal/OctoShrink.app
-          hdiutil create -volname "OctoShrink" \
-            -srcfolder work/universal/OctoShrink.app -ov -format UDZO \
-            "release/OctoShrink_${{ github.ref_name }}_macos_universal.dmg"
-          tar -czf "release/OctoShrink_${{ github.ref_name }}_macos_universal.app.tar.gz" \
-            -C work/universal OctoShrink.app
+
+      - name: Sign, notarize, and staple macOS assets
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          SIGNING_IDENTITY: 'Developer ID Application: Guofeng Liu (U8U443D7ZL)'
+        run: |
+          bash scripts/sign_notarize_macos_ci.sh \
+            work/arm64/OctoShrink.app \
+            work/x86_64/OctoShrink.app \
+            work/universal/OctoShrink.app \
+            release
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2.0" --locked
 
       - name: Sign updater archive
-        run: cargo tauri signer sign "release/OctoShrink_${{ github.ref_name }}_macos_universal.app.tar.gz"
+        run: cargo tauri signer sign "release/OctoShrink_${RELEASE_TAG}_macos_universal.app.tar.gz"
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -108,11 +157,20 @@ jobs:
           name: macos-universal-build
           path: release/*
 
+      - name: Remove temporary signing keychain
+        if: always()
+        run: |
+          if [ -n "${SIGNING_KEYCHAIN:-}" ] && [ -e "${SIGNING_KEYCHAIN}" ]; then
+            security delete-keychain "${SIGNING_KEYCHAIN}"
+          fi
+
   # App Store 不随 GitHub Release 分发，但每次发布必须验证独立 feature 线。
   verify-appstore:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_REF }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Check App Store feature line
         working-directory: src-tauri
@@ -125,6 +183,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_REF }}
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -201,6 +261,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_REF }}
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -276,11 +338,14 @@ jobs:
   # ═══ 发布 Release ═══
   release:
     needs: [build-macos, build-macos-universal, verify-appstore, build-windows, build-linux]
+    if: github.event_name == 'push' || inputs.publish
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_REF }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -297,10 +362,10 @@ jobs:
           find artifacts -name "*.AppImage" -exec cp {} release/ \;
           find artifacts -name "*.tar.gz" -exec cp {} release/ \;
           find artifacts -name "*.sig" -exec cp {} release/ \;
-          VERSION="${GITHUB_REF_NAME#v}"
-          ARCHIVE="OctoShrink_${GITHUB_REF_NAME}_macos_universal.app.tar.gz"
+          VERSION="${RELEASE_TAG#v}"
+          ARCHIVE="OctoShrink_${RELEASE_TAG}_macos_universal.app.tar.gz"
           SIGNATURE="$(cat "release/${ARCHIVE}.sig")"
-          DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${ARCHIVE}"
+          DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${ARCHIVE}"
           jq -n \
             --arg version "$VERSION" \
             --arg notes "OctoShrink ${VERSION}: 新增 macOS 系统原生图片转换，支持 JPEG/PNG/HEIF 与 Finder 尺寸档位。" \
@@ -314,8 +379,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: 章小压 · OctoShrink ${{ github.ref_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: 章小压 · OctoShrink ${{ env.RELEASE_TAG }}
           body: |
             ## 章小压 · OctoShrink
 
@@ -341,7 +406,7 @@ jobs:
             - 一键恢复全部原图
             - 压缩失败显示错误详情
           files: release/*
-          # macOS 资产仍需发布者以 Developer ID 重签并完成 Apple 公证；
-          # 草稿可防止 updater 将正式签名应用替换为 CI 临时签名应用。
-          draft: true
+          fail_on_unmatched_files: true
+          draft: false
           prerelease: false
+          make_latest: true
