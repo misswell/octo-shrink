@@ -22,6 +22,7 @@ for app in "${ARM_APP}" "${INTEL_APP}" "${UNIVERSAL_APP}"; do
   [ -d "${app}" ] || { echo "Missing app: ${app}" >&2; exit 1; }
 done
 [ -f "${ENTITLEMENTS}" ] || { echo "Missing entitlements: ${ENTITLEMENTS}" >&2; exit 1; }
+security find-identity -v -p codesigning "${SIGNING_KEYCHAIN}" | grep -F "${SIGNING_IDENTITY}"
 mkdir -p "${OUTPUT_DIR}"
 
 log() { echo "==> $*"; }
@@ -52,7 +53,6 @@ sign_app() {
     --options runtime
     --timestamp
     --entitlements "${ENTITLEMENTS}"
-    --keychain "${SIGNING_KEYCHAIN}"
     --sign "${SIGNING_IDENTITY}"
   )
 
@@ -79,8 +79,7 @@ create_dmg() {
   ditto "${app}" "${staging}/OctoShrink.app"
   ln -s /Applications "${staging}/Applications"
   hdiutil create -volname OctoShrink -srcfolder "${staging}" -ov -format UDZO "${dmg}" >/dev/null
-  codesign --force --timestamp --keychain "${SIGNING_KEYCHAIN}" \
-    --sign "${SIGNING_IDENTITY}" "${dmg}"
+  codesign --force --timestamp --sign "${SIGNING_IDENTITY}" "${dmg}"
   rm -r "${staging}"
   echo "${dmg}"
 }
