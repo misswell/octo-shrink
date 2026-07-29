@@ -108,6 +108,8 @@ jobs:
           security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
           security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
           security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security list-keychains -d user -s "${KEYCHAIN_PATH}"
+          security default-keychain -d user -s "${KEYCHAIN_PATH}"
           security import "${P12_PATH}" \
             -k "${KEYCHAIN_PATH}" \
             -P "${DEVELOPER_ID_P12_PASSWORD}" \
@@ -117,6 +119,12 @@ jobs:
             -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
           security find-identity -v -p codesigning "${KEYCHAIN_PATH}" \
             | grep 'Developer ID Application: Guofeng Liu (U8U443D7ZL)'
+
+          cp /usr/bin/true "${RUNNER_TEMP}/developer-id-signing-test"
+          codesign --force --options runtime --timestamp \
+            --sign 'Developer ID Application: Guofeng Liu (U8U443D7ZL)' \
+            "${RUNNER_TEMP}/developer-id-signing-test"
+          codesign --verify --strict "${RUNNER_TEMP}/developer-id-signing-test"
 
           echo "SIGNING_KEYCHAIN=${KEYCHAIN_PATH}" >> "${GITHUB_ENV}"
 
