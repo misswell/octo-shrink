@@ -1406,6 +1406,11 @@ function updateSettingsSummary() {
   if (el) el.textContent = parts.join(' \u00b7 ');
 }
 
+function resetSettings() {
+  try { localStorage.removeItem('octoshrink-settings'); } catch(e) {}
+  location.reload();
+}
+
 function saveCompressSettings() {
   var data = {};
   data.processingMode = processingMode;
