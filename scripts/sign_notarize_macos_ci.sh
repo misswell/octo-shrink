@@ -44,6 +44,30 @@ verify_architectures() {
   echo "    verified ${count} Mach-O files in $(dirname "${app}")"
 }
 
+verify_universal_architectures() {
+  local app="$1"
+  local file_path
+  local archs
+  local count=0
+
+  while IFS= read -r -d '' file_path; do
+    if file "${file_path}" | grep -q 'Mach-O'; then
+      archs="$(lipo -archs "${file_path}")"
+      case " ${archs} " in
+        *" arm64 "*|*" x86_64 "*) ;;
+        *)
+          echo "Unexpected architecture(s) in ${file_path}: ${archs}" >&2
+          exit 1
+          ;;
+      esac
+      count=$((count + 1))
+    fi
+  done < <(find "${app}/Contents" -type f -print0)
+
+  [ "${count}" -gt 0 ] || { echo "No Mach-O files found in ${app}" >&2; exit 1; }
+  echo "    verified ${count} Mach-O files in $(dirname "${app}")"
+}
+
 sign_app() {
   local app="$1"
   local file_path
@@ -96,7 +120,7 @@ notarize_dmg() {
 log "Verify app architectures"
 verify_architectures "${ARM_APP}" arm64
 verify_architectures "${INTEL_APP}" x86_64
-verify_architectures "${UNIVERSAL_APP}" arm64 x86_64
+verify_universal_architectures "${UNIVERSAL_APP}"
 
 log "Developer ID sign apps"
 sign_app "${ARM_APP}"
