@@ -18,24 +18,63 @@ while IFS= read -r -d '' arm_file; do
   intel_file="${INTEL_APP}/${relative_path}"
   output_file="${OUTPUT_APP}/${relative_path}"
   if file "${arm_file}" | grep -q 'Mach-O'; then
-    [ -f "${intel_file}" ] || {
-      echo "Missing Intel counterpart: ${relative_path}" >&2
-      exit 1
-    }
-    file "${intel_file}" | grep -q 'Mach-O' || {
+    if [ ! -f "${intel_file}" ]; then
+      case "${relative_path}" in
+        */lib/*.dylib) echo "Keeping arm64-only resource: ${relative_path}" ;;
+        *)
+          echo "Missing Intel counterpart: ${relative_path}" >&2
+          exit 1
+          ;;
+      esac
+    elif file "${intel_file}" | grep -q 'Mach-O'; then
+      merged_file="$(mktemp /tmp/octoshrink-universal.XXXXXX)"
+      lipo -create "${arm_file}" "${intel_file}" -output "${merged_file}"
+      chmod "$(stat -f '%Lp' "${output_file}")" "${merged_file}"
+      mv "${merged_file}" "${output_file}"
+    else
       echo "Intel counterpart is not Mach-O: ${relative_path}" >&2
       exit 1
-    }
-    merged_file="$(mktemp /tmp/octoshrink-universal.XXXXXX)"
-    lipo -create "${arm_file}" "${intel_file}" -output "${merged_file}"
-    chmod "$(stat -f '%Lp' "${output_file}")" "${merged_file}"
-    mv "${merged_file}" "${output_file}"
+    fi
   fi
 done < <(find "${ARM_APP}" -type f -print0)
 
+# Some dependencies are only used by one architecture (for example, cjxl may
+# link libopenjph on arm64 but not on x86_64). Preserve those resources instead
+# of requiring every Mach-O file to have a counterpart in both bundles.
+while IFS= read -r -d '' intel_file; do
+  relative_path="${intel_file#${INTEL_APP}/}"
+  output_file="${OUTPUT_APP}/${relative_path}"
+  if [ ! -e "${output_file}" ]; then
+    case "${relative_path}" in
+      */lib/*.dylib)
+        mkdir -p "$(dirname "${output_file}")"
+        ditto "${intel_file}" "${output_file}"
+        echo "Keeping x86_64-only resource: ${relative_path}"
+        ;;
+      *)
+        echo "Missing arm64 counterpart: ${relative_path}" >&2
+        exit 1
+        ;;
+    esac
+  fi
+done < <(find "${INTEL_APP}" -type f -print0)
+
+verify_macho_architectures() {
+  local binary="$1"
+  local archs
+  archs="$(lipo -archs "${binary}")"
+  case " ${archs} " in
+    *" arm64 "*|*" x86_64 "*) ;;
+    *)
+      echo "Unexpected architecture(s) in ${binary}: ${archs}" >&2
+      exit 1
+      ;;
+  esac
+}
+
 while IFS= read -r -d '' binary; do
   if file "${binary}" | grep -q 'Mach-O'; then
-    lipo "${binary}" -verify_arch arm64 x86_64
+    verify_macho_architectures "${binary}"
     codesign --force --sign - "${binary}"
   fi
 done < <(find "${OUTPUT_APP}/Contents" -type f -print0)
