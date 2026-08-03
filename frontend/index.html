@@ -181,13 +181,17 @@
         <svg class="symbol-icon settings-chevron"><use href="#icon-chevron-down"/></svg>
       </div>
       <div class="settings-body">
-        <div class="processing-mode-switch" id="processingModeSwitch" role="group" aria-label="处理方式">
-          <button type="button" class="processing-mode-option" data-mode="system" onclick="setProcessingMode('system')">
-            系统转换
-          </button>
-          <button type="button" class="processing-mode-option active" data-mode="advanced" onclick="setProcessingMode('advanced')">
-            高级压缩
-          </button>
+        <div class="processing-mode-switch settings-row" id="processingModeSwitch" role="group" aria-label="处理方式">
+          <label>处理方式</label>
+          <div class="processing-mode-control">
+            <span class="processing-mode-label" data-mode="system">系统转换</span>
+            <button type="button" class="processing-mode-toggle active" id="processingModeToggle"
+              role="switch" aria-checked="true" aria-label="切换处理方式，当前为高级压缩"
+              onclick="toggleProcessingMode()">
+              <span class="processing-mode-slider"></span>
+            </button>
+            <span class="processing-mode-label active" data-mode="advanced">高级压缩</span>
+          </div>
         </div>
         <div class="settings-row">
           <label>自动处理</label>

@@ -204,9 +204,16 @@ function setProcessingMode(mode, skipSave) {
   var isMac = /Macintosh|Mac OS X/.test(navigator.userAgent);
   processingMode = (mode === 'system' && isMac) ? 'system' : 'advanced';
 
-  document.querySelectorAll('.processing-mode-option').forEach(function(button) {
-    button.classList.toggle('active', button.dataset.mode === processingMode);
+  document.querySelectorAll('.processing-mode-label').forEach(function(label) {
+    label.classList.toggle('active', label.dataset.mode === processingMode);
   });
+  var modeToggle = document.getElementById('processingModeToggle');
+  if (modeToggle) {
+    var advancedActive = processingMode === 'advanced';
+    modeToggle.classList.toggle('active', advancedActive);
+    modeToggle.setAttribute('aria-checked', advancedActive ? 'true' : 'false');
+    modeToggle.setAttribute('aria-label', '切换处理方式，当前为' + (advancedActive ? '高级压缩' : '系统转换'));
+  }
   document.querySelectorAll('[data-processing-mode]').forEach(function(row) {
     row.style.display = row.dataset.processingMode === processingMode ? 'flex' : 'none';
   });
@@ -221,6 +228,10 @@ function setProcessingMode(mode, skipSave) {
   }
   if (!skipSave) saveCompressSettings();
   updateSettingsSummary();
+}
+
+function toggleProcessingMode() {
+  setProcessingMode(processingMode === 'system' ? 'advanced' : 'system');
 }
 
 // Output mode radio
