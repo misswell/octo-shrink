@@ -495,6 +495,7 @@ mod tests {
             effort: 3,
             convert_to_webp: false,
             output_mode: "suffix".into(),
+            output_suffix: "_compressed".into(),
             output_dir: None,
             lossless: None,
         };

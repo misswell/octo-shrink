@@ -18,11 +18,11 @@ export CARGO_PROFILE_RELEASE_PANIC=unwind
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TAURI_DIR="$PROJECT_DIR/src-tauri"
 APP_NAME="OctoShrink"
-APP_VERSION="2.5.11"
 APP="$TAURI_DIR/target/release/bundle/macos/$APP_NAME.app"
 BUNDLE_ID="com.misswell.octoshrink.appstore"
 ENTITLEMENTS="$TAURI_DIR/entitlements-appstore.plist"
 CONF="$TAURI_DIR/tauri.conf.appstore.json"
+APP_VERSION="$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$CONF" | head -1)"
 
 log()  { echo "==> $*"; }
 ok()   { echo "    ✓ $*"; }
@@ -30,6 +30,7 @@ fail() { echo "✗ $*" >&2; exit 1; }
 
 [ -f "$ENTITLEMENTS" ] || fail "找不到 App Store entitlements：$ENTITLEMENTS"
 [ -f "$CONF" ] || fail "找不到 App Store 配置：$CONF"
+[ -n "${APP_VERSION}" ] || fail "无法从 App Store 配置读取版本号：$CONF"
 
 # ---------- 1. 构建（appstore feature，不复用 default） ----------
 log "cargo tauri build --bundles app --features appstore（进程内 Rust 库，无外部 CLI/dylib）"

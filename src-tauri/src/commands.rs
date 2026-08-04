@@ -99,6 +99,26 @@ fn base64_url_name(path: &Path) -> String {
         .encode(path.to_string_lossy().as_bytes())
 }
 
+fn normalized_output_suffix(value: Option<&str>) -> String {
+    let mut suffix = value
+        .unwrap_or("_compressed")
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch == '/' || ch == '\\' || ch == '\0' || ch.is_control() {
+                '_'
+            } else {
+                ch
+            }
+        })
+        .collect::<String>();
+
+    if suffix.is_empty() {
+        suffix = "_compressed".into();
+    }
+    suffix.chars().take(64).collect()
+}
+
 fn available_system_conversion_path(file_path: &Path, out_type: &str) -> PathBuf {
     let preferred = file_path.with_extension(out_type);
     if !preferred.exists() {
@@ -173,7 +193,8 @@ fn write_output_file(
                 .and_then(|s| s.to_str())
                 .unwrap_or("file");
             let dir = file_path.parent().unwrap_or(Path::new("."));
-            Some(dir.join(format!("{}_compressed{}", stem, out_ext)))
+            let suffix = normalized_output_suffix(Some(&options.output_suffix));
+            Some(dir.join(format!("{}{}{}", stem, suffix, out_ext)))
         }
         "folder" => {
             if let Some(ref out_dir) = options.output_dir {
@@ -679,6 +700,7 @@ pub fn restore_original(
     backup_path: Option<String>,
     output_mode: String,
     output_path: Option<String>,
+    output_suffix: Option<String>,
 ) -> RestoreResult {
     match output_mode.as_str() {
         "replace" => {
@@ -705,7 +727,8 @@ pub fn restore_original(
                 let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
                 let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
                 let dir = path.parent().unwrap_or(Path::new("."));
-                dir.join(format!("{}_compressed.{}", stem, ext))
+                let suffix = normalized_output_suffix(output_suffix.as_deref());
+                dir.join(format!("{}{}.{}", stem, suffix, ext))
             });
             if compressed.exists() {
                 let _ = fs::remove_file(&compressed);
@@ -764,6 +787,7 @@ pub fn restore_all(results: Vec<CompressResult>) -> RestoreAllResult {
             r.backup_path.clone(),
             r.output_mode.clone().unwrap_or_else(|| "suffix".into()),
             r.output_path.clone(),
+            None,
         );
         if single.success {
             restored += 1;
@@ -788,10 +812,11 @@ pub fn get_file_sizes(file_paths: Vec<String>) -> Vec<u64> {
         .collect()
 }
 
-/// Export all compressed results to their original directories with _compressed suffix.
+/// Export all compressed results to their original directories with the selected suffix.
 #[tauri::command]
-pub fn export_all(results: Vec<CompressResult>) -> usize {
+pub fn export_all(results: Vec<CompressResult>, output_suffix: Option<String>) -> usize {
     let mut count = 0usize;
+    let suffix = normalized_output_suffix(output_suffix.as_deref());
     for r in &results {
         if r.success {
             if let Some(ref out_path) = r.output_path {
@@ -806,8 +831,8 @@ pub fn export_all(results: Vec<CompressResult>) -> usize {
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("file");
-                let dest = dir.join(format!("{}_compressed.{}", stem, ext));
-                if fs::copy(&src, &dest).is_ok() {
+                let dest = dir.join(format!("{}{}.{}", stem, suffix, ext));
+                if src == dest || fs::copy(&src, &dest).is_ok() {
                     count += 1;
                 }
             }
@@ -857,9 +882,44 @@ mod tests {
             Some(backup.to_string_lossy().into_owned()),
             "replace".into(),
             Some(output.to_string_lossy().into_owned()),
+            None,
         );
         assert!(restored.success);
         assert_eq!(fs::read(original).unwrap(), b"original");
         assert!(!output.exists());
+    }
+
+    #[test]
+    fn custom_suffix_is_used_for_suffix_output() {
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("photo.png");
+        fs::write(&input, b"original").unwrap();
+
+        let engine_result = EngineResult {
+            success: true,
+            compressed: b"small".to_vec(),
+            out_type: "png".into(),
+            algorithm: "test".into(),
+            error: None,
+        };
+        let mut result = build_result(&input.to_string_lossy(), &engine_result);
+        let options = CompressOptions {
+            output_mode: "suffix".into(),
+            output_suffix: "_small".into(),
+            ..Default::default()
+        };
+
+        write_output_file(
+            &mut result,
+            &input,
+            &engine_result.compressed,
+            &[input.to_string_lossy().into_owned()],
+            &options,
+        );
+
+        assert_eq!(
+            result.output_path.as_deref(),
+            Some(temp.path().join("photo_small.png").to_string_lossy().as_ref())
+        );
     }
 }
