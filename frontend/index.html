@@ -185,6 +185,10 @@
           <label>处理方式</label>
           <div class="processing-mode-control">
             <span class="processing-mode-label" data-mode="system">系统转换</span>
+            <button type="button" class="processing-mode-info" onclick="event.stopPropagation(); openSystemConversionInfo()"
+              title="系统转换说明" aria-label="系统转换说明">
+              <svg class="symbol-icon symbol-icon-small"><use href="#icon-info"/></svg>
+            </button>
             <button type="button" class="processing-mode-toggle active" id="processingModeToggle"
               role="switch" aria-checked="true" aria-label="切换处理方式，当前为高级压缩"
               onclick="toggleProcessingMode()">
@@ -253,13 +257,21 @@
             <label class="radio-label">
               <input type="radio" name="outputMode" value="suffix">
               <span class="radio-custom"></span>
-              添加 _compressed 后缀
+              添加自定义后缀
             </label>
             <label class="radio-label">
               <input type="radio" name="outputMode" value="folder">
               <span class="radio-custom"></span>
               输出到指定文件夹
             </label>
+          </div>
+        </div>
+        <div class="settings-row" id="outputSuffixRow" style="display:none;">
+          <label for="outputSuffix">文件名后缀</label>
+          <div class="suffix-control">
+            <input type="text" id="outputSuffix" class="settings-text-input" value="_compressed"
+              placeholder="_compressed" maxlength="64" spellcheck="false" aria-describedby="outputSuffixHint">
+            <span class="settings-hint" id="outputSuffixHint">例如 _small</span>
           </div>
         </div>
         <div class="settings-row" id="outputDirRow" style="display:none;">
@@ -447,6 +459,28 @@
        关闭
      </button>
    </div>
+    </div>
+  </div>
+
+  <!-- System conversion explanation -->
+  <div class="modal-backdrop" id="systemInfoBackdrop" style="display:none;" onclick="closeSystemConversionInfo()"></div>
+  <div class="system-info-modal" id="systemInfoPanel" role="dialog" aria-modal="true"
+    aria-labelledby="systemInfoTitle" style="display:none;">
+    <div class="system-info-header">
+      <h3 id="systemInfoTitle">
+        <svg class="symbol-icon"><use href="#icon-info"/></svg>
+        系统转换说明
+      </h3>
+      <button class="btn btn-icon-close" type="button" onclick="closeSystemConversionInfo()" title="关闭" aria-label="关闭">
+        <svg class="symbol-icon"><use href="#icon-close"/></svg>
+      </button>
+    </div>
+    <div class="system-info-body">
+      <p>系统转换使用 macOS 自带的图像转换能力，行为对齐 Finder 中选中图片后右键「快速操作 → 转换图像」的默认方式。</p>
+      <p>可选择输出格式、图像大小和是否保留元数据；不会调用第三方压缩工具。此模式仅在 macOS 上可用。</p>
+    </div>
+    <div class="system-info-footer">
+      <button class="btn btn-primary" type="button" onclick="closeSystemConversionInfo()">知道了</button>
     </div>
   </div>
 

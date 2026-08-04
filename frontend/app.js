@@ -180,6 +180,8 @@ const compareAlgorithm = document.getElementById('compareAlgorithm');
 let currentCompareResult = null;
 let currentCompareZoom = 1;
 const outputDirRow = document.getElementById('outputDirRow');
+const outputSuffixRow = document.getElementById('outputSuffixRow');
+const outputSuffixInput = document.getElementById('outputSuffix');
 
 // Quality slider
 qualitySlider.addEventListener('input', () => {
@@ -235,11 +237,47 @@ function toggleProcessingMode() {
 }
 
 // Output mode radio
+function updateOutputModeControls() {
+  var selected = document.querySelector('input[name="outputMode"]:checked');
+  var mode = selected ? selected.value : 'replace';
+  if (outputDirRow) outputDirRow.style.display = mode === 'folder' ? 'flex' : 'none';
+  if (outputSuffixRow) outputSuffixRow.style.display = mode === 'suffix' ? 'flex' : 'none';
+}
 document.querySelectorAll('input[name="outputMode"]').forEach(radio => {
   radio.addEventListener('change', () => {
-    outputDirRow.style.display = radio.value === 'folder' ? 'flex' : 'none';
+    updateOutputModeControls();
+    saveCompressSettings();
+    updateSettingsSummary();
   });
 });
+
+function getOutputSuffix() {
+  var suffix = outputSuffixInput ? outputSuffixInput.value.trim() : '';
+  return suffix || '_compressed';
+}
+
+function getResultOutputSuffix(result) {
+  return result && result.compressOptions && result.compressOptions.outputSuffix
+    ? result.compressOptions.outputSuffix
+    : getOutputSuffix();
+}
+
+function openSystemConversionInfo() {
+  var backdrop = document.getElementById('systemInfoBackdrop');
+  var panel = document.getElementById('systemInfoPanel');
+  if (!backdrop || !panel) return;
+  backdrop.style.display = 'block';
+  panel.style.display = 'block';
+  document.body.style.overflow = 'hidden';
+}
+
+function closeSystemConversionInfo() {
+  var backdrop = document.getElementById('systemInfoBackdrop');
+  var panel = document.getElementById('systemInfoPanel');
+  if (backdrop) backdrop.style.display = 'none';
+  if (panel) panel.style.display = 'none';
+  if (!comparePanel || comparePanel.style.display === 'none') document.body.style.overflow = '';
+}
 
 // ─── Drag and drop via Tauri ────────────────────────────────────
 async function setupDragDrop() {
@@ -483,7 +521,7 @@ function renderQueueResultActions(row, result) {
       e.stopPropagation();
       if (def.action === 'save') saveResult(result.file);
       else if (def.action === 'compare') openCompareByFile(result.file);
-      else if (def.action === 'restore') restoreOriginal(result.file, result.backupPath || '', result.outputMode || 'suffix', result.outputPath || '');
+      else if (def.action === 'restore') restoreOriginal(result.file, result.backupPath || '', result.outputMode || 'suffix', result.outputPath || '', result.compressOptions && result.compressOptions.outputSuffix);
       else if (def.action === 'finder') openInFinder(result.file);
       else if (def.action === 'log') copyCompressLog(result);
     });
@@ -508,6 +546,7 @@ function copyCompressLog(result) {
   lines.push('effort: ' + (opts.effort !== undefined ? opts.effort : '(\u672a\u8bbe\u7f6e)'));
   lines.push('convertToWebp: ' + (opts.convertToWebp !== undefined ? opts.convertToWebp : '(\u672a\u8bbe\u7f6e)'));
   lines.push('outputMode: ' + (opts.outputMode || '(\u672a\u8bbe\u7f6e)'));
+  lines.push('outputSuffix: ' + (opts.outputSuffix || '(\u672a\u8bbe\u7f6e)'));
   lines.push('');
   lines.push('--- \u538b\u7f29\u7ed3\u679c ---');
   if (result.success) {
@@ -587,6 +626,7 @@ function getCurrentCompressionConfig() {
       effort,
       convertToWebp: processingMode === 'advanced' && convertToWebp,
       outputMode,
+      outputSuffix: getOutputSuffix(),
       outputDir: outputMode === 'folder' ? outputDir : null,
     },
   };
@@ -853,8 +893,14 @@ function openInFinder(filePath) {
   invoke('open_in_finder', { filePath: target });
 }
 
-async function restoreOriginal(filePath, backupPath, outputMode, outputPath) {
-  const result = await invoke('restore_original', { filePath, backupPath: backupPath || null, outputMode, outputPath: outputPath || null });
+async function restoreOriginal(filePath, backupPath, outputMode, outputPath, outputSuffix) {
+  const result = await invoke('restore_original', {
+    filePath,
+    backupPath: backupPath || null,
+    outputMode,
+    outputPath: outputPath || null,
+    outputSuffix: outputSuffix || getOutputSuffix()
+  });
   if (result.success) {
     showToast('已恢复原图: ' + basename(filePath));
     results = results.filter(r => r.file !== filePath);
@@ -891,7 +937,8 @@ async function restoreAllOriginals() {
         filePath: r.file,
         backupPath: r.backupPath || null,
         outputMode: r.outputMode || 'suffix',
-        outputPath: r.outputPath || null
+        outputPath: r.outputPath || null,
+        outputSuffix: r.compressOptions && r.compressOptions.outputSuffix
       });
       successCount++;
       restoredFiles.push(r.file);
@@ -906,8 +953,9 @@ async function restoreAllOriginals() {
 
 async function exportAll() {
   if (results.length === 0) return;
-  const count = await invoke('export_all', { results: results });
-  showToast('已导出 ' + count + ' 个文件到原目录（_compressed 后缀）');
+  const suffix = getResultOutputSuffix(results[0]);
+  const count = await invoke('export_all', { results: results, outputSuffix: suffix });
+  showToast('已导出 ' + count + ' 个文件到原目录（' + suffix + ' 后缀）');
 }
 
 function clearResults() {
@@ -1228,7 +1276,11 @@ if (recompressQualitySlider) {
 })();
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && comparePanel.style.display !== 'none') {
+  if (e.key !== 'Escape') return;
+  var systemInfoPanel = document.getElementById('systemInfoPanel');
+  if (systemInfoPanel && systemInfoPanel.style.display !== 'none') {
+    closeSystemConversionInfo();
+  } else if (comparePanel.style.display !== 'none') {
     closeCompare();
   }
 });
@@ -1256,7 +1308,7 @@ function showToast(message) {
 async function restoreFromCompare() {
   if (!currentCompareResult) return;
   const r = currentCompareResult;
-  await restoreOriginal(r.file, r.backupPath || '', r.outputMode || 'suffix', r.outputPath || '');
+  await restoreOriginal(r.file, r.backupPath || '', r.outputMode || 'suffix', r.outputPath || '', r.compressOptions && r.compressOptions.outputSuffix);
   closeCompare();
 }
 
@@ -1412,7 +1464,10 @@ function updateSettingsSummary() {
     if (of) parts.push(of.value === 'original' ? '\u539f\u683c\u5f0f' : of.value.toUpperCase());
     if (sm) parts.push(sm.checked ? '\u667a\u80fd' : '\u6807\u51c6');
   }
-  if (om) parts.push(om.value === 'replace' ? '\u8986\u76d6' : (om.value === 'suffix' ? '\u540e\u7f00' : '\u76ee\u5f55'));
+  if (om) {
+    parts.push(om.value === 'replace' ? '\u8986\u76d6' : (om.value === 'suffix' ? '\u540e\u7f00' : '\u76ee\u5f55'));
+    if (om.value === 'suffix') parts.push(getOutputSuffix());
+  }
   var el = document.getElementById('settingsSummary');
   if (el) el.textContent = parts.join(' \u00b7 ');
 }
@@ -1447,6 +1502,7 @@ function saveCompressSettings() {
   if (cw) data.convertToWebp = cw.checked;
   var om = document.querySelector('input[name="outputMode"]:checked');
   if (om) data.outputMode = om.value;
+  if (outputSuffixInput) data.outputSuffix = outputSuffixInput.value;
   try { localStorage.setItem('octoshrink-settings', JSON.stringify(data)); } catch(e) {}
 }
 
@@ -1468,6 +1524,7 @@ function loadCompressSettings() {
   if (data.smartMode != null) { var sm = document.getElementById('smartMode'); if (sm) sm.checked = data.smartMode; }
   if (data.convertToWebp != null) { var cw = document.getElementById('convertToWebp'); if (cw) cw.checked = data.convertToWebp; }
   if (data.outputMode != null) { var om = document.querySelector('input[name="outputMode"][value="' + data.outputMode + '"]'); if (om) om.checked = true; }
+  if (data.outputSuffix != null && outputSuffixInput) { outputSuffixInput.value = String(data.outputSuffix); }
   processingMode = data.processingMode === 'system' ? 'system' : 'advanced';
 }
 
@@ -1478,12 +1535,14 @@ function loadCompressSettings() {
   var isMac = /Macintosh|Mac OS X/.test(navigator.userAgent);
   if (modeSwitch && !isMac) modeSwitch.style.display = 'none';
   setProcessingMode(processingMode, true);
+  updateOutputModeControls();
   var sp = document.getElementById('settingsPanel');
   if (sp) sp.style.display = 'block';
-  ['autoCompress','qualitySlider','outputFormat','compressionBackend','compressionEffort','smartMode','convertToWebp','systemOutputFormat','systemImageSize','preserveMetadata'].forEach(function(id){
+  ['autoCompress','qualitySlider','outputFormat','compressionBackend','compressionEffort','smartMode','convertToWebp','systemOutputFormat','systemImageSize','preserveMetadata','outputSuffix'].forEach(function(id){
     var el = document.getElementById(id);
     if (el) el.addEventListener('change', function(){ saveCompressSettings(); updateSettingsSummary(); });
   });
+  if (outputSuffixInput) outputSuffixInput.addEventListener('input', function(){ saveCompressSettings(); updateSettingsSummary(); });
   document.querySelectorAll('input[name="outputMode"]').forEach(function(r){
     r.addEventListener('change', function(){ saveCompressSettings(); updateSettingsSummary(); });
   });

@@ -89,6 +89,8 @@ pub struct CompressOptions {
     pub convert_to_webp: bool,
     #[serde(default = "default_mode")]
     pub output_mode: String,
+    #[serde(default = "default_output_suffix")]
+    pub output_suffix: String,
     #[serde(default)]
     pub output_dir: Option<String>,
     #[serde(default)]
@@ -103,6 +105,7 @@ fn default_format() -> String { "original".into() }
 fn default_backend() -> String { "auto".into() }
 fn default_effort() -> u32 { 6 }
 fn default_mode() -> String { "suffix".into() }
+fn default_output_suffix() -> String { "_compressed".into() }
 
 impl Default for CompressOptions {
     fn default() -> Self {
@@ -111,7 +114,8 @@ impl Default for CompressOptions {
             preserve_metadata: true,
             quality: 75, smart_mode: false, output_format: "original".into(),
             backend: "auto".into(), effort: 6, convert_to_webp: false,
-            output_mode: "suffix".into(), output_dir: None, lossless: None,
+            output_mode: "suffix".into(), output_suffix: "_compressed".into(),
+            output_dir: None, lossless: None,
         }
     }
 }
