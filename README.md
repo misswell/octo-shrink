@@ -52,6 +52,10 @@
 
 前往 [GitHub Releases](https://github.com/misswell/octo-shrink/releases) 下载对应平台安装包。
 
+### 当前版本
+
+v2.5.14：更新为白底、居中的线框 Logo，并同步全部平台图标资源。
+
 ### 基本使用
 
 1. 打开章小压
