@@ -376,7 +376,7 @@ jobs:
           DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${ARCHIVE}"
           jq -n \
             --arg version "$VERSION" \
-            --arg notes "OctoShrink ${VERSION}: 支持自定义输出文件名后缀；新增 macOS 系统转换说明，并支持 JPEG/PNG/HEIF 与 Finder 尺寸档位。" \
+            --arg notes "OctoShrink ${VERSION}: 更新 macOS 安全区适配的应用图标；支持自定义输出文件名后缀；新增 macOS 系统转换说明，并支持 JPEG/PNG/HEIF 与 Finder 尺寸档位。" \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg signature "$SIGNATURE" \
             --arg url "$DOWNLOAD_URL" \
