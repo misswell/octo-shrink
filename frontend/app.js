@@ -78,6 +78,13 @@ function getResolvedTheme(theme) {
   return theme;
 }
 
+function updateTitlebarIcon(resolvedTheme) {
+  const icon = document.querySelector('.titlebar-icon-img');
+  if (!icon) return;
+  const src = resolvedTheme === 'dark' ? icon.dataset.darkSrc : icon.dataset.lightSrc;
+  if (src && icon.getAttribute('src') !== src) icon.setAttribute('src', src);
+}
+
 function applyTheme(theme) {
   currentTheme = theme;
   localStorage.setItem('octoshrink-theme', theme);
@@ -90,6 +97,7 @@ function applyTheme(theme) {
   } else {
     document.documentElement.setAttribute('data-theme', 'light');
   }
+  updateTitlebarIcon(resolvedTheme);
 
   // 更新图标显示
   const icons = document.querySelectorAll('.theme-icon');
