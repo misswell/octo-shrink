@@ -12,65 +12,124 @@ use tauri::{Emitter, Manager};
 
 const STARTUP_THEME_FILE: &str = "startup-theme";
 
-/// 获取系统 HTTPS 代理地址（macOS 系统代理或环境变量）
-/// tauri-plugin-updater 禁用了 reqwest 的 system-proxy feature，
-/// 不会自动读取 macOS 系统代理，需要手动设置。
+/// Direct 版更新优先使用本机代理；代理不可用时回退到明确的无代理直连。
 #[cfg(all(
     target_os = "macos",
     feature = "cli-backends",
     not(feature = "inproc-backends")
 ))]
-fn get_system_proxy() -> Option<String> {
-    // 1. 先检查环境变量
-    if let Ok(proxy) = std::env::var("HTTPS_PROXY")
-        .or_else(|_| std::env::var("https_proxy"))
-        .or_else(|_| std::env::var("ALL_PROXY"))
-        .or_else(|_| std::env::var("all_proxy"))
-    {
-        if !proxy.is_empty() {
-            return Some(proxy);
+const LOCAL_UPDATE_PROXY: &str = "http://127.0.0.1:7890";
+#[cfg(all(
+    target_os = "macos",
+    feature = "cli-backends",
+    not(feature = "inproc-backends")
+))]
+const UPDATE_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+#[cfg(all(
+    target_os = "macos",
+    feature = "cli-backends",
+    not(feature = "inproc-backends")
+))]
+const UPDATE_PROXY_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+#[cfg(all(
+    target_os = "macos",
+    feature = "cli-backends",
+    not(feature = "inproc-backends")
+))]
+const UPDATE_DIRECT_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+#[cfg(all(
+    target_os = "macos",
+    feature = "cli-backends",
+    not(feature = "inproc-backends")
+))]
+const UPDATE_DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "cli-backends",
+    not(feature = "inproc-backends")
+))]
+fn updater_for_route(
+    app: &tauri::AppHandle,
+    use_proxy: bool,
+) -> Result<tauri_plugin_updater::Updater, String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let mut builder = app
+        .updater_builder()
+        .timeout(UPDATE_DOWNLOAD_TIMEOUT)
+        .configure_client(|client| client.connect_timeout(UPDATE_CONNECT_TIMEOUT));
+    if use_proxy {
+        let proxy = url::Url::parse(LOCAL_UPDATE_PROXY)
+            .map_err(|error| format!("更新代理地址无效: {error}"))?;
+        builder = builder.proxy(proxy);
+    } else {
+        builder = builder.no_proxy();
+    }
+    builder.build().map_err(|error| error.to_string())
+}
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "cli-backends",
+    not(feature = "inproc-backends")
+))]
+async fn check_update_on_route(
+    app: &tauri::AppHandle,
+    use_proxy: bool,
+) -> Result<Option<tauri_plugin_updater::Update>, String> {
+    let updater = updater_for_route(app, use_proxy)?;
+    let timeout = if use_proxy {
+        UPDATE_PROXY_CHECK_TIMEOUT
+    } else {
+        UPDATE_DIRECT_CHECK_TIMEOUT
+    };
+    tokio::time::timeout(timeout, updater.check())
+        .await
+        .map_err(|_| {
+            if use_proxy {
+                "本地代理更新检查超时".to_string()
+            } else {
+                "直连更新检查超时".to_string()
+            }
+        })?
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "cli-backends",
+    not(feature = "inproc-backends")
+))]
+struct CheckedDirectUpdate {
+    update: tauri_plugin_updater::Update,
+    via_proxy: bool,
+}
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "cli-backends",
+    not(feature = "inproc-backends")
+))]
+async fn check_update_with_proxy_fallback(
+    app: &tauri::AppHandle,
+) -> Result<Option<CheckedDirectUpdate>, String> {
+    match check_update_on_route(app, true).await {
+        Ok(update) => Ok(update.map(|update| CheckedDirectUpdate {
+            update,
+            via_proxy: true,
+        })),
+        Err(proxy_error) => {
+            log::warn!("本地代理更新检查失败，回退直连: {proxy_error}");
+            match check_update_on_route(app, false).await {
+                Ok(update) => Ok(update.map(|update| CheckedDirectUpdate {
+                    update,
+                    via_proxy: false,
+                })),
+                Err(direct_error) => Err(format!("代理和直连更新检查都失败: {direct_error}")),
+            }
         }
     }
-    // 2. 从 macOS 系统配置读取（scutil --proxy）
-    let output = std::process::Command::new("scutil")
-        .arg("--proxy")
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    let mut https_enabled = false;
-    let mut https_host: Option<String> = None;
-    let mut https_port: Option<String> = None;
-    let mut http_enabled = false;
-    let mut http_host: Option<String> = None;
-    let mut http_port: Option<String> = None;
-    for line in text.lines() {
-        let parts: Vec<&str> = line.splitn(2, ':').collect();
-        if parts.len() != 2 {
-            continue;
-        }
-        let key = parts[0].trim();
-        let val = parts[1].trim();
-        match key {
-            "HTTPSEnable" => https_enabled = val == "1",
-            "HTTPSProxy" => https_host = Some(val.to_string()),
-            "HTTPSPort" => https_port = Some(val.to_string()),
-            "HTTPEnable" => http_enabled = val == "1",
-            "HTTPProxy" => http_host = Some(val.to_string()),
-            "HTTPPort" => http_port = Some(val.to_string()),
-            _ => {}
-        }
-    }
-    if https_enabled {
-        if let (Some(h), Some(p)) = (https_host, https_port) {
-            return Some(format!("http://{}:{}", h, p));
-        }
-    }
-    if http_enabled {
-        if let (Some(h), Some(p)) = (http_host, http_port) {
-            return Some(format!("http://{}:{}", h, p));
-        }
-    }
-    None
 }
 
 static UPDATE_CANCELLED: AtomicBool = AtomicBool::new(false);
@@ -193,23 +252,11 @@ struct DirectUpdateInfo {
 ))]
 #[tauri::command]
 async fn check_for_update(app: tauri::AppHandle) -> Result<Option<DirectUpdateInfo>, String> {
-    use tauri_plugin_updater::UpdaterExt;
-
-    let mut builder = app
-        .updater_builder()
-        .timeout(std::time::Duration::from_secs(15));
-    if let Some(proxy_url) = get_system_proxy() {
-        if let Ok(url) = url::Url::parse(&proxy_url) {
-            builder = builder.proxy(url);
-        }
-    }
-    let update = builder
-        .build()
-        .map_err(|error| error.to_string())?
-        .check()
-        .await
-        .map_err(|error| error.to_string())?;
-    Ok(update.map(|update| DirectUpdateInfo {
+    let Some(checked_update) = check_update_with_proxy_fallback(&app).await? else {
+        return Ok(None);
+    };
+    let update = checked_update.update;
+    Ok(Some(DirectUpdateInfo {
         version: update.version,
         notes: update.body,
     }))
@@ -230,47 +277,25 @@ async fn check_for_update(_app: tauri::AppHandle) -> Result<Option<DirectUpdateI
     feature = "cli-backends",
     not(feature = "inproc-backends")
 ))]
-#[tauri::command]
-async fn install_update(app: tauri::AppHandle) -> Result<bool, String> {
-    use tauri_plugin_updater::UpdaterExt;
-
-    UPDATE_CANCELLED.store(false, Ordering::SeqCst);
-    let my_gen = UPDATE_GENERATION.fetch_add(1, Ordering::SeqCst);
-
-    let mut builder = app
-        .updater_builder()
-        .timeout(std::time::Duration::from_secs(60));
-    if let Some(proxy_url) = get_system_proxy() {
-        if let Ok(url) = url::Url::parse(&proxy_url) {
-            builder = builder.proxy(url);
-        }
-    }
-    let Some(update) = builder
-        .build()
-        .map_err(|error| error.to_string())?
-        .check()
-        .await
-        .map_err(|error| error.to_string())?
-    else {
-        return Ok(false);
-    };
-    let total = std::sync::Arc::new(AtomicU64::new(0));
-    let downloaded = std::sync::Arc::new(AtomicU64::new(0));
+async fn download_and_install_update(
+    update: tauri_plugin_updater::Update,
+    app: &tauri::AppHandle,
+    total: std::sync::Arc<AtomicU64>,
+    downloaded: std::sync::Arc<AtomicU64>,
+) -> Result<(), String> {
     let app_clone = app.clone();
-    let total_clone = total.clone();
-    let downloaded_clone = downloaded.clone();
-    let result = update
+    update
         .download_and_install(
-            move |chunk_len: usize, total: Option<u64>| {
+            move |chunk_len: usize, total_size: Option<u64>| {
                 if UPDATE_CANCELLED.load(Ordering::SeqCst) {
                     return;
                 }
-                if let Some(t) = total {
-                    total_clone.store(t, Ordering::Relaxed);
+                if let Some(t) = total_size {
+                    total.store(t, Ordering::Relaxed);
                 }
-                let dl = downloaded_clone.fetch_add(chunk_len as u64, Ordering::Relaxed)
-                    + chunk_len as u64;
-                let t = total_clone.load(Ordering::Relaxed);
+                let dl =
+                    downloaded.fetch_add(chunk_len as u64, Ordering::Relaxed) + chunk_len as u64;
+                let t = total.load(Ordering::Relaxed);
                 let pct: u8 = if t > 0 {
                     ((dl as f64 / t as f64) * 100.0).min(100.0) as u8
                 } else {
@@ -280,16 +305,79 @@ async fn install_update(app: tauri::AppHandle) -> Result<bool, String> {
             },
             || {},
         )
-        .await;
+        .await
+        .map_err(|error| error.to_string())
+}
 
-    if UPDATE_CANCELLED.load(Ordering::SeqCst) {
+#[cfg(all(
+    target_os = "macos",
+    feature = "cli-backends",
+    not(feature = "inproc-backends")
+))]
+fn update_was_cancelled(my_gen: u64) -> bool {
+    UPDATE_CANCELLED.load(Ordering::SeqCst)
+        || UPDATE_GENERATION.load(Ordering::SeqCst) != my_gen + 1
+}
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "cli-backends",
+    not(feature = "inproc-backends")
+))]
+fn reset_update_progress(app: &tauri::AppHandle, total: &AtomicU64, downloaded: &AtomicU64) {
+    total.store(0, Ordering::Relaxed);
+    downloaded.store(0, Ordering::Relaxed);
+    let _ = app.emit("update-progress", 0u8);
+}
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "cli-backends",
+    not(feature = "inproc-backends")
+))]
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<bool, String> {
+    UPDATE_CANCELLED.store(false, Ordering::SeqCst);
+    let my_gen = UPDATE_GENERATION.fetch_add(1, Ordering::SeqCst);
+
+    let Some(checked_update) = check_update_with_proxy_fallback(&app).await? else {
+        return Ok(false);
+    };
+    if update_was_cancelled(my_gen) {
         return Err("已取消".into());
     }
-    if UPDATE_GENERATION.load(Ordering::SeqCst) != my_gen + 1 {
+
+    let CheckedDirectUpdate { update, via_proxy } = checked_update;
+    let total = std::sync::Arc::new(AtomicU64::new(0));
+    let downloaded = std::sync::Arc::new(AtomicU64::new(0));
+
+    let first_result =
+        download_and_install_update(update, &app, total.clone(), downloaded.clone()).await;
+    let result = match first_result {
+        Ok(()) => Ok(()),
+        Err(proxy_error) if via_proxy && !update_was_cancelled(my_gen) => {
+            log::warn!("本地代理更新下载失败，回退直连: {proxy_error}");
+            reset_update_progress(&app, &total, &downloaded);
+            let direct_update = match check_update_on_route(&app, false).await {
+                Ok(Some(update)) => update,
+                Ok(None) => return Err("直连未找到可下载的更新".into()),
+                Err(error) => return Err(format!("直连更新检查失败: {error}")),
+            };
+            if update_was_cancelled(my_gen) {
+                return Err("已取消".into());
+            }
+            download_and_install_update(direct_update, &app, total, downloaded)
+                .await
+                .map_err(|direct_error| format!("代理下载失败，直连下载也失败: {direct_error}"))
+        }
+        Err(error) => Err(error),
+    };
+
+    if update_was_cancelled(my_gen) {
         return Err("已取消".into());
     }
 
-    result.map_err(|error| error.to_string())?;
+    result?;
     app.restart();
 }
 
@@ -334,7 +422,9 @@ pub fn run() {
         window.background_color = Some(startup_background);
     }
 
-    let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init());
     #[cfg(all(
         target_os = "macos",
         feature = "cli-backends",

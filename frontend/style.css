@@ -262,6 +262,13 @@ body {
 .titlebar-info-version { font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
 .titlebar-info-status { font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
 .titlebar-info-status.has-update { color: var(--accent, #4a9eff); font-weight: 600; }
+.titlebar-info-link {
+  color: var(--accent, #4a9eff);
+  font-size: 11px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.titlebar-info-link:hover { text-decoration: underline; }
 .titlebar-info-btn {
   padding: 2px 8px;
   border: 1px solid var(--border-color);

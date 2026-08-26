@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "dialog:default",
+    "opener:default",
     "core:window:allow-start-dragging",
     "allow-select-files",
     "allow-select-folder",
