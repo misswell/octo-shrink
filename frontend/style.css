@@ -79,7 +79,7 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Calm, Lucide-like icon geometry used consistently across every action. */
+/* Original solid workbench glyphs; inherit semantic colors in both themes. */
 .icon-library {
   position: absolute;
   width: 0;
@@ -92,15 +92,14 @@ body {
   height: 16px;
   display: block;
   flex: 0 0 auto;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
+  fill: currentColor;
+  stroke: none;
   stroke-linecap: round;
   stroke-linejoin: round;
   overflow: visible;
 }
-.symbol-icon-small { width: 15px; height: 15px; stroke-width: 1.9; }
-.symbol-icon-hero { width: 32px; height: 32px; stroke-width: 1.65; }
+.symbol-icon-small { width: 15px; height: 15px; }
+.symbol-icon-hero { width: 32px; height: 32px; }
 
 /* ─── Title Bar ───────────────────────────────────────────── */
 .titlebar {
@@ -554,7 +553,7 @@ body {
   outline: none;
   appearance: none;
   -webkit-appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg width='12' height='12' viewBox='0 0 24 24' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='m7 9.5 5 5 5-5' stroke='%23888' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M4 7h5l3 4 3-4h5l-8 10Z' fill='%23888'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 8px center;
   min-width: 100px;
@@ -1009,10 +1008,10 @@ body {
 .progress-file-spinner {
   width: 12px;
   height: 12px;
-  border: 1.5px solid var(--bg-selected);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.6s linear infinite;
+  border: 3px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 4px;
+  animation: spin 1s ease-in-out infinite;
   flex-shrink: 0;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -1600,4 +1599,8 @@ body {
   text-align: center;
   color: var(--text-tertiary);
   font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-file-spinner { animation: none; }
 }

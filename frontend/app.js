@@ -537,7 +537,7 @@ function applyQueueView() {
   var key = sort ? sort.value : 'import';
   var direction = document.getElementById('queueSortDirection');
   if (direction) {
-    direction.textContent = queueSortDescending ? '↓ 降序' : '↑ 升序';
+    direction.innerHTML = iconMarkup(queueSortDescending ? 'sort-desc' : 'sort-asc', true) + (queueSortDescending ? ' 降序' : ' 升序');
     direction.setAttribute('aria-label', queueSortDescending ? '当前降序，点击切换升序' : '当前升序，点击切换降序');
   }
   var byFile = new Map(results.map(function(result) { return [result.file, result]; }));
