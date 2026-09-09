@@ -497,6 +497,7 @@ mod tests {
             output_mode: "suffix".into(),
             output_suffix: "_compressed".into(),
             output_dir: None,
+            source_roots: Vec::new(),
             lossless: None,
         };
         eprintln!("[TEST] calling compress_image on {:?}", test_file);

@@ -155,7 +155,8 @@ cargo test --features inproc-backends          # 进程内版
 ---|---|---|---|
 | 选文件/文件夹 | tauri_plugin_dialog::pick_* 无限制 | 同上 + 写入 BookmarkStore | 沙盒需书签才能续访 |
 | 拖放（drag-drop） | Tauri drop payload 直给路径 | 同上 + bookmark 化 | 沙盒需 security-scoped URL |
-| walk_dir 递归 | fs::read_dir 任意路径 | 仅在已书签根内递归 | 沙盒只认授权范围 |
+| walk_dir 递归 | fs::read_dir 任意路径；稳定排序并按规范路径去重，前端批次使用已展开文件快照 | 同上 + 仅在已书签根内递归 | 沙盒只认授权范围；队列不能因重复目录或处理期间新增文件而改变 |
+| 队列批次文件清单 | 导入完成后展开并去重，开始处理时只提交该批次快照；目录根通过 `sourceRoots` 保留相对输出路径 | 同上，书签授权范围内执行 | 避免处理中追加、异步扫描乱序和清空后旧事件回流 |
 | write_output_file | fs::write；系统跨格式覆盖时改扩展名并避让同名目标；后缀模式使用自定义 `outputSuffix`（默认 `_compressed`） | 系统转换开始前强制经文件夹选择器授权，随后写入已授权目录；后缀模式使用同一自定义 `outputSuffix` | 沙盒不能依赖单文件授权写入旁路新文件；两版需保持输出命名一致 |
 | restore_original | fs::copy(backup, original)；删除本次生成的 output_path | 同上，原路径及输出路径需 bookmark | 沙盒；两版恢复语义一致 |
 | open_in_finder | Command::new("open").arg("-R") | tauri-plugin-opener（NSWorkspace）| 沙盒禁 spawn Finder |
@@ -421,4 +422,10 @@ gh run watch --exit-status
 **Direct 版一键签名公证**（仅 ARM，日常开发用）：
 ```bash
 bash scripts/notarize.sh    # 自动构建->签名->公证->装订->DMG，全程无密码
+
+## Migrated local state and reusable release rules
+
+- The project-specific reusable release scripts are `/Users/guofeng/Code/solo/octo-shrink/scripts/notarize.sh` and `/Users/guofeng/Code/solo/octo-shrink/scripts/sign_notarize_macos_ci.sh`; inspect and reuse them before designing another macOS notarization flow.
+- Do not treat the historical `octoshrink-notary` Keychain profile as currently usable solely because it appears in older notes. Verify it with `xcrun notarytool history` in the current session; if it fails, report the exact missing credential rather than guessing.
+- The historical cleanup removed about 19G from `/Users/guofeng/Code/solo/octo-shrink/src-tauri/target`; this generated cache can be moved to the Trash and rebuilt, but release artifacts and worktrees with uncommitted changes must be preserved.
 ```

@@ -376,7 +376,7 @@ jobs:
           DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${ARCHIVE}"
           jq -n \
             --arg version "$VERSION" \
-            --arg notes "OctoShrink ${VERSION}: 修复 macOS 15 应用图标安全区与圆角显示；支持自定义输出文件名后缀；新增 macOS 系统转换说明，并支持 JPEG/PNG/HEIF 与 Finder 尺寸档位。" \
+            --arg notes "OctoShrink ${VERSION}: 统一重绘 30 个界面功能图标，适配明暗主题与小尺寸显示；修复图片队列追加、去重、处理中新增及旧事件回流问题。" \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg signature "$SIGNATURE" \
             --arg url "$DOWNLOAD_URL" \
@@ -410,6 +410,7 @@ jobs:
             - 3 线程并发批量处理
             - 暗黑模式（自动/亮色/暗黑）
             - macOS Direct 版支持签名校验的在线更新
+            - 图片队列支持多次追加、重复去重、处理中追加与失败重试
             - 压缩前后实时对比
             - 一键恢复全部原图
             - 压缩失败显示错误详情

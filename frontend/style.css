@@ -554,7 +554,7 @@ body {
   outline: none;
   appearance: none;
   -webkit-appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg width='8' height='5' viewBox='0 0 8 5' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l3 3 3-3' stroke='%23999' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg width='12' height='12' viewBox='0 0 24 24' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='m7 9.5 5 5 5-5' stroke='%23888' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 8px center;
   min-width: 100px;
@@ -1067,9 +1067,12 @@ body {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: 88vw;
-  max-width: 780px;
-  max-height: 88vh;
+  width: min(1280px, calc(100vw - 24px));
+  height: min(900px, calc(100vh - 24px));
+  max-width: none;
+  max-height: none;
+  min-width: 320px;
+  min-height: 320px;
   background: var(--bg-content);
   border: 0.5px solid var(--border);
   border-radius: var(--radius);
@@ -1106,6 +1109,8 @@ body {
   padding: 16px;
   overflow-y: auto;
   flex: 1;
+  min-width: 0;
+  min-height: 0;
 }
 .compare-toolbar-right {
   display: flex;
