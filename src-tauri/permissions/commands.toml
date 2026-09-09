@@ -21,6 +21,8 @@ permissions = [
   "allow-set-startup-theme",
   "allow-check-for-update",
   "allow-install-update",
+  "allow-open-compare-window",
+  "allow-take-compare-window-payload",
 ]
 
 [[permission]]
@@ -127,3 +129,13 @@ commands.allow = ["install_update"]
 identifier = "allow-cancel-update"
 description = "Cancel an in-progress update download"
 commands.allow = ["cancel_update"]
+
+[[permission]]
+identifier = "allow-open-compare-window"
+description = "Open or focus the standalone image comparison window"
+commands.allow = ["open_compare_window"]
+
+[[permission]]
+identifier = "allow-take-compare-window-payload"
+description = "Take the pending comparison payload inside the compare window"
+commands.allow = ["take_compare_window_payload"]

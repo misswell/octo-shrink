@@ -1191,23 +1191,45 @@ body {
   transition: background 0.12s;
 }
 .zoom-reset-btn:hover { background: var(--bg-hover); color: var(--text); }
-.compare-modal.fullscreen {
-  width: 100vw;
-  max-width: 100vw;
-  height: 100vh;
-  max-height: 100vh;
+/* ─── Compare Window（独立原生窗口页面）───────────────────── */
+/* compare.html 复用 .compare-modal 的内部布局，但作为窗口根元素铺满视口。 */
+body.compare-page { background: var(--bg-content); }
+body.compare-page .compare-modal {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  transform: none;
+  border: none;
   border-radius: 0;
+  box-shadow: none;
+  animation: none;
 }
-.compare-modal.fullscreen .compare-modal-body {
+body.compare-page .compare-modal-body {
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
-.compare-modal.fullscreen .compare-slider-outer {
+body.compare-page .compare-slider-outer {
   flex: 1;
   min-height: 0;
   aspect-ratio: auto;
 }
+body.compare-page .compare-info,
+body.compare-page .compare-recompress { flex-shrink: 0; }
+.compare-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  min-height: 0;
+}
+.compare-nav-btn:disabled { opacity: 0.35; cursor: default; }
+.compare-nav-btn:disabled:hover { background: transparent; color: var(--text-secondary); }
 
 /* ─── Compare Slider ──────────────────────────────────────── */
 .compare-slider-outer {
@@ -1548,11 +1570,6 @@ body {
 .theme-icon { display: inline-block; }
 /* ─── Dropzone content wrapper ────────────────────────────── */
 .dropzone-content { }
-/* Fullscreen is a neutral view action; reserve red hover feedback for Close. */
-.compare-fullscreen-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
 
 /* ─── Legacy progress-file (used by app.js) ───────────────── */
 .queue-item-remove {

@@ -163,7 +163,7 @@ fn read_startup_theme_file(path: &Path) -> Option<&'static str> {
     supported_theme(&std::fs::read_to_string(path).ok()?)
 }
 
-fn read_startup_theme() -> Option<&'static str> {
+pub(crate) fn read_startup_theme() -> Option<&'static str> {
     read_startup_theme_file(&startup_theme_path())
 }
 
@@ -204,11 +204,22 @@ fn system_theme() -> &'static str {
     "light"
 }
 
-fn startup_background(theme: &str) -> tauri::webview::Color {
+pub(crate) fn startup_background(theme: &str) -> tauri::webview::Color {
     match theme {
         "dark" => tauri::webview::Color(28, 28, 30, 255),
         _ => tauri::webview::Color(236, 236, 237, 255),
     }
+}
+
+/// App Store 版本地 HTTP 服务器实际绑定的端口（41845-41847 之一）。
+/// 新建 compare 窗口时用它在 remote origin 上拼接前端页面地址。
+#[cfg(feature = "inproc-backends")]
+static FRONTEND_HTTP_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
+#[cfg(feature = "inproc-backends")]
+pub fn frontend_http_port() -> Option<u16> {
+    let port = FRONTEND_HTTP_PORT.load(std::sync::atomic::Ordering::SeqCst);
+    if port == 0 { None } else { Some(port) }
 }
 
 #[cfg(test)]
@@ -435,6 +446,7 @@ pub fn run() {
     builder
         .manage(AppState {
             cancel_queue: Mutex::new(HashSet::new()),
+            pending_compare: Mutex::new(None),
         })
         .on_page_load(|_webview, _payload| {
             // App Store 版在 HTTP 页面完成加载前隐藏 WebView，避免导航期间露出
@@ -448,7 +460,9 @@ pub fn run() {
             }
         })
         .on_window_event(|window, event| {
-            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+            // 只有主窗口关闭才退出应用；compare 独立窗口关闭时按默认行为仅关闭自身
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) && window.label() == "main"
+            {
                 window.app_handle().exit(0);
             }
         })
@@ -470,6 +484,8 @@ pub fn run() {
             commands::export_all,
             commands::get_file_sizes,
             commands::restore_all,
+            commands::open_compare_window,
+            commands::take_compare_window_payload,
             set_startup_theme,
             check_for_update,
             install_update,
@@ -498,6 +514,7 @@ pub fn run() {
                     .find_map(|p| TcpListener::bind(format!("localhost:{}", p)).ok())
                     .expect("HTTP bind failed: 41845-41847 均被占用");
                 let port = listener.local_addr().unwrap().port();
+                FRONTEND_HTTP_PORT.store(port, Ordering::SeqCst);
                 let dir = resource_dir.clone();
 
                 let ready = Arc::new(AtomicBool::new(false));

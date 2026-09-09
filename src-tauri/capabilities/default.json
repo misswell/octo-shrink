@@ -1,13 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": ["main"],
+  "description": "Capability for the main window and the standalone compare window",
+  "windows": ["main", "compare"],
   "permissions": [
     "core:default",
     "dialog:default",
     "opener:default",
     "core:window:allow-start-dragging",
+    "core:window:allow-close",
     "allow-select-files",
     "allow-select-folder",
     "allow-select-output-dir",
@@ -28,7 +29,9 @@
     "allow-set-startup-theme",
     "allow-check-for-update",
     "allow-install-update",
-    "allow-cancel-update"
+    "allow-cancel-update",
+    "allow-open-compare-window",
+    "allow-take-compare-window-payload"
   ],
   "remote": {
     "urls": ["http://localhost:41845", "http://localhost:41846", "http://localhost:41847"]

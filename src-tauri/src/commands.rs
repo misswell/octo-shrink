@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::engine::{self, CompressOptions, CompressResult, EngineResult};
@@ -16,7 +16,12 @@ use crate::engine::{self, CompressOptions, CompressResult, EngineResult};
 /// Shared app state.
 pub struct AppState {
     pub cancel_queue: Mutex<HashSet<String>>,
+    /// 主窗口打开对比时暂存的待渲染载荷，compare 窗口加载完成后取走。
+    pub pending_compare: Mutex<Option<serde_json::Value>>,
 }
+
+/// 独立对比窗口的固定 label（capabilities/default.json 按 label 授权）。
+pub const COMPARE_WINDOW_LABEL: &str = "compare";
 
 // ─── Progress event payload ─────────────────────────────────────
 #[derive(Serialize, Clone)]
@@ -877,6 +882,67 @@ pub fn get_file_sizes(file_paths: Vec<String>) -> Vec<u64> {
         .iter()
         .map(|fp| engine::get_file_size(&PathBuf::from(fp)))
         .collect()
+}
+
+/// 打开（或聚焦）独立对比窗口，并把待渲染载荷暂存到 AppState。
+///
+/// 载荷形如 `{ results: [...成功结果对象...], index: <当前文件下标> }`，由前端组装；
+/// compare 窗口页面加载完成后调用 take_compare_window_payload 取走，避免创建竞态。
+/// 同步命令默认在主线程执行，可安全创建窗口。
+///
+/// 两条产物线行为一致，仅前端页面 URL 按 feature 分叉：
+/// - Direct（cli-backends）：tauri:// 协议内嵌资源 compare.html
+/// - App Store（inproc-backends）：沙盒阻止 tauri://，走本地 HTTP 服务器
+///   （http://localhost:<port>/compare.html，端口见 lib.rs 固定端口段）
+#[tauri::command]
+pub fn open_compare_window(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    payload: serde_json::Value,
+) -> Result<(), String> {
+    *state.pending_compare.lock().unwrap() = Some(payload.clone());
+
+    if let Some(window) = app.get_webview_window(COMPARE_WINDOW_LABEL) {
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        let _ = app.emit_to(COMPARE_WINDOW_LABEL, "compare-open", payload);
+        return Ok(());
+    }
+
+    let theme = crate::read_startup_theme().unwrap_or("light");
+    let background = crate::startup_background(theme);
+
+    #[cfg(feature = "inproc-backends")]
+    let url = {
+        let port = crate::frontend_http_port()
+            .ok_or_else(|| "本地前端服务未启动，无法打开对比窗口".to_string())?;
+        let parsed: tauri::Url = format!("http://localhost:{port}/compare.html")
+            .parse()
+            .map_err(|error| format!("对比窗口地址无效: {error}"))?;
+        tauri::WebviewUrl::External(parsed)
+    };
+    #[cfg(not(feature = "inproc-backends"))]
+    let url = tauri::WebviewUrl::App("compare.html".into());
+
+    let builder = tauri::webview::WebviewWindowBuilder::new(&app, COMPARE_WINDOW_LABEL, url)
+        .title("原图对比")
+        .inner_size(1080.0, 780.0)
+        .min_inner_size(560.0, 440.0)
+        .resizable(true)
+        .background_color(background);
+    // 沙盒版窗口在页面加载完成前隐藏（on_page_load 里 show），避免露出白色画布
+    #[cfg(feature = "inproc-backends")]
+    let builder = builder.visible(false);
+    builder
+        .build()
+        .map_err(|error| format!("创建对比窗口失败: {error}"))?;
+    Ok(())
+}
+
+/// compare 窗口页面就绪后取走暂存的对比载荷（取后即清）。
+#[tauri::command]
+pub fn take_compare_window_payload(state: State<'_, AppState>) -> Option<serde_json::Value> {
+    state.pending_compare.lock().unwrap().take()
 }
 
 /// Export all compressed results to their original directories with the selected suffix.

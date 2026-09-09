@@ -176,20 +176,6 @@ const totalRate = document.getElementById('totalRate');
 const resultCount = document.getElementById('resultCount');
 const resultTotalSavings = document.getElementById('resultTotalSavings');
 const outputDirDisplay = document.getElementById('outputDirDisplay');
-const comparePanel = document.getElementById('comparePanel');
-const compareOriginalImg = document.getElementById('compareOriginalImg');
-const compareCompressedImg = document.getElementById('compareCompressedImg');
-const compareHandle = document.getElementById('compareHandle');
-const compareFilename = document.getElementById('compareFilename');
-const compareOriginalSize = document.getElementById('compareOriginalSize');
-const compareCompressedSize = document.getElementById('compareCompressedSize');
-const compareSavings = document.getElementById('compareSavings');
-const compareAlgorithm = document.getElementById('compareAlgorithm');
-let currentCompareResult = null;
-let currentCompareZoom = 1;
-let compareRequestId = 0;
-let compareSliderFrame = 0;
-let pendingCompareSliderValue = null;
 const outputDirRow = document.getElementById('outputDirRow');
 const outputSuffixRow = document.getElementById('outputSuffixRow');
 const outputSuffixInput = document.getElementById('outputSuffix');
@@ -287,7 +273,7 @@ function closeSystemConversionInfo() {
   var panel = document.getElementById('systemInfoPanel');
   if (backdrop) backdrop.style.display = 'none';
   if (panel) panel.style.display = 'none';
-  if (!comparePanel || comparePanel.style.display === 'none') document.body.style.overflow = '';
+  document.body.style.overflow = '';
 }
 
 // ─── Drag and drop via Tauri ────────────────────────────────────
@@ -838,6 +824,7 @@ function clearAllFiles() {
   var queueStats = document.getElementById('queueStats');
   if (queueStats) queueStats.style.display = 'none';
   updateQueueSummary();
+  emitCompareResultsChanged();
 }
 
 // ─── Compression ────────────────────────────────────────────────
@@ -983,6 +970,7 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
       renderQueueResultActions(row, result);
       updateStats();
       updateQueueSummary();
+      emitCompareResultsChanged();
     }
 
     if (status === 'cancelled' && row && !batchSettled.has(file)) {
@@ -1080,6 +1068,7 @@ async function compressOneFile(filePath) {
   const row = fileRows[filePath];
   if (!row) return;
   results = results.filter(function(r) { return r.file !== filePath; });
+  emitCompareResultsChanged();
 
   row.classList.remove('waiting', 'done', 'failed', 'restored', 'cancelled');
   row.classList.add('compressing');
@@ -1128,6 +1117,7 @@ async function restoreOriginal(filePath, backupPath, outputMode, outputPath, out
     markQueueRowRestored(filePath);
     showResults();
     updateQueueSummary();
+    emitCompareResultsChanged();
   } else {
     showToast('恢复失败: ' + (result.error || '未知错误'));
   }
@@ -1170,6 +1160,7 @@ async function restoreAllOriginals() {
   results = [];
   showResults();
   updateQueueSummary();
+  emitCompareResultsChanged();
 }
 
 async function exportAll() {
@@ -1210,6 +1201,7 @@ function clearResults() {
   var list = document.getElementById('fileQueueList');
   if (list) list.innerHTML = '';
   updateQueueSummary();
+  emitCompareResultsChanged();
 }
 
 function formatBytes(bytes) {
@@ -1219,356 +1211,73 @@ function formatBytes(bytes) {
   return (bytes / (1024 * 1024)).toFixed(1) + 'MB';
 }
 
-// ─── Comparison ─────────────────────────────────────────────────
-async function recompressWithQuality(quality) {
-  if (!currentCompareResult) return;
-  const result = currentCompareResult;
-  const requestId = compareRequestId;
-  const recompressBtn = document.getElementById('recompressBtn');
-  if (recompressBtn) recompressBtn.disabled = true;
+// ─── Comparison（独立原生窗口）─────────────────────────────────
+// 对比视图已迁移到独立窗口 compare.html + compare_window.js：
+// 可自由缩放（可大于主窗口）、拥有自己的红绿灯，避免误关主窗口。
+// 本侧只负责组装载荷、打开/聚焦窗口，并把结果集变化推送给该窗口。
 
-  try {
-    const options = {
-      quality: parseInt(quality),
-      backend: 'auto',
-      effort: 6,
-      outputMode: 'suffix',
-      outputFormat: result.type || 'original',
-    };
-    const newResult = await invoke('compress_single', { filePath: result.file, options: options });
-    if (newResult && newResult.success && newResult.outputPath) {
-      if (requestId !== compareRequestId || !currentCompareResult || currentCompareResult.file !== result.file) return;
-      // Load the new compressed image
-      const loadedPreview = await loadOriginalImage(compareCompressedImg, newResult.outputPath);
-      if (requestId !== compareRequestId || !currentCompareResult || currentCompareResult.file !== result.file) return;
-      if (!loadedPreview) {
-        showToast('重新压缩预览加载失败');
-        return;
-      }
-      compareCompressedSize.textContent = newResult.compressedSizeFormatted || '?';
-      compareSavings.textContent = (newResult.savings >= 0 ? '-' : '+') + Math.abs(newResult.savings).toFixed(1) + '%';
-      compareAlgorithm.textContent = newResult.algorithm || '?';
+function comparableResults() {
+  return results.filter(function(r) { return r && r.success; });
+}
 
-      const idx = results.findIndex(r => r.file === result.file);
-      if (idx >= 0) {
-        const existing = results[idx];
-        results[idx] = Object.assign({}, existing, newResult, {
-          // compress_single writes a temporary preview. Keep the real output
-          // and backup metadata so Restore still targets the original result.
-          outputPath: existing.outputPath,
-          backupPath: existing.backupPath,
-          outputMode: existing.outputMode,
-        });
-      }
-      currentCompareResult = Object.assign({}, result, newResult, {
-        outputPath: result.outputPath,
-        backupPath: result.backupPath,
-        outputMode: result.outputMode,
-      });
-      showToast('重新压缩完成 (质量: ' + quality + '%)');
-    } else {
-      showToast('重新压缩失败');
-    }
-  } catch (err) {
-    showToast('重新压缩出错: ' + (err.message || err));
-  } finally {
-    if (recompressBtn) recompressBtn.disabled = false;
+function openCompare(result) {
+  const okResults = comparableResults();
+  if (!okResults.length) {
+    showToast('没有可对比的结果');
+    return;
   }
-}
-
-async function openCompare(result) {
-  const requestId = ++compareRequestId;
-  const modalBackdrop = document.getElementById('modalBackdrop');
-  const outer = document.getElementById('compareSliderOuter');
-
-  // Make the modal participate in layout before measuring it. Keeping it
-  // invisible avoids flashing an empty/old image while the two files load.
-  if (outer) outer.style.aspectRatio = '4 / 3';
-  if (modalBackdrop) modalBackdrop.style.display = 'block';
-  comparePanel.style.display = 'flex';
-  comparePanel.style.visibility = 'hidden';
-  document.body.style.overflow = 'hidden';
-
-  releaseCompareImages();
-  currentCompareResult = result;
-
-  try {
-    // These reads are independent and can be performed concurrently.
-    const originalPath = result.backupPath || result.file;
-    const compressedPath = result.outputPath || result.file;
-    const loaded = await Promise.all([
-      loadOriginalImage(compareOriginalImg, originalPath),
-      loadOriginalImage(compareCompressedImg, compressedPath),
-    ]);
-    if (requestId !== compareRequestId) return;
-    if (!loaded[0] || !loaded[1]) {
-      showToast(!loaded[0] ? '无法加载原图' : '无法加载压缩图');
-      closeCompare();
-      return;
-    }
-
-    const setRatio = function() {
-      const w = compareOriginalImg.naturalWidth || compareCompressedImg.naturalWidth;
-      const h = compareOriginalImg.naturalHeight || compareCompressedImg.naturalHeight;
-      if (outer && w && h) outer.style.aspectRatio = w + ' / ' + h;
-    };
-    setRatio();
-    // The aspect-ratio change affects clientHeight; wait for the browser to
-    // commit it before calculating the initial fit zoom.
-    await new Promise(resolve => requestAnimationFrame(resolve));
-    if (requestId !== compareRequestId) return;
-
-    const fitW = compareOriginalImg.naturalWidth || compareCompressedImg.naturalWidth || 1;
-    const fitH = compareOriginalImg.naturalHeight || compareCompressedImg.naturalHeight || 1;
-    let fitZoom = outer ? Math.min(outer.clientWidth / fitW, outer.clientHeight / fitH, 1) : 1;
-    if (!isFinite(fitZoom) || fitZoom <= 0) fitZoom = 1;
-    setCompareZoom(fitZoom);
-    updateCompareSlider(50);
-
-    compareFilename.textContent = basename(result.file);
-    compareOriginalSize.textContent = result.originalSizeFormatted || '?';
-    compareCompressedSize.textContent = result.compressedSizeFormatted || '?';
-    compareSavings.textContent = (result.savings >= 0 ? '-' : '+') + Math.abs(result.savings).toFixed(1) + '%';
-    compareAlgorithm.textContent = result.algorithm || '?';
-    comparePanel.style.visibility = 'visible';
-  } catch (err) {
-    if (requestId !== compareRequestId) return;
-    showToast('打开对比失败: ' + (err.message || err));
-    closeCompare();
-  }
-}
-
-// ── Compare slider: clip-path + handle position ──────────────────
-function updateCompareSlider(value) {
-  var sliderBar = document.getElementById('compareRange');
-  value = Math.max(0, Math.min(100, parseFloat(value) || 0));
-  if (sliderBar) sliderBar.value = Math.round(value);
-
-  var outer = document.getElementById('compareSliderOuter');
-  var container = document.getElementById('compareSliderContainer');
-  var zoom = currentCompareZoom || 1;
-  var cw = outer.clientWidth;
-  var sl = container.scrollLeft;
-  var imgW = compareOriginalImg.naturalWidth || compareCompressedImg.naturalWidth || cw;
-
-  var clipLinePx = sl + (value / 100) * cw;
-  var imgWidth = imgW * zoom;
-  var clipLinePct = (clipLinePx / imgWidth) * 100;
-  var clipRight = Math.max(0, Math.min(100, 100 - clipLinePct));
-
-  compareOriginalImg.style.clipPath = 'inset(0 ' + clipRight + '% 0 0)';
-  compareHandle.style.left = clipLinePct + '%';
-  compareHandle.style.display = 'block';
-}
-
-function scheduleCompareSlider(value) {
-  pendingCompareSliderValue = value;
-  if (compareSliderFrame) return;
-  compareSliderFrame = requestAnimationFrame(function() {
-    compareSliderFrame = 0;
-    updateCompareSlider(pendingCompareSliderValue);
-  });
-}
-
-function setCompareZoom(level) {
-  level = Math.max(0.1, Math.min(8, level));
-  var outer = document.getElementById('compareSliderOuter');
-  var container = document.getElementById('compareSliderContainer');
-  var wrapper = document.getElementById('compareImgWrapper');
-  var oldZoom = currentCompareZoom || 1;
-  var cw = outer.clientWidth;
-  var ch = outer.clientHeight;
-  var imgW = compareOriginalImg.naturalWidth || compareCompressedImg.naturalWidth || 1;
-  var imgH = compareOriginalImg.naturalHeight || compareCompressedImg.naturalHeight || 1;
-
-  var sliderBar = document.getElementById('compareRange');
-  var sliderVal = sliderBar ? parseFloat(sliderBar.value) : 50;
-
-  var oldImgW = imgW * oldZoom;
-  var oldImgH = imgH * oldZoom;
-  var axisRatio = (container.scrollLeft + (sliderVal / 100) * cw) / oldImgW;
-  var centerYRatio = (container.scrollTop + ch / 2) / oldImgH;
-
-  currentCompareZoom = level;
-  wrapper.style.width = (imgW * level) + 'px';
-  wrapper.style.height = (imgH * level) + 'px';
-
-  var newImgW = imgW * level;
-  var newImgH = imgH * level;
-  container.scrollLeft = axisRatio * newImgW - (sliderVal / 100) * cw;
-  container.scrollTop = centerYRatio * newImgH - ch / 2;
-
-  var zoomSlider = document.getElementById('zoomSlider');
-  if (zoomSlider) zoomSlider.value = level;
-  var zoomValue = document.getElementById('zoomValue');
-  if (zoomValue) zoomValue.textContent = Math.round(level * 100) + '%';
-
-  updateCompareSlider(sliderVal);
-}
-
-function stepZoom(delta) {
-  setCompareZoom(currentCompareZoom + delta);
-}
-
-function toggleFullscreen() {
-  comparePanel.classList.toggle('fullscreen');
-  requestAnimationFrame(function() {
-    var sliderBar = document.getElementById('compareRange');
-    updateCompareSlider(sliderBar ? sliderBar.value : 50);
-  });
-}
-
-function closeCompare() {
-  compareRequestId++;
-  comparePanel.style.display = 'none';
-  comparePanel.style.visibility = '';
-  comparePanel.classList.remove('fullscreen');
-  document.getElementById('modalBackdrop').style.display = 'none';
-  document.body.style.overflow = '';
-  currentCompareResult = null;
-  releaseCompareImages();
-  setCompareZoom(1);
-}
-
-function releaseCompareImages() {
-  if (compareOriginalImg) {
-    compareOriginalImg.onload = null;
-    compareOriginalImg.removeAttribute('src');
-  }
-  if (compareCompressedImg) {
-    compareCompressedImg.onload = null;
-    compareCompressedImg.removeAttribute('src');
-  }
-}
-
-var recompressQualitySlider = document.getElementById('recompressQuality');
-var recompressQualityValue = document.getElementById('recompressQualityValue');
-if (recompressQualitySlider) {
-  recompressQualitySlider.addEventListener('input', function() {
-    recompressQualityValue.textContent = recompressQualitySlider.value + '%';
-  });
-}
-
-(function setupCompareDrag() {
-  var outer = document.getElementById('compareSliderOuter');
-  var container = document.getElementById('compareSliderContainer');
-  var sliderBar = document.getElementById('compareRange');
-  if (!outer || !container) return;
-
-  var isPointerDown = false;
-
-  function getPercent(clientX) {
-    var rect = outer.getBoundingClientRect();
-    var x = clientX - rect.left;
-    return Math.max(0, Math.min(100, (x / rect.width) * 100));
-  }
-
-  outer.addEventListener('mousemove', function(e) {
-    var pct = getPercent(e.clientX);
-    scheduleCompareSlider(pct);
-  });
-
-  function onPointerDown(e) {
-    isPointerDown = true;
-    e.preventDefault();
-    if (window.getSelection) {
-      var selection = window.getSelection();
-      if (selection) selection.removeAllRanges();
-    }
-    var clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    scheduleCompareSlider(getPercent(clientX));
-  }
-
-  function onPointerMove(e) {
-    if (!isPointerDown) return;
-    e.preventDefault();
-    var clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    scheduleCompareSlider(getPercent(clientX));
-  }
-
-  function onPointerUp() { isPointerDown = false; }
-
-  outer.addEventListener('mousedown', onPointerDown);
-  outer.addEventListener('touchstart', onPointerDown, { passive: false });
-  document.addEventListener('mousemove', onPointerMove);
-  document.addEventListener('mouseup', onPointerUp);
-  document.addEventListener('touchmove', onPointerMove, { passive: false });
-  document.addEventListener('touchend', onPointerUp);
-
-  if (sliderBar) {
-    sliderBar.addEventListener('input', function() {
-      scheduleCompareSlider(this.value);
+  let index = okResults.findIndex(function(r) { return r.file === result.file; });
+  if (index < 0) index = 0;
+  invoke('open_compare_window', { payload: { results: okResults, index: index } })
+    .catch(function(err) {
+      showToast('打开对比窗口失败: ' + (err.message || err));
     });
-  }
+}
 
-  outer.addEventListener('wheel', function(e) {
-    if (e.metaKey) {
-      e.preventDefault();
-      navigateCompare(e.deltaY < 0 ? -1 : 1);
-      return;
-    }
-    // Let ordinary wheel events scroll the zoomed image. Use Ctrl/Alt plus
-    // wheel for zoom so panning remains possible without a separate control.
-    if (!e.ctrlKey && !e.altKey) {
-      e.preventDefault();
-      container.scrollLeft += e.deltaX || (e.shiftKey ? e.deltaY : 0);
-      container.scrollTop += e.deltaY;
-      return;
-    }
-    e.preventDefault();
-    var oldZoom = currentCompareZoom || 1;
-    var delta = e.deltaY < 0 ? 0.25 : -0.25;
-    var newZoom = Math.max(0.1, Math.min(8, oldZoom + delta));
+function openCompareByFile(filePath) {
+  const result = results.find(r => r.file === filePath);
+  if (result) openCompare(result);
+}
 
-    var rect = outer.getBoundingClientRect();
-    var mouseX = e.clientX - rect.left;
-    var cw = outer.clientWidth;
-    var ch = outer.clientHeight;
-    var imgW = compareOriginalImg.naturalWidth || compareCompressedImg.naturalWidth || cw;
-    var imgH = compareOriginalImg.naturalHeight || compareCompressedImg.naturalHeight || ch;
-    var mouseImgX = (container.scrollLeft + mouseX) / (imgW * oldZoom);
-    var mouseImgY = (container.scrollTop + (e.clientY - rect.top)) / (imgH * oldZoom);
+// 结果集变化（恢复/清空/压缩完成等）时推送快照，对比窗口据此刷新或置空
+function emitCompareResultsChanged() {
+  try {
+    window.__TAURI__.event.emit('compare-results-changed', { results: comparableResults() });
+  } catch (_) {}
+}
 
-    currentCompareZoom = newZoom;
-    var wrapper = document.getElementById('compareImgWrapper');
-    wrapper.style.width = (imgW * newZoom) + 'px';
-    wrapper.style.height = (imgH * newZoom) + 'px';
-    container.scrollLeft = mouseImgX * (imgW * newZoom) - mouseX;
-    container.scrollTop = mouseImgY * (imgH * newZoom) - (e.clientY - rect.top);
-
-    var zoomSlider = document.getElementById('zoomSlider');
-    if (zoomSlider) zoomSlider.value = newZoom;
-    var zoomValue = document.getElementById('zoomValue');
-    if (zoomValue) zoomValue.textContent = Math.round(newZoom * 100) + '%';
-
-    var sliderVal = sliderBar ? parseFloat(sliderBar.value) : 50;
-    updateCompareSlider(sliderVal);
-  }, { passive: false });
-
-  container.addEventListener('scroll', function() {
-    if (sliderBar) scheduleCompareSlider(sliderBar.value);
+listen('compare-recompressed', function(event) {
+  const payload = event.payload || {};
+  const updated = payload.result;
+  if (!payload.filePath || !updated) return;
+  const idx = results.findIndex(function(r) { return r.file === payload.filePath; });
+  if (idx < 0) return;
+  const existing = results[idx];
+  results[idx] = Object.assign({}, existing, updated, {
+    // compress_single writes a temporary preview. Keep the real output
+    // and backup metadata so Restore still targets the original result.
+    outputPath: existing.outputPath,
+    backupPath: existing.backupPath,
+    outputMode: existing.outputMode,
   });
+});
 
-  var zoomSliderEl = document.getElementById('zoomSlider');
-  if (zoomSliderEl) {
-    zoomSliderEl.addEventListener('input', function() {
-      setCompareZoom(parseFloat(this.value));
-    });
-  }
-})();
+listen('compare-restored', function(event) {
+  const filePath = event.payload && event.payload.filePath;
+  if (!filePath) return;
+  results = results.filter(function(r) { return r.file !== filePath; });
+  markQueueRowRestored(filePath);
+  showResults();
+  updateQueueSummary();
+  showToast('已恢复原图: ' + basename(filePath));
+});
 
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   var systemInfoPanel = document.getElementById('systemInfoPanel');
   if (systemInfoPanel && systemInfoPanel.style.display !== 'none') {
     closeSystemConversionInfo();
-  } else if (comparePanel.style.display !== 'none') {
-    closeCompare();
   }
-});
-
-window.addEventListener('beforeunload', () => {
-  releaseCompareImages();
 });
 
 function showToast(message) {
@@ -1585,13 +1294,6 @@ function showToast(message) {
     toast.style.transition = 'opacity 0.3s';
     setTimeout(() => toast.remove(), 300);
   }, 2500);
-}
-
-async function restoreFromCompare() {
-  if (!currentCompareResult) return;
-  const r = currentCompareResult;
-  await restoreOriginal(r.file, r.backupPath || '', r.outputMode || 'suffix', r.outputPath || '', r.compressOptions && r.compressOptions.outputSuffix);
-  closeCompare();
 }
 
 function toggleTitlebarInfo() {
@@ -1709,24 +1411,6 @@ async function checkDirectUpdate() {
   } catch (error) {
     console.warn('在线更新检查失败:', error);
   }
-}
-
-function navigateCompare(direction) {
-  if (!currentCompareResult) return;
-  var okResults = results.filter(function(r) { return r && r.success; });
-  if (okResults.length === 0) return;
-  // Recompression replaces the result object. Locate the current item by its
-  // stable file path so next/previous remains correct after that update.
-  var idx = okResults.findIndex(function(r) { return r.file === currentCompareResult.file; });
-  if (idx < 0) idx = 0;
-  var newIdx = Math.max(0, Math.min(okResults.length - 1, idx + direction));
-  if (newIdx === idx) return;
-  openCompare(okResults[newIdx]);
-}
-
-function openCompareByFile(filePath) {
-  const result = results.find(r => r.file === filePath);
-  if (result) openCompare(result);
 }
 
 function updateSettingsSummary() {

@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>原图对比</title>
+  <script>
+    // 在外链 CSS / JS 加载前同步确定首帧主题，避免 WebView 默认白色画布闪烁。
+    (() => {
+      let mode = 'auto';
+      try {
+        const stored = localStorage.getItem('octoshrink-theme');
+        if (stored === 'light' || stored === 'dark') mode = stored;
+      } catch (_) {}
+      const resolved = mode === 'auto'
+        ? (window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+        : mode;
+      document.documentElement.dataset.themeMode = mode;
+      document.documentElement.dataset.theme = resolved;
+      document.documentElement.style.colorScheme = resolved;
+      document.documentElement.style.backgroundColor = resolved === 'dark' ? '#1c1c1e' : '#ececed';
+    })();
+  </script>
+  <style>
+    html, body { background: #ececed; }
+    html[data-theme="dark"], html[data-theme="dark"] body { background: #1c1c1e; }
+  </style>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="compare-page">
+  <!-- Original image-workbench glyphs: solid silhouettes and negative-space cuts. -->
+  <svg class="icon-library" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <symbol id="icon-recompress" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 3h13a6 6 0 0 1 6 6v5h-3V9a3 3 0 0 0-3-3H8v3L2 4Z M21 21H8a6 6 0 0 1-6-6v-5h3v5a3 3 0 0 0 3 3h8v-3l6 5Z M9 10h6v4H9Z"/></symbol>
+      <symbol id="icon-restore" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M2 9l7-6v4h5a8 8 0 0 1 0 16h-4v-3h4a5 5 0 0 0 0-10H9v4Z M3 17h4v6H3Z"/></symbol>
+      <symbol id="icon-compare" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M2 5h8v14H2Z M4 15h4l-2-4Z M14 5h8v14h-8Z M16 8v8h4V8Z M11 2h2v20h-2Z"/></symbol>
+      <symbol id="icon-reset-view" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M2 4h6v3H5v10h3v3H2Z M16 4h6v16h-6v-3h3V7h-3Z M8 9h8v6H8Z"/></symbol>
+      <symbol id="icon-zoom-in" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 3h15v15H3Z M9 6v3H6v3h3v3h3v-3h3V9h-3V6Z M19 16l4 4-3 3-4-4Z"/></symbol>
+      <symbol id="icon-zoom-out" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 3h15v15H3Z M6 9v3h9V9Z M19 16l4 4-3 3-4-4Z"/></symbol>
+      <symbol id="icon-close" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M5 3l7 7 7-7 2 2-7 7 7 7-2 2-7-7-7 7-2-2 7-7-7-7Z"/></symbol>
+      <symbol id="icon-split-grip" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M1 12l6-6v12Z M17 6l6 6-6 6Z M10 4h4v16h-4Z"/></symbol>
+      <symbol id="icon-chevron-left" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M15 3l2 2-7 7 7 7-2 2-9-9Z"/></symbol>
+      <symbol id="icon-chevron-right" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M9 3L7 5l7 7-7 7 2 2 9-9Z"/></symbol>
+    </defs>
+  </svg>
+
+  <div class="compare-modal" id="comparePanel">
+    <div class="compare-modal-header">
+      <h3>
+        <svg class="symbol-icon"><use href="#icon-compare"/></svg>
+        原图对比
+      </h3>
+      <div class="compare-toolbar-right">
+        <button class="zoom-step-btn compare-nav-btn" id="prevBtn" onclick="navigateCompare(-1)" title="上一个（⌘+滚轮）" aria-label="上一个">
+          <svg class="symbol-icon symbol-icon-small"><use href="#icon-chevron-left"/></svg>
+        </button>
+        <button class="zoom-step-btn compare-nav-btn" id="nextBtn" onclick="navigateCompare(1)" title="下一个（⌘+滚轮）" aria-label="下一个">
+          <svg class="symbol-icon symbol-icon-small"><use href="#icon-chevron-right"/></svg>
+        </button>
+        <div class="compare-zoom-control">
+          <button class="zoom-step-btn" onclick="stepZoom(-0.25)" title="缩小" aria-label="缩小"><svg class="symbol-icon symbol-icon-small"><use href="#icon-zoom-out"/></svg></button>
+          <input type="range" class="zoom-slider" id="zoomSlider" min="0.1" max="8" step="0.1" value="1">
+          <button class="zoom-step-btn" onclick="stepZoom(0.25)" title="放大" aria-label="放大"><svg class="symbol-icon symbol-icon-small"><use href="#icon-zoom-in"/></svg></button>
+          <span class="zoom-value" id="zoomValue">100%</span>
+          <button class="zoom-reset-btn" onclick="setCompareZoom(1)" title="重置缩放" aria-label="重置缩放"><svg class="symbol-icon symbol-icon-small"><use href="#icon-reset-view"/></svg></button>
+        </div>
+        <button class="btn btn-icon-close" onclick="closeCompareWindow()" title="关闭">
+          <svg class="symbol-icon"><use href="#icon-close"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="compare-empty" id="compareEmpty">加载中…</div>
+    <div class="compare-modal-body" id="compareModalBody" style="display:none;">
+      <div class="compare-slider-outer" id="compareSliderOuter">
+        <div class="compare-slider-container" id="compareSliderContainer">
+          <div class="compare-img-wrapper" id="compareImgWrapper">
+            <img id="compareCompressedImg" class="compare-img-base" alt="压缩后" draggable="false">
+            <img id="compareOriginalImg" class="compare-img-overlay" alt="原图" draggable="false">
+            <div class="compare-handle" id="compareHandle">
+              <div class="compare-handle-line"></div>
+              <div class="compare-handle-circle">
+                <svg class="symbol-icon"><use href="#icon-split-grip"/></svg>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="compare-label label-left">原图</div>
+        <div class="compare-label label-right">压缩后</div>
+        <input type="range" class="compare-slider-bar" id="compareRange" min="0" max="100" value="50">
+      </div>
+      <div class="compare-info">
+        <div class="compare-info-item" style="width:100%;margin-bottom:4px;">
+          <span class="compare-info-label">文件名</span>
+          <span class="compare-info-value" id="compareFilename">-</span>
+        </div>
+        <div class="compare-info-row">
+          <div class="compare-info-item">
+            <span class="compare-info-label">原图大小</span>
+            <span class="compare-info-value original" id="compareOriginalSize">-</span>
+          </div>
+          <div class="compare-info-item">
+            <span class="compare-info-label">压缩后大小</span>
+            <span class="compare-info-value compressed" id="compareCompressedSize">-</span>
+          </div>
+          <div class="compare-info-item">
+            <span class="compare-info-label">节省</span>
+            <span class="compare-info-value savings" id="compareSavings">-</span>
+          </div>
+          <div class="compare-info-item">
+            <span class="compare-info-label">算法</span>
+            <span class="compare-info-value" id="compareAlgorithm">-</span>
+          </div>
+        </div>
+      </div>
+      <div class="compare-recompress">
+        <div class="recompress-row">
+          <label>重新压缩质量</label>
+          <input type="range" id="recompressQuality" min="10" max="100" value="75">
+          <span id="recompressQualityValue">75%</span>
+          <button class="btn btn-primary btn-recompress" id="recompressBtn" onclick="recompressWithQuality(document.getElementById('recompressQuality').value)">
+            <svg class="symbol-icon symbol-icon-small"><use href="#icon-recompress"/></svg>
+            重新压缩
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="compare-modal-footer">
+      <button class="btn btn-secondary" onclick="restoreFromCompare()">
+        <svg class="symbol-icon"><use href="#icon-restore"/></svg>
+        恢复原图
+      </button>
+      <button class="btn btn-primary" onclick="closeCompareWindow()">
+        <svg class="symbol-icon"><use href="#icon-close"/></svg>
+        关闭
+      </button>
+    </div>
+  </div>
+
+  <script src="compare_window.js"></script>
+</body>
+</html>
