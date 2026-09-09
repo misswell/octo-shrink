@@ -491,8 +491,6 @@ function handleFilePaths(filePaths) {
 // Global state for compression
 var fileRows = {};
 var cancelledFiles = new Set();
-var totalDone = 0;
-var totalFiles = 0;
 var pendingImports = Promise.resolve();
 var queueRevision = 0;
 var activeBatchPaths = [];
@@ -504,8 +502,12 @@ var startButtonTimer = null;
 function updateQueueSummary() {
   var summary = document.getElementById('queueSummary');
   if (!summary) return;
-  if (isCompressing) {
-    summary.textContent = totalDone + ' / ' + totalFiles + ' 已完成';
+  var queued = new Set(files);
+  var completed = new Set(results.filter(function(result) {
+    return result && queued.has(result.file);
+  }).map(function(result) { return result.file; }));
+  if (isCompressing || completed.size > 0) {
+    summary.textContent = completed.size + ' / ' + queued.size + ' 已完成';
   } else {
     summary.textContent = files.length + ' 个文件';
   }
@@ -761,8 +763,6 @@ function clearAllFiles() {
   results = [];
   fileRows = {};
   if (!wasCompressing) cancelledFiles.clear();
-  totalDone = 0;
-  totalFiles = 0;
   pendingAutoCompress = false;
   if (!wasCompressing) {
     activeBatchPaths = [];
@@ -852,19 +852,13 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
     return [filePath, fileRows[filePath]];
   }));
   activeBatchRevision = runRevision;
-  var batchDone = 0;
   var batchSettled = new Set();
 
   var queueStats = document.getElementById('queueStats');
   if (queueStats) queueStats.style.display = 'flex';
-  statOriginal.textContent = '0B';
-  statCompressed.textContent = '0B';
-  totalSavings.textContent = '0B';
-  totalRate.textContent = '0%';
+  updateStats();
 
   cancelledFiles.clear();
-  totalDone = 0;
-  totalFiles = batchPaths.length;
   updateQueueSummary();
 
   var startBtn = document.getElementById('startCompressBtn');
@@ -928,15 +922,11 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
       results.push(result);
       renderQueueResultActions(row, result);
       updateStats();
-      batchDone++;
-      totalDone = batchDone;
       updateQueueSummary();
     }
 
     if (status === 'cancelled' && row && !batchSettled.has(file)) {
       batchSettled.add(file);
-      batchDone++;
-      totalDone = batchDone;
       row.classList.add('cancelled');
       row.querySelector('.queue-item-icon').innerHTML = iconMarkup('minus', true);
       row.querySelector('.queue-item-status').textContent = '已跳过';
@@ -1143,8 +1133,6 @@ function clearResults() {
   inputPaths = [];
   fileRows = {};
   if (!wasCompressing) cancelledFiles.clear();
-  totalDone = 0;
-  totalFiles = 0;
   pendingAutoCompress = false;
   if (!wasCompressing) {
     activeBatchPaths = [];
