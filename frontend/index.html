@@ -151,7 +151,23 @@
           <span class="stat-value stat-rate" id="totalRate">0%</span>
         </div>
       </div>
+      <div class="queue-view-controls">
+        <label class="queue-failure-filter"><input type="checkbox" id="queueFailedOnly" onchange="applyQueueView()">只显示失败</label>
+        <div class="queue-sort-controls">
+          <label for="queueSortKey">排序</label>
+          <select id="queueSortKey" onchange="applyQueueView()">
+            <option value="import">导入顺序</option>
+            <option value="name">名称</option>
+            <option value="original">原始大小</option>
+            <option value="compressed">压缩后大小</option>
+            <option value="ratio">压缩比</option>
+            <option value="status">状态</option>
+          </select>
+          <button class="btn btn-small btn-ghost" id="queueSortDirection" type="button" onclick="toggleQueueSortDirection()" aria-label="当前升序，点击切换降序">↑ 升序</button>
+        </div>
+      </div>
       <div class="file-queue-list" id="fileQueueList"></div>
+      <div class="queue-filter-empty" id="queueFilterEmpty" hidden>没有失败的文件</div>
       <div class="queue-actions">
         <button class="btn btn-secondary" onclick="selectFiles()">
           <svg class="symbol-icon"><use href="#icon-add-images"/></svg>

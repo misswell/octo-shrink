@@ -1569,3 +1569,35 @@ body {
 .progress-file-bar {
   display: none;
 }
+
+/* Queue filters and sorting affect presentation only. */
+.queue-view-controls, .queue-sort-controls, .queue-failure-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.queue-view-controls {
+  justify-content: space-between;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+  border-bottom: 0.5px solid var(--border-light);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.queue-failure-filter { cursor: pointer; }
+.queue-failure-filter input { accent-color: var(--accent); }
+.queue-sort-controls select {
+  color: var(--text);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 4px 6px;
+  font: inherit;
+}
+.file-queue-item[hidden], .queue-filter-empty[hidden] { display: none; }
+.queue-filter-empty {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}

@@ -491,6 +491,7 @@ function handleFilePaths(filePaths) {
 // Global state for compression
 var fileRows = {};
 var cancelledFiles = new Set();
+var queueSortDescending = false;
 var pendingImports = Promise.resolve();
 var queueRevision = 0;
 var activeBatchPaths = [];
@@ -512,6 +513,7 @@ function updateQueueSummary() {
     summary.textContent = files.length + ' 个文件';
   }
   updateBulkActionButtons();
+  applyQueueView();
 }
 
 function updateBulkActionButtons() {
@@ -519,6 +521,60 @@ function updateBulkActionButtons() {
   if (!restoreBtn) return;
   var hasRestorable = results.some(function(r) { return r && r.success; });
   restoreBtn.style.display = hasRestorable ? 'inline-flex' : 'none';
+}
+
+function toggleQueueSortDirection() {
+  queueSortDescending = !queueSortDescending;
+  applyQueueView();
+}
+
+function applyQueueView() {
+  var list = document.getElementById('fileQueueList');
+  if (!list) return;
+  var filter = document.getElementById('queueFailedOnly');
+  var failedOnly = !!(filter && filter.checked);
+  var sort = document.getElementById('queueSortKey');
+  var key = sort ? sort.value : 'import';
+  var direction = document.getElementById('queueSortDirection');
+  if (direction) {
+    direction.textContent = queueSortDescending ? '↓ 降序' : '↑ 升序';
+    direction.setAttribute('aria-label', queueSortDescending ? '当前降序，点击切换升序' : '当前升序，点击切换降序');
+  }
+  var byFile = new Map(results.map(function(result) { return [result.file, result]; }));
+  var states = ['failed', 'compressing', 'waiting', 'done', 'restored', 'cancelled'];
+  var entries = files.map(function(file, index) {
+    var row = fileRows[file];
+    var result = byFile.get(file);
+    var value = index;
+    if (key === 'name') value = basename(file);
+    if (key === 'original') value = result ? result.originalSize : row && row.originalSize;
+    if (key === 'compressed') value = result && result.success ? result.compressedSize : null;
+    if (key === 'ratio') value = result && result.success ? result.savings : null;
+    if (key === 'status') value = states.findIndex(function(state) { return row && row.classList.contains(state); });
+    return { file: file, row: row, index: index, value: value };
+  });
+  entries.sort(function(a, b) {
+    // Unknown sizes and unfinished compression ratios stay last in either direction.
+    var aMissing = a.value == null || (typeof a.value === 'number' && !Number.isFinite(a.value));
+    var bMissing = b.value == null || (typeof b.value === 'number' && !Number.isFinite(b.value));
+    if (aMissing !== bMissing) return aMissing ? 1 : -1;
+    var compared = aMissing ? 0 : typeof a.value === 'string'
+      ? a.value.localeCompare(b.value, 'zh-CN', { numeric: true, sensitivity: 'base' })
+      : a.value - b.value;
+    return (queueSortDescending ? -compared : compared) || a.index - b.index;
+  });
+  var visible = 0;
+  Object.keys(fileRows).forEach(function(file) {
+    if (!files.includes(file)) fileRows[file].hidden = failedOnly;
+  });
+  entries.forEach(function(entry, index) {
+    if (!entry.row) return;
+    entry.row.hidden = failedOnly && !entry.row.classList.contains('failed');
+    if (!entry.row.hidden) visible++;
+    if (list.children[index] !== entry.row) list.insertBefore(entry.row, list.children[index] || null);
+  });
+  var empty = document.getElementById('queueFilterEmpty');
+  if (empty) empty.hidden = !failedOnly || visible > 0;
 }
 
 async function renderFileQueue() {
@@ -544,18 +600,21 @@ async function renderFileQueue() {
     // appendChild also moves an existing row, preserving the queue order.
     list.appendChild(fileRows[files[i]]);
   }
+  applyQueueView();
   // Fetch file sizes for newly added rows only (preserve existing row state)
   if (newFiles.length > 0) {
     try {
       const sizes = await invoke('get_file_sizes', { filePaths: newFiles });
       for (var j = 0; j < newFiles.length; j++) {
         var row = fileRows[newFiles[j]];
+        if (row && sizes[j] !== undefined) row.originalSize = sizes[j];
         if (row && sizes[j] !== undefined && row.classList.contains('waiting')) {
           var sizeEl = row.querySelector('.queue-item-size');
           if (sizeEl) sizeEl.textContent = formatBytes(sizes[j]);
         }
       }
     } catch (e) { /* ignore */ }
+    applyQueueView();
   }
 }
 
@@ -889,6 +948,7 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
       row.querySelector('.queue-item-status').textContent = processingActionText('progress');
       var rmBtn = row.querySelector('.queue-item-remove');
       if (rmBtn) rmBtn.style.display = 'none';
+      applyQueueView();
     }
 
     if (result && !batchSettled.has(result.file)) {
