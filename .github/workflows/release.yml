@@ -376,7 +376,7 @@ jobs:
           DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${ARCHIVE}"
           jq -n \
             --arg version "$VERSION" \
-            --arg notes "OctoShrink ${VERSION}: 统一重绘 30 个界面功能图标，适配明暗主题与小尺寸显示；修复图片队列追加、去重、处理中新增及旧事件回流问题。" \
+            --arg notes "OctoShrink ${VERSION}: 更新为深色蓝光压缩图标；使用透明圆角安全区，兼容 macOS 15、26、27，并同步 Direct/App Store 两条产物线。" \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg signature "$SIGNATURE" \
             --arg url "$DOWNLOAD_URL" \
@@ -405,6 +405,7 @@ jobs:
             | Linux | `.deb` / `.AppImage` | 内置压缩工具，开箱即用 |
 
             ### 功能
+            - 更新深色蓝光压缩图标，兼容 macOS 15、26、27
             - 支持 PNG/JPG/GIF/WebP/AVIF/JPEG XL 压缩
             - macOS 支持系统原生 JPEG/PNG/HEIF 转换与 Finder 尺寸档位
             - 3 线程并发批量处理
