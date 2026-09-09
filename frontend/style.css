@@ -79,7 +79,7 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Calm, Lucide-like icon geometry used consistently across every action. */
+/* Original solid workbench glyphs; inherit semantic colors in both themes. */
 .icon-library {
   position: absolute;
   width: 0;
@@ -92,15 +92,14 @@ body {
   height: 16px;
   display: block;
   flex: 0 0 auto;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
+  fill: currentColor;
+  stroke: none;
   stroke-linecap: round;
   stroke-linejoin: round;
   overflow: visible;
 }
-.symbol-icon-small { width: 15px; height: 15px; stroke-width: 1.9; }
-.symbol-icon-hero { width: 32px; height: 32px; stroke-width: 1.65; }
+.symbol-icon-small { width: 15px; height: 15px; }
+.symbol-icon-hero { width: 32px; height: 32px; }
 
 /* ─── Title Bar ───────────────────────────────────────────── */
 .titlebar {
@@ -262,6 +261,13 @@ body {
 .titlebar-info-version { font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
 .titlebar-info-status { font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
 .titlebar-info-status.has-update { color: var(--accent, #4a9eff); font-weight: 600; }
+.titlebar-info-link {
+  color: var(--accent, #4a9eff);
+  font-size: 11px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.titlebar-info-link:hover { text-decoration: underline; }
 .titlebar-info-btn {
   padding: 2px 8px;
   border: 1px solid var(--border-color);
@@ -547,7 +553,7 @@ body {
   outline: none;
   appearance: none;
   -webkit-appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg width='8' height='5' viewBox='0 0 8 5' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l3 3 3-3' stroke='%23999' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M4 7h5l3 4 3-4h5l-8 10Z' fill='%23888'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 8px center;
   min-width: 100px;
@@ -1002,10 +1008,10 @@ body {
 .progress-file-spinner {
   width: 12px;
   height: 12px;
-  border: 1.5px solid var(--bg-selected);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.6s linear infinite;
+  border: 3px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 4px;
+  animation: spin 1s ease-in-out infinite;
   flex-shrink: 0;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -1060,9 +1066,12 @@ body {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: 88vw;
-  max-width: 780px;
-  max-height: 88vh;
+  width: min(1280px, calc(100vw - 24px));
+  height: min(900px, calc(100vh - 24px));
+  max-width: none;
+  max-height: none;
+  min-width: 320px;
+  min-height: 320px;
   background: var(--bg-content);
   border: 0.5px solid var(--border);
   border-radius: var(--radius);
@@ -1099,6 +1108,8 @@ body {
   padding: 16px;
   overflow-y: auto;
   flex: 1;
+  min-width: 0;
+  min-height: 0;
 }
 .compare-toolbar-right {
   display: flex;
@@ -1180,14 +1191,45 @@ body {
   transition: background 0.12s;
 }
 .zoom-reset-btn:hover { background: var(--bg-hover); color: var(--text); }
-.compare-modal.fullscreen {
-  width: 100vw;
-  max-width: 100vw;
-  height: 100vh;
-  max-height: 100vh;
+/* ─── Compare Window（独立原生窗口页面）───────────────────── */
+/* compare.html 复用 .compare-modal 的内部布局，但作为窗口根元素铺满视口。 */
+body.compare-page { background: var(--bg-content); }
+body.compare-page .compare-modal {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  transform: none;
+  border: none;
   border-radius: 0;
+  box-shadow: none;
+  animation: none;
 }
-.compare-modal.fullscreen .compare-slider-outer { flex: 1; }
+body.compare-page .compare-modal-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+body.compare-page .compare-slider-outer {
+  flex: 1;
+  min-height: 0;
+  aspect-ratio: auto;
+}
+body.compare-page .compare-info,
+body.compare-page .compare-recompress { flex-shrink: 0; }
+.compare-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  min-height: 0;
+}
+.compare-nav-btn:disabled { opacity: 0.35; cursor: default; }
+.compare-nav-btn:disabled:hover { background: transparent; color: var(--text-secondary); }
 
 /* ─── Compare Slider ──────────────────────────────────────── */
 .compare-slider-outer {
@@ -1528,11 +1570,6 @@ body {
 .theme-icon { display: inline-block; }
 /* ─── Dropzone content wrapper ────────────────────────────── */
 .dropzone-content { }
-/* Fullscreen is a neutral view action; reserve red hover feedback for Close. */
-.compare-fullscreen-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
 
 /* ─── Legacy progress-file (used by app.js) ───────────────── */
 .queue-item-remove {
@@ -1547,4 +1584,40 @@ body {
 .queue-item-remove:hover { background: var(--danger-light); color: var(--danger); }
 .progress-file-bar {
   display: none;
+}
+
+/* Queue filters and sorting affect presentation only. */
+.queue-view-controls, .queue-sort-controls, .queue-failure-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.queue-view-controls {
+  justify-content: space-between;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+  border-bottom: 0.5px solid var(--border-light);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.queue-failure-filter { cursor: pointer; }
+.queue-failure-filter input { accent-color: var(--accent); }
+.queue-sort-controls select {
+  color: var(--text);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 4px 6px;
+  font: inherit;
+}
+.file-queue-item[hidden], .queue-filter-empty[hidden] { display: none; }
+.queue-filter-empty {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-file-spinner { animation: none; }
 }

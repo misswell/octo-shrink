@@ -54,7 +54,7 @@
 
 ### 当前版本
 
-v2.5.16：支持自定义输出后缀，并新增 macOS 系统转换说明。
+v2.5.30：图片对比升级为独立窗口——可自由缩放（支持放大到超过主窗口）、可全屏，拥有自己的关闭按钮不再误触主窗口；对比窗口内支持切换文件、调整质量重新压缩与恢复原图。
 
 ### 基本使用
 
@@ -214,3 +214,9 @@ octoshrink/
 ## 📄 License
 
 MIT
+
+---
+
+## 👨‍💻 作者的其他开源项目
+
+**[MacPilot](https://github.com/misswell/MacPilot)** —— 开源 macOS 菜单栏效率工具箱（Swift 原生 · 零第三方依赖）：应用自动退出规则、BLE 靠近解锁、窗口切换器、剪贴板历史、平滑滚动、画中画、录屏、截图贴图等 11 合 1，Apple 公证签名，[免费下载](https://github.com/misswell/MacPilot/releases/latest)。觉得有用欢迎点个 Star ⭐

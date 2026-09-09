@@ -136,6 +136,7 @@ cargo test --features inproc-backends          # 进程内版
 - ✅ macOS 系统转换模式已接入：两条产物线共用 ImageIO/CoreGraphics，支持 JPEG/PNG/HEIF、Finder 尺寸档位和元数据保留，不调用外部进程
 - ✅ 输出文件名后缀支持自定义：默认 `_compressed`，两条产物线共用 `outputSuffix`，并对路径分隔符做安全清理
 - ✅ 两条产物线功能对齐：JXL 已从前端输出格式下拉移除（两版一致）；GIF 两版均有压缩功能（Direct gifsicle 减色更优，App Store image crate 重编码，属质量差异非功能差异）
+- ✅ 对比视图已改为独立原生窗口（未发版）：`compare.html` + `compare_window.js`，label="compare"，由 `open_compare_window` 命令创建（Direct 用 tauri:// 内嵌页，App Store 用本地 HTTP 页），自由缩放可大于主窗口、自带红绿灯；载荷经 `pending_compare` 状态 + `take_compare_window_payload` 首屏取回，`compare-open` / `compare-results-changed` 事件双向同步；`on_window_event` 仅在 label=="main" 关闭时 exit(0)
 - 🟡 App Store 审核待提交：2.2.9 已上传 ASC，需补全元数据 + 回复 network.server 解释（路径B）后提交审核
 - ⬜ 引擎迁移后续：JXL（未来接入 jpegxl-sys 后可恢复 UI 选项）；GIF 减色优化（未来可用 imagequant 逐帧量化，当前有帧间闪烁风险暂不做）
 
@@ -155,9 +156,11 @@ cargo test --features inproc-backends          # 进程内版
 ---|---|---|---|
 | 选文件/文件夹 | tauri_plugin_dialog::pick_* 无限制 | 同上 + 写入 BookmarkStore | 沙盒需书签才能续访 |
 | 拖放（drag-drop） | Tauri drop payload 直给路径 | 同上 + bookmark 化 | 沙盒需 security-scoped URL |
-| walk_dir 递归 | fs::read_dir 任意路径 | 仅在已书签根内递归 | 沙盒只认授权范围 |
+| walk_dir 递归 | fs::read_dir 任意路径；稳定排序并按规范路径去重，前端批次使用已展开文件快照 | 同上 + 仅在已书签根内递归 | 沙盒只认授权范围；队列不能因重复目录或处理期间新增文件而改变 |
+| 队列批次文件清单 | 导入完成后展开并去重，开始处理时只提交该批次快照；目录根通过 `sourceRoots` 保留相对输出路径 | 同上，书签授权范围内执行 | 避免处理中追加、异步扫描乱序和清空后旧事件回流 |
 | write_output_file | fs::write；系统跨格式覆盖时改扩展名并避让同名目标；后缀模式使用自定义 `outputSuffix`（默认 `_compressed`） | 系统转换开始前强制经文件夹选择器授权，随后写入已授权目录；后缀模式使用同一自定义 `outputSuffix` | 沙盒不能依赖单文件授权写入旁路新文件；两版需保持输出命名一致 |
 | restore_original | fs::copy(backup, original)；删除本次生成的 output_path | 同上，原路径及输出路径需 bookmark | 沙盒；两版恢复语义一致 |
+| 对比窗口（compare 独立窗口）| WebviewUrl::App 加载内嵌 compare.html，经 convertFileSrc / read_image_dataurl 读图 | WebviewUrl::External 指向本地 HTTP 服务器 `http://localhost:<port>/compare.html`（`frontend_http_port()`），经 read_image_dataurl（bookmark 授权范围内）读图，窗口创建时 `visible(false)` + on_page_load show 防白屏 | 沙盒阻止 tauri://；两版窗口行为一致，URL 按 feature 分叉 |
 | open_in_finder | Command::new("open").arg("-R") | tauri-plugin-opener（NSWorkspace）| 沙盒禁 spawn Finder |
 | ~/Library/... 访问 | 任意 | 仅 App Support / Caches / Tmp（sandbox 允许子集）| 沙盒 |
 
@@ -258,7 +261,7 @@ xcrun productbuild --component \
 **正确方案（v2.2.9，缺一不可）**：
 - `lib.rs` `#[cfg(feature = "inproc-backends")]` 块：`TcpListener::bind` **固定端口段** `[41845u16, 41846, 41847]`（带 fallback 防冲突），serve resource_dir 前端，`window.navigate("http://localhost:PORT/")`
 - `entitlements-appstore.plist`：`network.server` + `network.client` 必需
-- `capabilities/default.json`：当前 20 个 `allow-*` app 命令权限 + `remote.urls: ["http://localhost:41845","http://localhost:41846","http://localhost:41847"]`（**精确匹配带端口 origin**）+ `core:window:allow-start-dragging`
+- `capabilities/default.json`：当前 22 个 `allow-*` app 命令权限 + `remote.urls: ["http://localhost:41845","http://localhost:41846","http://localhost:41847"]`（**精确匹配带端口 origin**）+ `core:window:allow-start-dragging` + `core:window:allow-close`；`windows` 必须同时含 `"main"` 和 `"compare"`（独立对比窗口按 label 授权，漏掉 compare 会让对比窗口 IPC 静默失效）
 - 启动白闪：前端把最终解析出的 `light/dark` 通过 `set_startup_theme` 写入 `NSHomeDirectory()/Library/Application Support/OctoShrink/startup-theme`（App Store 自动落入沙盒容器）；Rust 在 `Builder::run` 创建窗口前读取主题（首次使用 macOS 系统外观）并改写运行时 `WindowConfig.background_color`。本地 HTTP 资源必须返回 `Cache-Control: no-store`，否则 WKWebView 可能复用旧版主题脚本。不要等到 `setup()` 后才设置背景，窗口创建瞬间会漏出静态浅色帧。
 
 **勿再犯**：
@@ -271,10 +274,11 @@ xcrun productbuild --component \
 
 ### 4. IPC 权限（App Store 版必须配置）
 
-- 在 `capabilities/default.json` 中显式声明所有 app 命令的 permission（当前 20 个）
+- 在 `capabilities/default.json` 中显式声明所有 app 命令的 permission（当前 22 个）
 - 创建 `permissions/commands.toml` 定义权限 schema
 - 不配置 → 前端 invoke 全部失败（静默，不报错）
 - Direct 版不需要此配置（非沙盒，不检查 ACL）
+- 新增窗口时必须把窗口 label 加入 capabilities 的 `windows` 数组（如独立对比窗口 "compare"），否则新窗口内所有 invoke 被拒
 
 ### 5. 沙盒文件访问
 
@@ -421,4 +425,10 @@ gh run watch --exit-status
 **Direct 版一键签名公证**（仅 ARM，日常开发用）：
 ```bash
 bash scripts/notarize.sh    # 自动构建->签名->公证->装订->DMG，全程无密码
+
+## Migrated local state and reusable release rules
+
+- The project-specific reusable release scripts are `/Users/guofeng/Code/solo/octo-shrink/scripts/notarize.sh` and `/Users/guofeng/Code/solo/octo-shrink/scripts/sign_notarize_macos_ci.sh`; inspect and reuse them before designing another macOS notarization flow.
+- Do not treat the historical `octoshrink-notary` Keychain profile as currently usable solely because it appears in older notes. Verify it with `xcrun notarytool history` in the current session; if it fails, report the exact missing credential rather than guessing.
+- The historical cleanup removed about 19G from `/Users/guofeng/Code/solo/octo-shrink/src-tauri/target`; this generated cache can be moved to the Trash and rebuilt, but release artifacts and worktrees with uncommitted changes must be preserved.
 ```

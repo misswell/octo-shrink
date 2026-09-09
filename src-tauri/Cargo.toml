@@ -30,7 +30,8 @@ mozjpeg = { version = "0.10", optional = true }
 webp = { version = "0.2", optional = true, default-features = false }
 ravif = { version = "0.11", optional = true, default-features = false }
 png = { version = "0.18", optional = true, features = ["zlib-rs"] }
-tauri-plugin-updater = { version = "2", optional = true }
+tauri-plugin-opener = "2"
+tauri-plugin-updater = { version = "2.10", optional = true }
 url = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]

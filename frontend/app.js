@@ -176,17 +176,6 @@ const totalRate = document.getElementById('totalRate');
 const resultCount = document.getElementById('resultCount');
 const resultTotalSavings = document.getElementById('resultTotalSavings');
 const outputDirDisplay = document.getElementById('outputDirDisplay');
-const comparePanel = document.getElementById('comparePanel');
-const compareOriginalImg = document.getElementById('compareOriginalImg');
-const compareCompressedImg = document.getElementById('compareCompressedImg');
-const compareHandle = document.getElementById('compareHandle');
-const compareFilename = document.getElementById('compareFilename');
-const compareOriginalSize = document.getElementById('compareOriginalSize');
-const compareCompressedSize = document.getElementById('compareCompressedSize');
-const compareSavings = document.getElementById('compareSavings');
-const compareAlgorithm = document.getElementById('compareAlgorithm');
-let currentCompareResult = null;
-let currentCompareZoom = 1;
 const outputDirRow = document.getElementById('outputDirRow');
 const outputSuffixRow = document.getElementById('outputSuffixRow');
 const outputSuffixInput = document.getElementById('outputSuffix');
@@ -284,7 +273,7 @@ function closeSystemConversionInfo() {
   var panel = document.getElementById('systemInfoPanel');
   if (backdrop) backdrop.style.display = 'none';
   if (panel) panel.style.display = 'none';
-  if (!comparePanel || comparePanel.style.display === 'none') document.body.style.overflow = '';
+  document.body.style.overflow = '';
 }
 
 // ─── Drag and drop via Tauri ────────────────────────────────────
@@ -322,16 +311,26 @@ setupDragDrop();
 
 // File selection
 async function selectFiles() {
-  const filePaths = await invoke('select_files');
-  if (filePaths && filePaths.length > 0) {
-    handleFilePaths(filePaths);
+  try {
+    const filePaths = await invoke('select_files');
+    if (filePaths && filePaths.length > 0) {
+      handleFilePaths(filePaths);
+    }
+  } catch (error) {
+    console.error('File selection failed:', error);
+    showToast('选择图片失败，请重试');
   }
 }
 
 async function selectFolder() {
-  const folderPaths = await invoke('select_folder');
-  if (folderPaths && folderPaths.length > 0) {
-    handleFilePaths(folderPaths);
+  try {
+    const folderPaths = await invoke('select_folder');
+    if (folderPaths && folderPaths.length > 0) {
+      handleFilePaths(folderPaths);
+    }
+  } catch (error) {
+    console.error('Folder selection failed:', error);
+    showToast('选择文件夹失败，请重试');
   }
 }
 
@@ -364,68 +363,143 @@ async function ensureSystemOutputAccess() {
 function handleFiles(fileList) {
   const filePaths = [];
   for (const file of fileList) {
-    filePaths.push(file.path || file.name);
+    if (file.path) filePaths.push(file.path);
   }
-  handleFilePaths(filePaths);
+  if (filePaths.length === 0 && fileList.length > 0) {
+    showToast('无法读取拖入文件，请使用“选择文件”');
+    return Promise.resolve([]);
+  }
+  return handleFilePaths(filePaths);
 }
 
-async function handleFilePaths(filePaths) {
-  if (filePaths.length === 0) return;
+function uniqueFilePaths(paths) {
+  var seen = new Set();
+  var unique = [];
+  (paths || []).forEach(function(path) {
+    if (typeof path !== 'string') return;
+    var value = path.trim();
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    unique.push(value);
+  });
+  return unique;
+}
 
-  // Replace, not accumulate — dragging new files means starting fresh
-  inputPaths = filePaths.slice();
-
-  var expanded = [];
-  try {
-    expanded = await invoke('expand_image_files', { filePaths: inputPaths });
-  } catch (e) {
-    expanded = filePaths;
-  }
-
-  if (!expanded || expanded.length === 0) {
-    showToast('文件夹中没有找到可压缩的图片');
-    return;
-  }
-
-  files = expanded;
-  results = [];
-  if (isCompressing) {
-    totalFiles = files.length;
-  }
-
-  var queuePanel = document.getElementById('queuePanel');
-  if (queuePanel) queuePanel.style.display = 'block';
-  settingsPanel.style.display = 'block';
-  resultsPanel.style.display = 'none';
-  updateQueueSummary();
-  renderFileQueue();
-  document.querySelector('.container').scrollTop = 0;
-  var ac = document.getElementById('autoCompress');
-  if (ac && ac.checked && files.length > 0) {
-    if (isCompressing) {
-      pendingAutoCompress = true;
-    } else {
-      startCompression(false);
+function appendUniquePaths(target, paths) {
+  var result = target.slice();
+  var seen = new Set(result);
+  uniqueFilePaths(paths).forEach(function(path) {
+    if (!seen.has(path)) {
+      seen.add(path);
+      result.push(path);
     }
-  }
+  });
+  return result;
+}
+
+function mergeQueueFiles(newFiles) {
+  var known = new Set(files);
+  var added = [];
+  uniqueFilePaths(newFiles).forEach(function(filePath) {
+    if (known.has(filePath)) return;
+
+    // A removed row is only visual history. Re-adding the path creates a
+    // fresh waiting row instead of resurrecting the old cancelled state.
+    var oldRow = fileRows[filePath];
+    if (oldRow && oldRow.classList.contains('cancelled')) {
+      oldRow.remove();
+      delete fileRows[filePath];
+    }
+
+    known.add(filePath);
+    files.push(filePath);
+    added.push(filePath);
+  });
+  return added;
+}
+
+function handleFilePaths(filePaths) {
+  var incoming = uniqueFilePaths(filePaths);
+  if (incoming.length === 0) return Promise.resolve([]);
+
+  // Serialize directory expansion and queue commits. This keeps a slow scan
+  // from finishing after a later, faster scan and overwriting the queue.
+  pendingImports = pendingImports.then(async function() {
+    var expanded;
+    try {
+      expanded = await invoke('expand_image_files', { filePaths: incoming });
+    } catch (e) {
+      console.error('Image expansion failed:', e);
+      showToast('读取图片失败，请重试');
+      return [];
+    }
+
+    expanded = uniqueFilePaths(expanded);
+    if (expanded.length === 0) {
+      showToast('文件夹中没有找到可压缩的图片');
+      return [];
+    }
+
+    var added = mergeQueueFiles(expanded);
+    inputPaths = appendUniquePaths(inputPaths, incoming);
+
+    var queuePanel = document.getElementById('queuePanel');
+    if (queuePanel) queuePanel.style.display = 'block';
+    settingsPanel.style.display = 'block';
+    resultsPanel.style.display = 'none';
+    updateQueueSummary();
+    renderFileQueue();
+    var container = document.querySelector('.container');
+    if (container) container.scrollTop = 0;
+
+    if (added.length === 0) {
+      showToast('所选图片已在队列中');
+      return added;
+    }
+
+    var ac = document.getElementById('autoCompress');
+    if (ac && ac.checked) {
+      if (isCompressing) {
+        pendingAutoCompress = true;
+      } else {
+        startCompression(false);
+      }
+    }
+    return added;
+  }).catch(function(error) {
+    console.error('Queue import failed:', error);
+    showToast('添加图片失败，请重试');
+    return [];
+  });
+  return pendingImports;
 }
 
 // Global state for compression
 var fileRows = {};
 var cancelledFiles = new Set();
-var totalDone = 0;
-var totalFiles = 0;
-var queueWasEdited = false;
+var queueSortDescending = false;
+var pendingImports = Promise.resolve();
+var queueRevision = 0;
+var activeBatchPaths = [];
+var activeBatchSet = new Set();
+var activeBatchRows = new Map();
+var activeBatchRevision = 0;
+var startButtonTimer = null;
 
 function updateQueueSummary() {
   var summary = document.getElementById('queueSummary');
   if (!summary) return;
-  if (isCompressing) {
-    summary.textContent = totalDone + ' / ' + totalFiles + ' 已完成';
+  var queued = new Set(files);
+  var completed = new Set(results.filter(function(result) {
+    return result && queued.has(result.file);
+  }).map(function(result) { return result.file; }));
+  if (isCompressing || completed.size > 0) {
+    summary.textContent = completed.size + ' / ' + queued.size + ' 已完成';
   } else {
     summary.textContent = files.length + ' 个文件';
   }
   updateBulkActionButtons();
+  applyQueueView();
 }
 
 function updateBulkActionButtons() {
@@ -435,30 +509,98 @@ function updateBulkActionButtons() {
   restoreBtn.style.display = hasRestorable ? 'inline-flex' : 'none';
 }
 
+function toggleQueueSortDirection() {
+  queueSortDescending = !queueSortDescending;
+  applyQueueView();
+}
+
+function applyQueueView() {
+  var list = document.getElementById('fileQueueList');
+  if (!list) return;
+  var filter = document.getElementById('queueFailedOnly');
+  var failedOnly = !!(filter && filter.checked);
+  var sort = document.getElementById('queueSortKey');
+  var key = sort ? sort.value : 'import';
+  var direction = document.getElementById('queueSortDirection');
+  if (direction) {
+    direction.innerHTML = iconMarkup(queueSortDescending ? 'sort-desc' : 'sort-asc', true) + (queueSortDescending ? ' 降序' : ' 升序');
+    direction.setAttribute('aria-label', queueSortDescending ? '当前降序，点击切换升序' : '当前升序，点击切换降序');
+  }
+  var byFile = new Map(results.map(function(result) { return [result.file, result]; }));
+  var states = ['failed', 'compressing', 'waiting', 'done', 'restored', 'cancelled'];
+  var entries = files.map(function(file, index) {
+    var row = fileRows[file];
+    var result = byFile.get(file);
+    var value = index;
+    if (key === 'name') value = basename(file);
+    if (key === 'original') value = result ? result.originalSize : row && row.originalSize;
+    if (key === 'compressed') value = result && result.success ? result.compressedSize : null;
+    if (key === 'ratio') value = result && result.success ? result.savings : null;
+    if (key === 'status') value = states.findIndex(function(state) { return row && row.classList.contains(state); });
+    return { file: file, row: row, index: index, value: value };
+  });
+  entries.sort(function(a, b) {
+    // Unknown sizes and unfinished compression ratios stay last in either direction.
+    var aMissing = a.value == null || (typeof a.value === 'number' && !Number.isFinite(a.value));
+    var bMissing = b.value == null || (typeof b.value === 'number' && !Number.isFinite(b.value));
+    if (aMissing !== bMissing) return aMissing ? 1 : -1;
+    var compared = aMissing ? 0 : typeof a.value === 'string'
+      ? a.value.localeCompare(b.value, 'zh-CN', { numeric: true, sensitivity: 'base' })
+      : a.value - b.value;
+    return (queueSortDescending ? -compared : compared) || a.index - b.index;
+  });
+  var visible = 0;
+  Object.keys(fileRows).forEach(function(file) {
+    if (!files.includes(file)) fileRows[file].hidden = failedOnly;
+  });
+  entries.forEach(function(entry, index) {
+    if (!entry.row) return;
+    entry.row.hidden = failedOnly && !entry.row.classList.contains('failed');
+    if (!entry.row.hidden) visible++;
+    if (list.children[index] !== entry.row) list.insertBefore(entry.row, list.children[index] || null);
+  });
+  var empty = document.getElementById('queueFilterEmpty');
+  if (empty) empty.hidden = !failedOnly || visible > 0;
+}
+
 async function renderFileQueue() {
   var list = document.getElementById('fileQueueList');
   if (!list) return;
+  var wanted = new Set(files);
+
+  Object.keys(fileRows).forEach(function(filePath) {
+    if (!wanted.has(filePath)) {
+      var staleRow = fileRows[filePath];
+      if (staleRow) staleRow.remove();
+      delete fileRows[filePath];
+    }
+  });
+
   var newFiles = [];
   for (var i = 0; i < files.length; i++) {
     if (!fileRows[files[i]]) {
       var row = createQueueRow(files[i]);
       fileRows[files[i]] = row;
-      list.appendChild(row);
       newFiles.push(files[i]);
     }
+    // appendChild also moves an existing row, preserving the queue order.
+    list.appendChild(fileRows[files[i]]);
   }
+  applyQueueView();
   // Fetch file sizes for newly added rows only (preserve existing row state)
   if (newFiles.length > 0) {
     try {
       const sizes = await invoke('get_file_sizes', { filePaths: newFiles });
       for (var j = 0; j < newFiles.length; j++) {
         var row = fileRows[newFiles[j]];
-        if (row && sizes[j] !== undefined) {
+        if (row && sizes[j] !== undefined) row.originalSize = sizes[j];
+        if (row && sizes[j] !== undefined && row.classList.contains('waiting')) {
           var sizeEl = row.querySelector('.queue-item-size');
           if (sizeEl) sizeEl.textContent = formatBytes(sizes[j]);
         }
       }
     } catch (e) { /* ignore */ }
+    applyQueueView();
   }
 }
 
@@ -469,19 +611,21 @@ function createQueueRow(filePath) {
   var name = basename(filePath);
   row.innerHTML =
     '<span class="queue-item-icon">' + iconMarkup('queue', true) + '</span>' +
-    '<span class="queue-item-name">' + name + '</span>' +
+    '<span class="queue-item-name"></span>' +
     '<span class="queue-item-size"></span>' +
     '<span class="queue-item-status">等待中</span>' +
     '<span class="queue-item-actions"></span>' +
     '<button class="queue-item-remove" title="移除">' + iconMarkup('close', true) + '</button>' +
     '<div class="progress-file-bar"></div>';
+  var nameEl = row.querySelector('.queue-item-name');
+  if (nameEl) nameEl.textContent = name;
   var rmBtn = row.querySelector('.queue-item-remove');
   rmBtn.addEventListener('click', function(e) {
     e.stopPropagation();
     if (row.classList.contains('waiting')) {
       if (isCompressing) {
         cancelledFiles.add(filePath);
-        invoke('cancel_file', { filePath: filePath });
+        invoke('cancel_file', { filePath: filePath }).catch(function() {});
       }
       var idx = files.indexOf(filePath);
       if (idx >= 0) files.splice(idx, 1);
@@ -491,10 +635,8 @@ function createQueueRow(filePath) {
       row.querySelector('.queue-item-status').textContent = '已移除';
       row.querySelector('.queue-item-remove').style.display = 'none';
       if (!isCompressing) {
-        queueWasEdited = true;
         updateQueueSummary();
       } else {
-        totalFiles--;
         updateQueueSummary();
       }
     }
@@ -516,6 +658,10 @@ function renderQueueResultActions(row, result) {
       { action: 'restore', title: '恢复原图', icon: iconMarkup('restore', true) },
       { action: 'finder', title: '在访达中显示', icon: iconMarkup('finder', true) },
     ];
+  } else {
+    actionDefs = [
+      { action: 'retry', title: '重试', icon: iconMarkup('recompress', true) },
+    ];
   }
   actionDefs.push({ action: 'log', title: '复制日志', icon: iconMarkup('copy', true) });
 
@@ -531,6 +677,7 @@ function renderQueueResultActions(row, result) {
       else if (def.action === 'compare') openCompareByFile(result.file);
       else if (def.action === 'restore') restoreOriginal(result.file, result.backupPath || '', result.outputMode || 'suffix', result.outputPath || '', result.compressOptions && result.compressOptions.outputSuffix);
       else if (def.action === 'finder') openInFinder(result.file);
+      else if (def.action === 'retry') compressOneFile(result.file);
       else if (def.action === 'log') copyCompressLog(result);
     });
     actions.appendChild(btn);
@@ -636,22 +783,38 @@ function getCurrentCompressionConfig() {
       outputMode,
       outputSuffix: getOutputSuffix(),
       outputDir: outputMode === 'folder' ? outputDir : null,
+      sourceRoots: inputPaths.slice(),
     },
   };
 }
 
 function clearAllFiles() {
-  if (files.length === 0) return;
+  if (files.length === 0 && !isCompressing) return;
   if (!confirm('确定要清空全部 ' + files.length + ' 个文件吗？')) return;
+
+  // Keep the active invocation alive until the backend returns. Marking the
+  // UI idle here would allow a second batch to overlap the first one.
+  var wasCompressing = isCompressing;
+  queueRevision++;
+  if (wasCompressing) {
+    activeBatchPaths.forEach(function(filePath) {
+      cancelledFiles.add(filePath);
+      invoke('cancel_file', { filePath: filePath }).catch(function() {});
+    });
+  }
+
   files = [];
   inputPaths = [];
   results = [];
   fileRows = {};
-  cancelledFiles.clear();
-  totalDone = 0;
-  totalFiles = 0;
-  queueWasEdited = false;
-  isCompressing = false;
+  if (!wasCompressing) cancelledFiles.clear();
+  pendingAutoCompress = false;
+  if (!wasCompressing) {
+    activeBatchPaths = [];
+    activeBatchSet.clear();
+    activeBatchRows.clear();
+    activeBatchRevision = 0;
+  }
   var queuePanel = document.getElementById('queuePanel');
   if (queuePanel) queuePanel.style.display = 'none';
   settingsPanel.style.display = 'block';
@@ -661,34 +824,87 @@ function clearAllFiles() {
   var queueStats = document.getElementById('queueStats');
   if (queueStats) queueStats.style.display = 'none';
   updateQueueSummary();
+  emitCompareResultsChanged();
 }
 
 // ─── Compression ────────────────────────────────────────────────
 async function startCompression(isIncrement) {
-  if (isCompressing || files.length === 0) return;
-  if (!await ensureSystemOutputAccess()) return;
+  return startCompressionForPaths(isIncrement, null);
+}
+
+function getPendingQueuePaths(candidatePaths) {
+  var done = new Set(results.map(function(result) { return result && result.file; }));
+  var seen = new Set();
+  return uniqueFilePaths(candidatePaths).filter(function(filePath) {
+    if (seen.has(filePath) || done.has(filePath) || !files.includes(filePath)) return false;
+    seen.add(filePath);
+    return true;
+  });
+}
+
+async function startCompressionForPaths(isIncrement, requestedPaths) {
+  if (isCompressing) return;
+  var candidates = Array.isArray(requestedPaths) ? requestedPaths.slice() : files.slice();
+  if (candidates.length === 0) return;
+
   isCompressing = true;
-  if (!isIncrement) results = [];
+  var runRevision = queueRevision;
+  if (startButtonTimer) {
+    clearTimeout(startButtonTimer);
+    startButtonTimer = null;
+  }
+
+  var hasOutputAccess = false;
+  try {
+    hasOutputAccess = await ensureSystemOutputAccess();
+  } catch (error) {
+    console.error('Output access check failed:', error);
+    showToast('无法确认输出目录，请重试');
+  }
+  if (!hasOutputAccess) {
+    isCompressing = false;
+    updateQueueSummary();
+    return;
+  }
+  if (runRevision !== queueRevision) {
+    isCompressing = false;
+    updateQueueSummary();
+    return;
+  }
+
+  isCompressing = true;
   currentCompressOptions = null;
 
   const config = getCurrentCompressionConfig();
   if (config.error) {
     showToast(config.error);
     isCompressing = false;
+    updateQueueSummary();
     return;
   }
-  currentCompressOptions = config.options;
+
+  var batchPaths = getPendingQueuePaths(candidates);
+  if (batchPaths.length === 0) {
+    isCompressing = false;
+    updateQueueSummary();
+    return;
+  }
+
+  var batchOptions = config.options;
+  currentCompressOptions = batchOptions;
+  activeBatchPaths = batchPaths.slice();
+  activeBatchSet = new Set(batchPaths);
+  activeBatchRows = new Map(batchPaths.map(function(filePath) {
+    return [filePath, fileRows[filePath]];
+  }));
+  activeBatchRevision = runRevision;
+  var batchSettled = new Set();
 
   var queueStats = document.getElementById('queueStats');
   if (queueStats) queueStats.style.display = 'flex';
-  statOriginal.textContent = '0B';
-  statCompressed.textContent = '0B';
-  totalSavings.textContent = '0B';
-  totalRate.textContent = '0%';
+  updateStats();
 
   cancelledFiles.clear();
-  totalDone = isIncrement ? results.length : 0;
-  totalFiles = files.length;
   updateQueueSummary();
 
   var startBtn = document.getElementById('startCompressBtn');
@@ -704,21 +920,27 @@ async function startCompression(isIncrement) {
 
   // Progress handler - updates existing rows in place
   const progressHandler = (data) => {
+    if (runRevision !== queueRevision || activeBatchRevision !== runRevision) return;
     var file = data.file, result = data.result, status = data.status;
+    if (!activeBatchSet.has(file)) return;
     var row = fileRows[file];
-    if (!row) return;
+    // A row can be removed and re-added while the backend is still working.
+    // Only the row captured for this batch may consume its late events.
+    if (!row || !files.includes(file) || row.classList.contains('cancelled') || activeBatchRows.get(file) !== row) return;
 
-    if (status === 'starting') {
+    if (status === 'starting' && row) {
       row.classList.remove('waiting');
       row.classList.add('compressing');
       row.querySelector('.queue-item-icon').innerHTML = '<span class="progress-file-spinner"></span>';
       row.querySelector('.queue-item-status').textContent = processingActionText('progress');
       var rmBtn = row.querySelector('.queue-item-remove');
       if (rmBtn) rmBtn.style.display = 'none';
+      applyQueueView();
     }
 
-    if (result) {
-      if (results.some(function(r) { return r.file === result.file; })) return;
+    if (result && !batchSettled.has(result.file)) {
+      batchSettled.add(result.file);
+      if (!row) return;
       row.classList.remove('compressing');
       row.classList.add(result.success ? 'done' : 'failed');
       row.querySelector('.queue-item-icon').innerHTML = iconMarkup(result.success ? 'check' : 'error', true);
@@ -742,52 +964,73 @@ async function startCompression(isIncrement) {
         errIcon.onclick = function(e) { e.stopPropagation(); showErrorDetail(result.file, result.error); };
         statusEl.appendChild(errIcon);
       }
-      result.compressOptions = currentCompressOptions;
+      result.compressOptions = batchOptions;
+      results = results.filter(function(existing) { return existing.file !== result.file; });
       results.push(result);
       renderQueueResultActions(row, result);
       updateStats();
-      totalDone++;
       updateQueueSummary();
+      emitCompareResultsChanged();
     }
 
-    if (status === 'cancelled' && row) {
+    if (status === 'cancelled' && row && !batchSettled.has(file)) {
+      batchSettled.add(file);
       row.classList.add('cancelled');
       row.querySelector('.queue-item-icon').innerHTML = iconMarkup('minus', true);
       row.querySelector('.queue-item-status').textContent = '已跳过';
+      updateQueueSummary();
     }
   };
 
-  const unlisten = await listen('compress-progress', (event) => {
-    progressHandler(event.payload);
-  });
+  var unlisten = function() {};
 
   try {
-    const allPaths = (!queueWasEdited && inputPaths.length > 0) ? inputPaths : files;
-    const alreadyDone = new Set(results.map(function(r) { return r.file; }));
-    const pathsForCompression = allPaths.filter(function(f) { return !alreadyDone.has(f); });
-    if (pathsForCompression.length === 0) { return; }
-    await invoke(config.useSmartIpc ? 'compress_smart' : 'compress_files', { filePaths: pathsForCompression, options: config.options });
-    updateStats();
-    showResults();
+    unlisten = await listen('compress-progress', function(event) {
+      progressHandler(event.payload);
+    });
+    var backendResults = await invoke(config.useSmartIpc ? 'compress_smart' : 'compress_files', {
+      filePaths: batchPaths,
+      options: batchOptions,
+    });
+    // The event is the live path, while the return value is a recovery path
+    // for a backend that completed without delivering one of its events.
+    if (Array.isArray(backendResults)) {
+      backendResults.forEach(function(result) {
+        progressHandler({ file: result.file, status: '', result: result });
+      });
+    }
+    if (runRevision === queueRevision) {
+      updateStats();
+      showResults();
+    }
   } catch (err) {
     console.error('Compression error:', err);
     showToast((processingMode === 'system' ? '转换出错: ' : '压缩出错: ') + (err.message || err));
   } finally {
-    unlisten();
+    try { unlisten(); } catch (e) {}
+    if (activeBatchRevision === runRevision) {
+      activeBatchPaths = [];
+      activeBatchSet.clear();
+      activeBatchRows.clear();
+      activeBatchRevision = 0;
+    }
     isCompressing = false;
+    cancelledFiles.clear();
     if (startBtn) {
       startBtn.classList.remove('compressing');
       startBtn.classList.add('done');
       var btnText = document.getElementById('compressBtnText');
       if (btnText) btnText.innerHTML = '<svg class="symbol-icon"><use href="#icon-check"/></svg> ' + processingActionText('done');
-      setTimeout(function() {
+      startButtonTimer = setTimeout(function() {
+        startButtonTimer = null;
         startBtn.classList.remove('done');
         startBtn.disabled = false;
         if (btnText) btnText.innerHTML = '<svg class="symbol-icon"><use href="#icon-compress"/></svg> ' + processingActionText('idle');
       }, 2000);
     }
-    if (pendingAutoCompress) {
-      pendingAutoCompress = false;
+    var shouldContinue = pendingAutoCompress && getPendingQueuePaths(files).length > 0;
+    pendingAutoCompress = false;
+    if (shouldContinue) {
       startCompression(true);
     } else {
       updateQueueSummary();
@@ -824,16 +1067,8 @@ async function compressOneFile(filePath) {
   if (isCompressing) return;
   const row = fileRows[filePath];
   if (!row) return;
-
-  const config = getCurrentCompressionConfig();
-  if (config.error) {
-    showToast(config.error);
-    return;
-  }
-
-  isCompressing = true;
-  currentCompressOptions = config.options;
   results = results.filter(function(r) { return r.file !== filePath; });
+  emitCompareResultsChanged();
 
   row.classList.remove('waiting', 'done', 'failed', 'restored', 'cancelled');
   row.classList.add('compressing');
@@ -843,42 +1078,9 @@ async function compressOneFile(filePath) {
   if (actions) actions.innerHTML = '';
   var rmBtn = row.querySelector('.queue-item-remove');
   if (rmBtn) rmBtn.style.display = 'none';
-
-  const unlisten = await listen('compress-progress', (event) => {
-    var data = event.payload;
-    if (!data || data.file !== filePath || !data.result) return;
-    var result = data.result;
-    row.classList.remove('compressing');
-    row.classList.add(result.success ? 'done' : 'failed');
-    row.querySelector('.queue-item-icon').innerHTML = iconMarkup(result.success ? 'check' : 'error', true);
-    var sizeEl = row.querySelector('.queue-item-size');
-    if (result.success && sizeEl) {
-      sizeEl.textContent = formatBytes(result.originalSize) + ' → ' + formatBytes(result.compressedSize);
-    }
-    row.querySelector('.queue-item-status').textContent = result.success
-      ? (result.savings >= 0 ? '-' : '+') + Math.abs(result.savings).toFixed(1) + '%'
-      : '失败';
-    results = results.filter(function(r) { return r.file !== filePath; });
-    result.compressOptions = currentCompressOptions;
-    results.push(result);
-    renderQueueResultActions(row, result);
-    updateStats();
-    updateQueueSummary();
-  });
-
-  try {
-    await invoke(config.useSmartIpc ? 'compress_smart' : 'compress_files', { filePaths: [filePath], options: config.options });
+  await startCompressionForPaths(true, [filePath]);
+  if (results.some(function(result) { return result.file === filePath && result.success; })) {
     showToast('已重新压缩: ' + basename(filePath));
-  } catch (err) {
-    row.classList.remove('compressing');
-    row.classList.add('failed');
-    row.querySelector('.queue-item-icon').innerHTML = iconMarkup('error', true);
-    row.querySelector('.queue-item-status').textContent = '失败';
-    showToast('重新压缩出错: ' + (err.message || err));
-  } finally {
-    unlisten();
-    isCompressing = false;
-    updateQueueSummary();
   }
 }
 
@@ -915,6 +1117,7 @@ async function restoreOriginal(filePath, backupPath, outputMode, outputPath, out
     markQueueRowRestored(filePath);
     showResults();
     updateQueueSummary();
+    emitCompareResultsChanged();
   } else {
     showToast('恢复失败: ' + (result.error || '未知错误'));
   }
@@ -957,6 +1160,7 @@ async function restoreAllOriginals() {
   results = [];
   showResults();
   updateQueueSummary();
+  emitCompareResultsChanged();
 }
 
 async function exportAll() {
@@ -967,14 +1171,26 @@ async function exportAll() {
 }
 
 function clearResults() {
+  var wasCompressing = isCompressing;
+  queueRevision++;
+  if (wasCompressing) {
+    activeBatchPaths.forEach(function(filePath) {
+      cancelledFiles.add(filePath);
+      invoke('cancel_file', { filePath: filePath }).catch(function() {});
+    });
+  }
   results = [];
   files = [];
   inputPaths = [];
   fileRows = {};
-  cancelledFiles.clear();
-  totalDone = 0;
-  totalFiles = 0;
-  queueWasEdited = false;
+  if (!wasCompressing) cancelledFiles.clear();
+  pendingAutoCompress = false;
+  if (!wasCompressing) {
+    activeBatchPaths = [];
+    activeBatchSet.clear();
+    activeBatchRows.clear();
+    activeBatchRevision = 0;
+  }
   resultsList.innerHTML = '';
   resultsPanel.style.display = 'none';
   var queuePanel = document.getElementById('queuePanel');
@@ -985,6 +1201,7 @@ function clearResults() {
   var list = document.getElementById('fileQueueList');
   if (list) list.innerHTML = '';
   updateQueueSummary();
+  emitCompareResultsChanged();
 }
 
 function formatBytes(bytes) {
@@ -994,307 +1211,73 @@ function formatBytes(bytes) {
   return (bytes / (1024 * 1024)).toFixed(1) + 'MB';
 }
 
-// ─── Comparison ─────────────────────────────────────────────────
-async function recompressWithQuality(quality) {
-  if (!currentCompareResult) return;
-  const result = currentCompareResult;
-  const recompressBtn = document.getElementById('recompressBtn');
-  if (recompressBtn) recompressBtn.disabled = true;
+// ─── Comparison（独立原生窗口）─────────────────────────────────
+// 对比视图已迁移到独立窗口 compare.html + compare_window.js：
+// 可自由缩放（可大于主窗口）、拥有自己的红绿灯，避免误关主窗口。
+// 本侧只负责组装载荷、打开/聚焦窗口，并把结果集变化推送给该窗口。
 
+function comparableResults() {
+  return results.filter(function(r) { return r && r.success; });
+}
+
+function openCompare(result) {
+  const okResults = comparableResults();
+  if (!okResults.length) {
+    showToast('没有可对比的结果');
+    return;
+  }
+  let index = okResults.findIndex(function(r) { return r.file === result.file; });
+  if (index < 0) index = 0;
+  invoke('open_compare_window', { payload: { results: okResults, index: index } })
+    .catch(function(err) {
+      showToast('打开对比窗口失败: ' + (err.message || err));
+    });
+}
+
+function openCompareByFile(filePath) {
+  const result = results.find(r => r.file === filePath);
+  if (result) openCompare(result);
+}
+
+// 结果集变化（恢复/清空/压缩完成等）时推送快照，对比窗口据此刷新或置空
+function emitCompareResultsChanged() {
   try {
-    const options = {
-      quality: parseInt(quality),
-      backend: 'auto',
-      effort: 6,
-      outputMode: 'suffix',
-      outputFormat: result.type || 'original',
-    };
-    const newResult = await invoke('compress_single', { filePath: result.file, options: options });
-    if (newResult && newResult.success && newResult.outputPath) {
-      // Load the new compressed image
-      await loadOriginalImage(compareCompressedImg, newResult.outputPath);
-      compareCompressedSize.textContent = newResult.compressedSizeFormatted || '?';
-      compareSavings.textContent = (newResult.savings >= 0 ? '-' : '+') + Math.abs(newResult.savings).toFixed(1) + '%';
-      compareAlgorithm.textContent = newResult.algorithm || '?';
-
-      const idx = results.findIndex(r => r.file === result.file);
-      if (idx >= 0) {
-        results[idx] = Object.assign({}, results[idx], newResult);
-      }
-      currentCompareResult = Object.assign({}, result, newResult);
-      showToast('重新压缩完成 (质量: ' + quality + '%)');
-    } else {
-      showToast('重新压缩失败');
-    }
-  } catch (err) {
-    showToast('重新压缩出错: ' + (err.message || err));
-  } finally {
-    if (recompressBtn) recompressBtn.disabled = false;
-  }
+    window.__TAURI__.event.emit('compare-results-changed', { results: comparableResults() });
+  } catch (_) {}
 }
 
-async function openCompare(result) {
-  releaseCompareImages();
-  currentCompareResult = result;
-
-  // Determine the original image path (backup for replace mode, else original file)
-  const originalPath = result.backupPath || result.file;
-  const loadedOriginal = await loadOriginalImage(compareOriginalImg, originalPath);
-  if (!loadedOriginal) {
-    showToast('无法加载原图');
-    return;
-  }
-
-  // Load compressed image from output path
-  const compressedPath = result.outputPath || result.file;
-  const loadedCompressed = await loadOriginalImage(compareCompressedImg, compressedPath);
-  if (!loadedCompressed) {
-    showToast('无法加载压缩图');
-    releaseCompareImages();
-    return;
-  }
-
-  // Set container aspect-ratio to match image
-  var outer = document.getElementById('compareSliderOuter');
-  var setRatio = function() {
-    var w = compareOriginalImg.naturalWidth || compareCompressedImg.naturalWidth;
-    var h = compareOriginalImg.naturalHeight || compareCompressedImg.naturalHeight;
-    if (w && h) {
-      outer.style.aspectRatio = w + ' / ' + h;
-    }
-  };
-  if (compareOriginalImg.naturalWidth) setRatio();
-  else compareOriginalImg.onload = setRatio;
-
-  var fitW = compareOriginalImg.naturalWidth || compareCompressedImg.naturalWidth || 1;
-  var fitH = compareOriginalImg.naturalHeight || compareCompressedImg.naturalHeight || 1;
-  var fitZoom = Math.min(outer.clientWidth / fitW, outer.clientHeight / fitH, 1);
-  if (!isFinite(fitZoom) || fitZoom <= 0) fitZoom = 1;
-  setCompareZoom(fitZoom);
-  updateCompareSlider(50);
-
-  compareFilename.textContent = basename(result.file);
-  compareOriginalSize.textContent = result.originalSizeFormatted || '?';
-  compareCompressedSize.textContent = result.compressedSizeFormatted || '?';
-  compareSavings.textContent = (result.savings >= 0 ? '-' : '+') + Math.abs(result.savings).toFixed(1) + '%';
-  compareAlgorithm.textContent = result.algorithm || '?';
-
-  document.getElementById('modalBackdrop').style.display = 'block';
-  comparePanel.style.display = 'flex';
-  document.body.style.overflow = 'hidden';
-}
-
-// ── Compare slider: clip-path + handle position ──────────────────
-function updateCompareSlider(value) {
-  var sliderBar = document.getElementById('compareRange');
-  value = Math.max(0, Math.min(100, parseFloat(value) || 0));
-  if (sliderBar) sliderBar.value = Math.round(value);
-
-  var outer = document.getElementById('compareSliderOuter');
-  var container = document.getElementById('compareSliderContainer');
-  var zoom = currentCompareZoom || 1;
-  var cw = outer.clientWidth;
-  var sl = container.scrollLeft;
-  var imgW = compareOriginalImg.naturalWidth || compareCompressedImg.naturalWidth || cw;
-
-  var clipLinePx = sl + (value / 100) * cw;
-  var imgWidth = imgW * zoom;
-  var clipLinePct = (clipLinePx / imgWidth) * 100;
-  var clipRight = Math.max(0, Math.min(100, 100 - clipLinePct));
-
-  compareOriginalImg.style.clipPath = 'inset(0 ' + clipRight + '% 0 0)';
-  compareHandle.style.left = clipLinePct + '%';
-  compareHandle.style.display = 'block';
-}
-
-function setCompareZoom(level) {
-  level = Math.max(0.1, Math.min(8, level));
-  var outer = document.getElementById('compareSliderOuter');
-  var container = document.getElementById('compareSliderContainer');
-  var wrapper = document.getElementById('compareImgWrapper');
-  var oldZoom = currentCompareZoom || 1;
-  var cw = outer.clientWidth;
-  var ch = outer.clientHeight;
-  var imgW = compareOriginalImg.naturalWidth || compareCompressedImg.naturalWidth || 1;
-  var imgH = compareOriginalImg.naturalHeight || compareCompressedImg.naturalHeight || 1;
-
-  var sliderBar = document.getElementById('compareRange');
-  var sliderVal = sliderBar ? parseFloat(sliderBar.value) : 50;
-
-  var oldImgW = imgW * oldZoom;
-  var oldImgH = imgH * oldZoom;
-  var axisRatio = (container.scrollLeft + (sliderVal / 100) * cw) / oldImgW;
-  var centerYRatio = (container.scrollTop + ch / 2) / oldImgH;
-
-  currentCompareZoom = level;
-  wrapper.style.width = (imgW * level) + 'px';
-  wrapper.style.height = (imgH * level) + 'px';
-
-  var newImgW = imgW * level;
-  var newImgH = imgH * level;
-  container.scrollLeft = axisRatio * newImgW - (sliderVal / 100) * cw;
-  container.scrollTop = centerYRatio * newImgH - ch / 2;
-
-  var zoomSlider = document.getElementById('zoomSlider');
-  if (zoomSlider) zoomSlider.value = level;
-  var zoomValue = document.getElementById('zoomValue');
-  if (zoomValue) zoomValue.textContent = Math.round(level * 100) + '%';
-
-  updateCompareSlider(sliderVal);
-}
-
-function stepZoom(delta) {
-  setCompareZoom(currentCompareZoom + delta);
-}
-
-function toggleFullscreen() {
-  comparePanel.classList.toggle('fullscreen');
-  requestAnimationFrame(function() {
-    var sliderBar = document.getElementById('compareRange');
-    updateCompareSlider(sliderBar ? sliderBar.value : 50);
+listen('compare-recompressed', function(event) {
+  const payload = event.payload || {};
+  const updated = payload.result;
+  if (!payload.filePath || !updated) return;
+  const idx = results.findIndex(function(r) { return r.file === payload.filePath; });
+  if (idx < 0) return;
+  const existing = results[idx];
+  results[idx] = Object.assign({}, existing, updated, {
+    // compress_single writes a temporary preview. Keep the real output
+    // and backup metadata so Restore still targets the original result.
+    outputPath: existing.outputPath,
+    backupPath: existing.backupPath,
+    outputMode: existing.outputMode,
   });
-}
+});
 
-function closeCompare() {
-  comparePanel.style.display = 'none';
-  comparePanel.classList.remove('fullscreen');
-  document.getElementById('modalBackdrop').style.display = 'none';
-  document.body.style.overflow = '';
-  currentCompareResult = null;
-  releaseCompareImages();
-  setCompareZoom(1);
-}
-
-function releaseCompareImages() {
-  if (compareOriginalImg) {
-    compareOriginalImg.onload = null;
-    compareOriginalImg.removeAttribute('src');
-  }
-  if (compareCompressedImg) {
-    compareCompressedImg.onload = null;
-    compareCompressedImg.removeAttribute('src');
-  }
-}
-
-var recompressQualitySlider = document.getElementById('recompressQuality');
-var recompressQualityValue = document.getElementById('recompressQualityValue');
-if (recompressQualitySlider) {
-  recompressQualitySlider.addEventListener('input', function() {
-    recompressQualityValue.textContent = recompressQualitySlider.value + '%';
-  });
-}
-
-(function setupCompareDrag() {
-  var outer = document.getElementById('compareSliderOuter');
-  var container = document.getElementById('compareSliderContainer');
-  var sliderBar = document.getElementById('compareRange');
-  if (!outer || !container) return;
-
-  var isPointerDown = false;
-
-  function getPercent(clientX) {
-    var rect = outer.getBoundingClientRect();
-    var x = clientX - rect.left;
-    return Math.max(0, Math.min(100, (x / rect.width) * 100));
-  }
-
-  outer.addEventListener('mousemove', function(e) {
-    var pct = getPercent(e.clientX);
-    updateCompareSlider(pct);
-  });
-
-  function onPointerDown(e) {
-    isPointerDown = true;
-    e.preventDefault();
-    if (window.getSelection) {
-      var selection = window.getSelection();
-      if (selection) selection.removeAllRanges();
-    }
-    var clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    updateCompareSlider(getPercent(clientX));
-  }
-
-  function onPointerMove(e) {
-    if (!isPointerDown) return;
-    e.preventDefault();
-    var clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    updateCompareSlider(getPercent(clientX));
-  }
-
-  function onPointerUp() { isPointerDown = false; }
-
-  outer.addEventListener('mousedown', onPointerDown);
-  outer.addEventListener('touchstart', onPointerDown, { passive: false });
-  document.addEventListener('mousemove', onPointerMove);
-  document.addEventListener('mouseup', onPointerUp);
-  document.addEventListener('touchmove', onPointerMove, { passive: false });
-  document.addEventListener('touchend', onPointerUp);
-
-  if (sliderBar) {
-    sliderBar.addEventListener('input', function() {
-      updateCompareSlider(this.value);
-    });
-  }
-
-  outer.addEventListener('wheel', function(e) {
-    e.preventDefault();
-    if (e.metaKey) {
-      navigateCompare(e.deltaY < 0 ? -1 : 1);
-      return;
-    }
-    var oldZoom = currentCompareZoom || 1;
-    var delta = e.deltaY < 0 ? 0.25 : -0.25;
-    var newZoom = Math.max(0.1, Math.min(8, oldZoom + delta));
-
-    var rect = outer.getBoundingClientRect();
-    var mouseX = e.clientX - rect.left;
-    var cw = outer.clientWidth;
-    var ch = outer.clientHeight;
-    var imgW = compareOriginalImg.naturalWidth || compareCompressedImg.naturalWidth || cw;
-    var imgH = compareOriginalImg.naturalHeight || compareCompressedImg.naturalHeight || ch;
-    var mouseImgX = (container.scrollLeft + mouseX) / (imgW * oldZoom);
-    var mouseImgY = (container.scrollTop + (e.clientY - rect.top)) / (imgH * oldZoom);
-
-    currentCompareZoom = newZoom;
-    var wrapper = document.getElementById('compareImgWrapper');
-    wrapper.style.width = (imgW * newZoom) + 'px';
-    wrapper.style.height = (imgH * newZoom) + 'px';
-    container.scrollLeft = mouseImgX * (imgW * newZoom) - mouseX;
-    container.scrollTop = mouseImgY * (imgH * newZoom) - (e.clientY - rect.top);
-
-    var zoomSlider = document.getElementById('zoomSlider');
-    if (zoomSlider) zoomSlider.value = newZoom;
-    var zoomValue = document.getElementById('zoomValue');
-    if (zoomValue) zoomValue.textContent = Math.round(newZoom * 100) + '%';
-
-    var sliderVal = sliderBar ? parseFloat(sliderBar.value) : 50;
-    updateCompareSlider(sliderVal);
-  }, { passive: false });
-
-  container.addEventListener('scroll', function() {
-    if (sliderBar) updateCompareSlider(sliderBar.value);
-  });
-
-  var zoomSliderEl = document.getElementById('zoomSlider');
-  if (zoomSliderEl) {
-    zoomSliderEl.addEventListener('input', function() {
-      setCompareZoom(parseFloat(this.value));
-    });
-  }
-})();
+listen('compare-restored', function(event) {
+  const filePath = event.payload && event.payload.filePath;
+  if (!filePath) return;
+  results = results.filter(function(r) { return r.file !== filePath; });
+  markQueueRowRestored(filePath);
+  showResults();
+  updateQueueSummary();
+  showToast('已恢复原图: ' + basename(filePath));
+});
 
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   var systemInfoPanel = document.getElementById('systemInfoPanel');
   if (systemInfoPanel && systemInfoPanel.style.display !== 'none') {
     closeSystemConversionInfo();
-  } else if (comparePanel.style.display !== 'none') {
-    closeCompare();
   }
-});
-
-window.addEventListener('beforeunload', () => {
-  releaseCompareImages();
 });
 
 function showToast(message) {
@@ -1311,13 +1294,6 @@ function showToast(message) {
     toast.style.transition = 'opacity 0.3s';
     setTimeout(() => toast.remove(), 300);
   }, 2500);
-}
-
-async function restoreFromCompare() {
-  if (!currentCompareResult) return;
-  const r = currentCompareResult;
-  await restoreOriginal(r.file, r.backupPath || '', r.outputMode || 'suffix', r.outputPath || '', r.compressOptions && r.compressOptions.outputSuffix);
-  closeCompare();
 }
 
 function toggleTitlebarInfo() {
@@ -1435,22 +1411,6 @@ async function checkDirectUpdate() {
   } catch (error) {
     console.warn('在线更新检查失败:', error);
   }
-}
-
-function navigateCompare(direction) {
-  if (!currentCompareResult) return;
-  var okResults = results.filter(function(r) { return r && r.success; });
-  if (okResults.length === 0) return;
-  var idx = okResults.indexOf(currentCompareResult);
-  if (idx < 0) idx = 0;
-  var newIdx = Math.max(0, Math.min(okResults.length - 1, idx + direction));
-  if (newIdx === idx) return;
-  openCompare(okResults[newIdx]);
-}
-
-function openCompareByFile(filePath) {
-  const result = results.find(r => r.file === filePath);
-  if (result) openCompare(result);
 }
 
 function updateSettingsSummary() {

@@ -93,6 +93,10 @@ pub struct CompressOptions {
     pub output_suffix: String,
     #[serde(default)]
     pub output_dir: Option<String>,
+    /// Original file/folder selections used to preserve relative paths when
+    /// the frontend sends an already-expanded queue snapshot.
+    #[serde(default)]
+    pub source_roots: Vec<String>,
     #[serde(default)]
     pub lossless: Option<bool>,
 }
@@ -115,7 +119,7 @@ impl Default for CompressOptions {
             quality: 75, smart_mode: false, output_format: "original".into(),
             backend: "auto".into(), effort: 6, convert_to_webp: false,
             output_mode: "suffix".into(), output_suffix: "_compressed".into(),
-            output_dir: None, lossless: None,
+            output_dir: None, source_roots: Vec::new(), lossless: None,
         }
     }
 }

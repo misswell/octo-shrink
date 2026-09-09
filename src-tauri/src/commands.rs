@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::engine::{self, CompressOptions, CompressResult, EngineResult};
@@ -16,7 +16,12 @@ use crate::engine::{self, CompressOptions, CompressResult, EngineResult};
 /// Shared app state.
 pub struct AppState {
     pub cancel_queue: Mutex<HashSet<String>>,
+    /// 主窗口打开对比时暂存的待渲染载荷，compare 窗口加载完成后取走。
+    pub pending_compare: Mutex<Option<serde_json::Value>>,
 }
+
+/// 独立对比窗口的固定 label（capabilities/default.json 按 label 授权）。
+pub const COMPARE_WINDOW_LABEL: &str = "compare";
 
 // ─── Progress event payload ─────────────────────────────────────
 #[derive(Serialize, Clone)]
@@ -37,34 +42,86 @@ fn collect_image_files(file_paths: &[String]) -> Vec<String> {
         "tiff",
     ];
     let mut all = Vec::new();
+    let mut seen_files = HashSet::new();
+    let mut visited_dirs = HashSet::new();
     for fp in file_paths {
         let path = PathBuf::from(fp);
         if path.is_dir() {
-            walk_dir(&path, &exts, &mut all);
+            walk_dir(&path, &exts, &mut all, &mut seen_files, &mut visited_dirs);
         } else if path.is_file() {
-            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                if exts.contains(&ext.to_lowercase().as_str()) {
-                    all.push(fp.clone());
-                }
-            }
+            add_image_file(path, &exts, &mut all, &mut seen_files);
         }
     }
     all
 }
 
-fn walk_dir(dir: &Path, exts: &[&str], out: &mut Vec<String>) {
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                walk_dir(&path, exts, out);
-            } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                if exts.contains(&ext.to_lowercase().as_str()) {
-                    out.push(path.to_string_lossy().into_owned());
-                }
-            }
+fn path_identity(path: &Path) -> String {
+    path.canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn add_image_file(
+    path: PathBuf,
+    exts: &[&str],
+    out: &mut Vec<String>,
+    seen_files: &mut HashSet<String>,
+) {
+    let is_image = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| exts.contains(&ext.to_lowercase().as_str()))
+        .unwrap_or(false);
+    if is_image {
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+        if seen_files.insert(canonical.to_string_lossy().into_owned()) {
+            // Return the canonical path so separate imports using relative,
+            // symlinked, or `..` aliases also deduplicate in the frontend.
+            out.push(canonical.to_string_lossy().into_owned());
         }
     }
+}
+
+fn walk_dir(
+    dir: &Path,
+    exts: &[&str],
+    out: &mut Vec<String>,
+    seen_files: &mut HashSet<String>,
+    visited_dirs: &mut HashSet<String>,
+) {
+    if !visited_dirs.insert(path_identity(dir)) {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    paths.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+    for path in paths {
+        if path.is_dir() {
+            walk_dir(&path, exts, out, seen_files, visited_dirs);
+        } else if path.is_file() {
+            add_image_file(path, exts, out, seen_files);
+        }
+    }
+}
+
+fn relative_path_from_source_roots(file_path: &Path, source_roots: &[String]) -> Option<PathBuf> {
+    let canonical_file = file_path.canonicalize().ok()?;
+    source_roots
+        .iter()
+        .filter_map(|root| {
+            let root_path = PathBuf::from(root);
+            if !root_path.is_dir() {
+                return None;
+            }
+            let canonical_root = root_path.canonicalize().ok()?;
+            let relative = canonical_file.strip_prefix(&canonical_root).ok()?;
+            Some((canonical_root.components().count(), relative.to_path_buf()))
+        })
+        .max_by_key(|(depth, _)| *depth)
+        .map(|(_, relative)| relative)
 }
 
 // ─── Result building ────────────────────────────────────────────
@@ -198,7 +255,7 @@ fn write_output_file(
         }
         "folder" => {
             if let Some(ref out_dir) = options.output_dir {
-                let root = if file_paths.len() == 1 && PathBuf::from(&file_paths[0]).is_dir() {
+                let fallback_root = if file_paths.len() == 1 && PathBuf::from(&file_paths[0]).is_dir() {
                     PathBuf::from(&file_paths[0])
                 } else {
                     file_path
@@ -206,7 +263,14 @@ fn write_output_file(
                         .unwrap_or(Path::new("."))
                         .to_path_buf()
                 };
-                let rel = file_path.strip_prefix(&root).unwrap_or(file_path);
+                let rel = relative_path_from_source_roots(file_path, &options.source_roots)
+                    .or_else(|| file_path.strip_prefix(&fallback_root).ok().map(Path::to_path_buf))
+                    .unwrap_or_else(|| {
+                        file_path
+                            .file_name()
+                            .map(PathBuf::from)
+                            .unwrap_or_else(|| PathBuf::from("image"))
+                    });
                 let rel_out = rel.with_extension(&result.out_type);
                 let out = PathBuf::from(out_dir).join(&rel_out);
                 if let Some(p) = out.parent() {
@@ -232,6 +296,10 @@ fn write_output_file(
 }
 
 // ─── Batch compression core ─────────────────────────────────────
+fn take_cancelled(cancel_queue: &Mutex<HashSet<String>>, file_path: &str) -> bool {
+    cancel_queue.lock().unwrap().remove(file_path)
+}
+
 async fn compress_batch(
     app: &AppHandle,
     state: &AppState,
@@ -239,10 +307,11 @@ async fn compress_batch(
     options: CompressOptions,
     use_smart: bool,
 ) -> Vec<CompressResult> {
-    state.cancel_queue.lock().unwrap().clear();
+    // Keep cancellations that arrive between the frontend's start request and
+    // this command's first poll. The queue is cleared after all workers exit,
+    // so a completed batch cannot leak cancellation state into the next one.
     let all_files = collect_image_files(&file_paths);
     let total = all_files.len();
-    let _results: Vec<CompressResult> = Vec::new();
 
     // Emit "queued" for all files
     for fp in &all_files {
@@ -268,32 +337,21 @@ async fn compress_batch(
     let cancel_queue = &state.cancel_queue;
     let results_arc = Arc::new(Mutex::new(Vec::<CompressResult>::new()));
     let processed_arc = Arc::new(Mutex::new(0usize));
-    let skipped_arc = Arc::new(Mutex::new(0usize));
 
     // 信号量限制并发数为 3
     let semaphore = Arc::new(tokio::sync::Semaphore::new(3));
 
     let mut handles: Vec<(tokio::task::JoinHandle<()>, String)> = Vec::new();
     for file_path in all_files {
-        // Check cancellation
-        let cancelled = {
-            let mut cq = cancel_queue.lock().unwrap();
-            if cq.contains(&file_path) {
-                cq.remove(&file_path);
-                true
-            } else {
-                false
-            }
-        };
-        if cancelled {
-            let mut sk = skipped_arc.lock().await;
-            *sk += 1;
+        // Check before waiting for a worker and again after acquiring the
+        // permit. A waiting item can be cancelled while other files run.
+        if take_cancelled(cancel_queue, &file_path) {
             let mut pr = processed_arc.lock().await;
             *pr += 1;
             let _ = app_arc.emit(
                 "compress-progress",
                 ProgressPayload {
-                    total: total - *sk,
+                    total,
                     current: *pr,
                     file: file_path.clone(),
                     status: "cancelled".into(),
@@ -303,14 +361,31 @@ async fn compress_batch(
             continue;
         }
 
-        // Emit "starting"
-        {
-            let pr = processed_arc.lock().await;
-            let sk = skipped_arc.lock().await;
+        let permit = semaphore.clone().acquire_owned().await.unwrap();
+        if take_cancelled(cancel_queue, &file_path) {
+            let mut pr = processed_arc.lock().await;
+            *pr += 1;
             let _ = app_arc.emit(
                 "compress-progress",
                 ProgressPayload {
-                    total: total - *sk,
+                    total,
+                    current: *pr,
+                    file: file_path.clone(),
+                    status: "cancelled".into(),
+                    result: None,
+                },
+            );
+            drop(permit);
+            continue;
+        }
+
+        // Emit "starting" only after the worker is available.
+        {
+            let pr = processed_arc.lock().await;
+            let _ = app_arc.emit(
+                "compress-progress",
+                ProgressPayload {
+                    total,
                     current: *pr,
                     file: file_path.clone(),
                     status: "starting".into(),
@@ -319,13 +394,11 @@ async fn compress_batch(
             );
         }
 
-        let permit = semaphore.clone().acquire_owned().await.unwrap();
         let opts = options.clone();
         let fps = file_paths_arc.clone();
         let app_c = app_arc.clone();
         let results_c = results_arc.clone();
         let processed_c = processed_arc.clone();
-        let skipped_c = skipped_arc.clone();
         let fp = file_path.clone();
 
         let fp_for_track = fp.clone();
@@ -347,11 +420,10 @@ async fn compress_batch(
             {
                 let mut pr = processed_c.lock().await;
                 *pr += 1;
-                let sk = *skipped_c.lock().await;
                 let _ = app_c.emit(
                     "compress-progress",
                     ProgressPayload {
-                        total: total - sk,
+                        total,
                         current: *pr,
                         file: fp.clone(),
                         status: "".into(),
@@ -374,7 +446,7 @@ async fn compress_batch(
             let _ = app_arc.emit(
                 "compress-progress",
                 ProgressPayload {
-                    total: total - *skipped_arc.lock().await,
+                    total,
                     current: *pr,
                     file: fp.clone(),
                     status: "".into(),
@@ -812,6 +884,67 @@ pub fn get_file_sizes(file_paths: Vec<String>) -> Vec<u64> {
         .collect()
 }
 
+/// 打开（或聚焦）独立对比窗口，并把待渲染载荷暂存到 AppState。
+///
+/// 载荷形如 `{ results: [...成功结果对象...], index: <当前文件下标> }`，由前端组装；
+/// compare 窗口页面加载完成后调用 take_compare_window_payload 取走，避免创建竞态。
+/// 同步命令默认在主线程执行，可安全创建窗口。
+///
+/// 两条产物线行为一致，仅前端页面 URL 按 feature 分叉：
+/// - Direct（cli-backends）：tauri:// 协议内嵌资源 compare.html
+/// - App Store（inproc-backends）：沙盒阻止 tauri://，走本地 HTTP 服务器
+///   （http://localhost:<port>/compare.html，端口见 lib.rs 固定端口段）
+#[tauri::command]
+pub fn open_compare_window(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    payload: serde_json::Value,
+) -> Result<(), String> {
+    *state.pending_compare.lock().unwrap() = Some(payload.clone());
+
+    if let Some(window) = app.get_webview_window(COMPARE_WINDOW_LABEL) {
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        let _ = app.emit_to(COMPARE_WINDOW_LABEL, "compare-open", payload);
+        return Ok(());
+    }
+
+    let theme = crate::read_startup_theme().unwrap_or("light");
+    let background = crate::startup_background(theme);
+
+    #[cfg(feature = "inproc-backends")]
+    let url = {
+        let port = crate::frontend_http_port()
+            .ok_or_else(|| "本地前端服务未启动，无法打开对比窗口".to_string())?;
+        let parsed: tauri::Url = format!("http://localhost:{port}/compare.html")
+            .parse()
+            .map_err(|error| format!("对比窗口地址无效: {error}"))?;
+        tauri::WebviewUrl::External(parsed)
+    };
+    #[cfg(not(feature = "inproc-backends"))]
+    let url = tauri::WebviewUrl::App("compare.html".into());
+
+    let builder = tauri::webview::WebviewWindowBuilder::new(&app, COMPARE_WINDOW_LABEL, url)
+        .title("原图对比")
+        .inner_size(1080.0, 780.0)
+        .min_inner_size(560.0, 440.0)
+        .resizable(true)
+        .background_color(background);
+    // 沙盒版窗口在页面加载完成前隐藏（on_page_load 里 show），避免露出白色画布
+    #[cfg(feature = "inproc-backends")]
+    let builder = builder.visible(false);
+    builder
+        .build()
+        .map_err(|error| format!("创建对比窗口失败: {error}"))?;
+    Ok(())
+}
+
+/// compare 窗口页面就绪后取走暂存的对比载荷（取后即清）。
+#[tauri::command]
+pub fn take_compare_window_payload(state: State<'_, AppState>) -> Option<serde_json::Value> {
+    state.pending_compare.lock().unwrap().take()
+}
+
 /// Export all compressed results to their original directories with the selected suffix.
 #[tauri::command]
 pub fn export_all(results: Vec<CompressResult>, output_suffix: Option<String>) -> usize {
@@ -844,6 +977,66 @@ pub fn export_all(results: Vec<CompressResult>, output_suffix: Option<String>) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collect_image_files_deduplicates_overlapping_inputs_in_stable_order() {
+        let temp = tempfile::tempdir().unwrap();
+        let nested = temp.path().join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        let first = temp.path().join("first.png");
+        let second = nested.join("second.JPG");
+        fs::write(&first, b"first").unwrap();
+        fs::write(&second, b"second").unwrap();
+
+        let files = collect_image_files(&[
+            first.to_string_lossy().into_owned(),
+            temp.path().to_string_lossy().into_owned(),
+            nested.to_string_lossy().into_owned(),
+        ]);
+
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0], first.canonicalize().unwrap().to_string_lossy());
+        assert_eq!(files[1], second.canonicalize().unwrap().to_string_lossy());
+    }
+
+    #[test]
+    fn folder_output_keeps_the_selected_root_when_queue_is_expanded() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_root = temp.path().join("source");
+        let nested = source_root.join("nested");
+        let output_root = temp.path().join("output");
+        fs::create_dir_all(&nested).unwrap();
+        let input = nested.join("photo.png");
+        fs::write(&input, b"original").unwrap();
+
+        let engine_result = EngineResult {
+            success: true,
+            compressed: b"small".to_vec(),
+            out_type: "png".into(),
+            algorithm: "test".into(),
+            error: None,
+        };
+        let mut result = build_result(&input.to_string_lossy(), &engine_result);
+        let options = CompressOptions {
+            output_mode: "folder".into(),
+            output_dir: Some(output_root.to_string_lossy().into_owned()),
+            source_roots: vec![source_root.to_string_lossy().into_owned()],
+            ..Default::default()
+        };
+
+        write_output_file(
+            &mut result,
+            &input,
+            &engine_result.compressed,
+            &[input.to_string_lossy().into_owned()],
+            &options,
+        );
+
+        assert_eq!(
+            result.output_path.as_deref(),
+            Some(output_root.join("nested/photo.png").to_string_lossy().as_ref())
+        );
+    }
 
     #[test]
     fn system_conversion_never_overwrites_an_existing_target() {

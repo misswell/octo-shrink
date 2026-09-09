@@ -28,39 +28,41 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- A calm, Lucide-inspired 24pt icon system: simple shapes, generous counters. -->
-  <svg class="icon-library" aria-hidden="true">
+  <!-- Original image-workbench glyphs: solid silhouettes and negative-space cuts. -->
+  <svg class="icon-library" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
     <defs>
-      <symbol id="icon-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
-      <symbol id="icon-theme-auto" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M12 7a3.5 3.5 0 0 1 0 7Z" fill="currentColor" stroke="none"/></symbol>
-      <symbol id="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.65 17.65l1.42 1.42M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.65 6.35l1.42-1.42"/></symbol>
-      <symbol id="icon-moon" viewBox="0 0 24 24"><path d="M20.5 14.2A8.5 8.5 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7Z"/></symbol>
-      <symbol id="icon-add-images" viewBox="0 0 24 24"><rect x="3" y="4" width="15" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m4 17 4.5-4.5 3 3 2-2 4.5 4.5M21 5v6M18 8h6"/></symbol>
-      <symbol id="icon-folder-add" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M12 11v6M9 14h6"/></symbol>
-      <symbol id="icon-folder-open" viewBox="0 0 24 24"><path d="M3 8V6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v2"/><path d="M3.2 10h18.3l-2 8a2 2 0 0 1-2 1.5H5.4a2 2 0 0 1-2-1.6L2 12.4A2 2 0 0 1 3.2 10Z"/></symbol>
-      <symbol id="icon-queue" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h9M3 6h.01M3 12h.01M3 18h.01"/></symbol>
-      <symbol id="icon-compress" viewBox="0 0 24 24"><path d="M3 3l7 7M10 6v4H6M21 3l-7 7M18 10h-4V6M3 21l7-7M6 14h4v4M21 21l-7-7M14 18v-4h4"/></symbol>
-      <symbol id="icon-recompress" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7L20 14"/><path d="M20 5v6h-6M12 8v8M8 12h8"/></symbol>
-      <symbol id="icon-sliders" viewBox="0 0 24 24"><path d="M4 7h5M15 7h5M4 17h9M19 17h1"/><circle cx="12" cy="7" r="3"/><circle cx="16" cy="17" r="3"/></symbol>
-      <symbol id="icon-results" viewBox="0 0 24 24"><path d="M10 6h11M10 12h11M10 18h7"/><path d="m3 6 1 1 2-2M3 12l1 1 2-2M3 18l1 1 2-2"/></symbol>
-      <symbol id="icon-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 10v6M14 10v6"/></symbol>
-      <symbol id="icon-restore" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 6 6v3"/></symbol>
-      <symbol id="icon-export" viewBox="0 0 24 24"><path d="M12 16V3M7 8l5-5 5 5"/><path d="M5 14v6h14v-6"/></symbol>
-      <symbol id="icon-save" viewBox="0 0 24 24"><path d="M12 3v13M7 11l5 5 5-5"/><path d="M5 20h14"/></symbol>
-      <symbol id="icon-compare" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16M8 9l-2 3 2 3M16 9l2 3-2 3"/></symbol>
-      <symbol id="icon-finder" viewBox="0 0 24 24"><path d="M3 8V6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><circle cx="13" cy="13" r="3"/><path d="m15.2 15.2 2.3 2.3"/></symbol>
-      <symbol id="icon-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
-      <symbol id="icon-reset-view" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></symbol>
-      <symbol id="icon-zoom-in" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="7.5"/><path d="m16 16 5 5M7.5 10.5h6M10.5 7.5v6"/></symbol>
-      <symbol id="icon-zoom-out" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="7.5"/><path d="m16 16 5 5M7.5 10.5h6"/></symbol>
-      <symbol id="icon-fullscreen" viewBox="0 0 24 24"><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5"/></symbol>
-      <symbol id="icon-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
-      <symbol id="icon-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/></symbol>
-      <symbol id="icon-error" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6M15 9l-6 6"/></symbol>
-      <symbol id="icon-warning" viewBox="0 0 24 24"><path d="m12 3 10 18H2Z"/><path d="M12 9v4M12 17h.01"/></symbol>
-      <symbol id="icon-minus" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></symbol>
-      <symbol id="icon-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
-      <symbol id="icon-split-grip" viewBox="0 0 24 24"><path d="m8 7-5 5 5 5M16 7l5 5-5 5"/></symbol>
+      <symbol id="icon-info" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M6 3h12a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3h-5l-5 3v-3H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3Z M11 10v6h2v-6Z M11 6v2h2V6Z"/></symbol>
+      <symbol id="icon-theme-auto" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20Z M12 5v14a7 7 0 0 0 0-14Z"/></symbol>
+      <symbol id="icon-sun" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M11 1h2v4h-2Z M11 19h2v4h-2Z M1 11h4v2H1Z M19 11h4v2h-4Z M7 7h10v10H7Z M4 3l3 3-1 1-3-3Z M18 17l3 3-1 1-3-3Z M3 20l3-3 1 1-3 3Z M17 6l3-3 1 1-3 3Z"/></symbol>
+      <symbol id="icon-moon" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M5 3h10a9 9 0 1 0 6 14H10a5 5 0 0 1-5-5Z M17 3h2v3h3v2h-3v3h-2V8h-3V6h3Z"/></symbol>
+      <symbol id="icon-add-images" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M4 5h11a2 2 0 0 1 2 2v13H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z M4 17h11l-4-5-3 3-2-2Z M5 8v3h3V8Z M18 2h2v3h3v2h-3v3h-2V7h-3V5h3Z"/></symbol>
+      <symbol id="icon-folder-add" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M2 5a2 2 0 0 1 2-2h5l3 3h8a2 2 0 0 1 2 2v2H2Z M2 12h20v7a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2Z M11 13v2H8v2h3v2h2v-2h3v-2h-3v-2Z"/></symbol>
+      <symbol id="icon-folder-open" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M2 5a2 2 0 0 1 2-2h5l3 3h8v3H6l-4 9Z M8 11h15l-4 10H4Z"/></symbol>
+      <symbol id="icon-queue" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 3h4v4H3Z M10 3h11v4H10Z M3 10h4v4H3Z M10 10h9v4h-9Z M3 17h4v4H3Z M10 17h7v4h-7Z"/></symbol>
+      <symbol id="icon-compress" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 2h18v3H3Z M3 19h18v3H3Z M7 7h10l-3 3h-4Z M10 14h4l3 3H7Z M9 11h6v2H9Z"/></symbol>
+      <symbol id="icon-recompress" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 3h13a6 6 0 0 1 6 6v5h-3V9a3 3 0 0 0-3-3H8v3L2 4Z M21 21H8a6 6 0 0 1-6-6v-5h3v5a3 3 0 0 0 3 3h8v-3l6 5Z M9 10h6v4H9Z"/></symbol>
+      <symbol id="icon-sliders" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M4 3h2v18H4Z M11 3h2v18h-2Z M18 3h2v18h-2Z M2 6h6v4H2Z M9 14h6v4H9Z M16 7h6v4h-6Z"/></symbol>
+      <symbol id="icon-results" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 3h8v8H3Z M13 3h8v8h-8Z M3 13h8v8H3Z M14 16l2 2 5-5 2 2-7 7-4-4Z"/></symbol>
+      <symbol id="icon-trash" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 4h7V2h6v3l6 2-1 3L3 7Z M5 10l15 2-2 10H7Z M9 12l1 7h2l-1-7Z M15 13l-1 6h2l1-6Z"/></symbol>
+      <symbol id="icon-restore" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M2 9l7-6v4h5a8 8 0 0 1 0 16h-4v-3h4a5 5 0 0 0 0-10H9v4Z M3 17h4v6H3Z"/></symbol>
+      <symbol id="icon-export" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 3h10v3H6v12h12v-7h3v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z M15 2h7v7h-3V7l-7 7-2-2 7-7h-2Z"/></symbol>
+      <symbol id="icon-save" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 3h7v9H7l5 5 5-5h-3V3h7v17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol>
+      <symbol id="icon-compare" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M2 5h8v14H2Z M4 15h4l-2-4Z M14 5h8v14h-8Z M16 8v8h4V8Z M11 2h2v20h-2Z"/></symbol>
+      <symbol id="icon-finder" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M2 5h7l3 3h8v3h-9v10H4a2 2 0 0 1-2-2Z M14 13h9v9h-9Z M16 15v5h5v-5Z"/></symbol>
+      <symbol id="icon-copy" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 2h12v3H6v11H3Z M8 7h12a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H8Z M11 11v2h8v-2Z M11 16v2h6v-2Z"/></symbol>
+      <symbol id="icon-reset-view" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M2 4h6v3H5v10h3v3H2Z M16 4h6v16h-6v-3h3V7h-3Z M8 9h8v6H8Z"/></symbol>
+      <symbol id="icon-zoom-in" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 3h15v15H3Z M9 6v3H6v3h3v3h3v-3h3V9h-3V6Z M19 16l4 4-3 3-4-4Z"/></symbol>
+      <symbol id="icon-zoom-out" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 3h15v15H3Z M6 9v3h9V9Z M19 16l4 4-3 3-4-4Z"/></symbol>
+      <symbol id="icon-fullscreen" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M2 2h8v3H5v5H2Z M14 2h8v8h-3V5h-5Z M2 14h3v5h5v3H2Z M19 14h3v8h-8v-3h5Z M8 8h8v8H8Z"/></symbol>
+      <symbol id="icon-close" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M5 3l7 7 7-7 2 2-7 7 7 7-2 2-7-7-7 7-2-2 7-7-7-7Z"/></symbol>
+      <symbol id="icon-check" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 4h10v3H6v11h12v-5h3v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z M9 10l3 3 8-9 2 2-10 11-5-5Z"/></symbol>
+      <symbol id="icon-error" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M5 2h14l3 3v14l-3 3H5l-3-3V5Z M7 9l3 3-3 3 2 2 3-3 3 3 2-2-3-3 3-3-2-2-3 3-3-3Z"/></symbol>
+      <symbol id="icon-warning" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M10 2h4l9 18-2 2H3l-2-2Z M11 7v7h2V7Z M11 17v2h2v-2Z"/></symbol>
+      <symbol id="icon-minus" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M4 5h16v14H4Z M7 11v2h10v-2Z"/></symbol>
+      <symbol id="icon-chevron-down" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M4 7h5l3 4 3-4h5l-8 10Z"/></symbol>
+      <symbol id="icon-split-grip" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M1 12l6-6v12Z M17 6l6 6-6 6Z M10 4h4v16h-4Z"/></symbol>
+      <symbol id="icon-sort-asc" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M5 3l5 6H7v12H4V9H1Z M12 4h4v3h-4Z M12 10h7v3h-7Z M12 16h10v3H12Z"/></symbol>
+      <symbol id="icon-sort-desc" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M4 3h3v12h3l-5 6-4-6h3Z M12 4h10v3H12Z M12 10h7v3h-7Z M12 16h4v3h-4Z"/></symbol>
     </defs>
   </svg>
  <!-- Title Bar -->
@@ -71,7 +73,7 @@
      <span class="titlebar-text">OctoShrink</span>
       <span class="titlebar-update" id="titlebarUpdate" style="display:none;">
         <span class="titlebar-update-text" id="titlebarUpdateText">下载中 0%</span>
-        <button class="titlebar-update-cancel" onclick="cancelUpdateDownload()">✕</button>
+        <button class="titlebar-update-cancel" onclick="cancelUpdateDownload()" aria-label="取消下载"><svg class="symbol-icon symbol-icon-small" aria-hidden="true"><use href="#icon-close"/></svg></button>
       </span>
    </div>
     <div class="titlebar-progress" id="titlebarProgress" style="width:0%"></div>
@@ -79,6 +81,7 @@
      <span class="titlebar-info" id="titlebarInfo" style="display:none;">
        <span class="titlebar-info-version" id="titlebarInfoVersion"></span>
        <span class="titlebar-info-status" id="aboutUpdateStatus"></span>
+      <a class="titlebar-info-link" href="https://github.com/misswell/octo-shrink/releases/latest" target="_blank" rel="noopener noreferrer" title="打开 GitHub Release 页面">下载页面</a>
       <button class="titlebar-info-btn" id="aboutUpdateBtn" onclick="manualCheckUpdate()">检查更新</button>
       <button class="titlebar-info-btn" onclick="resetSettings()">还原默认设置</button>
      </span>
@@ -150,7 +153,23 @@
           <span class="stat-value stat-rate" id="totalRate">0%</span>
         </div>
       </div>
+      <div class="queue-view-controls">
+        <label class="queue-failure-filter"><input type="checkbox" id="queueFailedOnly" onchange="applyQueueView()">只显示失败</label>
+        <div class="queue-sort-controls">
+          <label for="queueSortKey">排序</label>
+          <select id="queueSortKey" onchange="applyQueueView()">
+            <option value="import">导入顺序</option>
+            <option value="name">名称</option>
+            <option value="original">原始大小</option>
+            <option value="compressed">压缩后大小</option>
+            <option value="ratio">压缩比</option>
+            <option value="status">状态</option>
+          </select>
+          <button class="btn btn-small btn-ghost" id="queueSortDirection" type="button" onclick="toggleQueueSortDirection()" aria-label="当前升序，点击切换降序"><svg class="symbol-icon symbol-icon-small" aria-hidden="true"><use href="#icon-sort-asc"/></svg> 升序</button>
+        </div>
+      </div>
       <div class="file-queue-list" id="fileQueueList"></div>
+      <div class="queue-filter-empty" id="queueFilterEmpty" hidden>没有失败的文件</div>
       <div class="queue-actions">
         <button class="btn btn-secondary" onclick="selectFiles()">
           <svg class="symbol-icon"><use href="#icon-add-images"/></svg>
@@ -369,96 +388,6 @@
         <span>共压缩 <strong id="resultCount">0</strong> 个文件，节省 <strong id="resultTotalSavings">0B</strong></span>
       </div>
       <div class="results-list" id="resultsList"></div>
-    </div>
-  </div>
-
-  <!-- Comparison Modal -->
-  <div class="modal-backdrop" id="modalBackdrop" style="display:none;" onclick="closeCompare()"></div>
-  <div class="compare-modal" id="comparePanel" style="display:none;">
-    <div class="compare-modal-header">
-     <h3>
-        <svg class="symbol-icon"><use href="#icon-compare"/></svg>
-        原图对比
-     </h3>
-     <div class="compare-toolbar-right">
-       <div class="compare-zoom-control">
-         <button class="zoom-step-btn" onclick="stepZoom(-0.25)" title="缩小" aria-label="缩小"><svg class="symbol-icon symbol-icon-small"><use href="#icon-zoom-out"/></svg></button>
-         <input type="range" class="zoom-slider" id="zoomSlider" min="0.1" max="8" step="0.1" value="1">
-         <button class="zoom-step-btn" onclick="stepZoom(0.25)" title="放大" aria-label="放大"><svg class="symbol-icon symbol-icon-small"><use href="#icon-zoom-in"/></svg></button>
-         <span class="zoom-value" id="zoomValue">100%</span>
-         <button class="zoom-reset-btn" onclick="setCompareZoom(1)" title="重置缩放" aria-label="重置缩放"><svg class="symbol-icon symbol-icon-small"><use href="#icon-reset-view"/></svg></button>
-       </div>
-       <button class="btn btn-icon-close compare-fullscreen-btn" id="fullscreenBtn" onclick="toggleFullscreen()" title="全屏">
-         <svg class="symbol-icon"><use href="#icon-fullscreen"/></svg>
-       </button>
-       <button class="btn btn-icon-close" onclick="closeCompare()" title="关闭">
-         <svg class="symbol-icon"><use href="#icon-close"/></svg>
-       </button>
-     </div>
-   </div>
-<div class="compare-modal-body" id="compareModalBody">
-      <div class="compare-slider-outer" id="compareSliderOuter">
-        <div class="compare-slider-container" id="compareSliderContainer">
-          <div class="compare-img-wrapper" id="compareImgWrapper">
-            <img id="compareCompressedImg" class="compare-img-base" alt="压缩后" draggable="false">
-            <img id="compareOriginalImg" class="compare-img-overlay" alt="原图" draggable="false">
-            <div class="compare-handle" id="compareHandle">
-              <div class="compare-handle-line"></div>
-              <div class="compare-handle-circle">
-                <svg class="symbol-icon"><use href="#icon-split-grip"/></svg>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="compare-label label-left">原图</div>
-        <div class="compare-label label-right">压缩后</div>
-        <input type="range" class="compare-slider-bar" id="compareRange" min="0" max="100" value="50">
-      </div>
-<div class="compare-info">
-   <div class="compare-info-item" style="width:100%;margin-bottom:4px;">
-     <span class="compare-info-label">文件名</span>
- <span class="compare-info-value" id="compareFilename">-</span>
-     </div>
-     <div class="compare-info-row">
-       <div class="compare-info-item">
-         <span class="compare-info-label">原图大小</span>
-         <span class="compare-info-value original" id="compareOriginalSize">-</span>
-       </div>
-       <div class="compare-info-item">
-         <span class="compare-info-label">压缩后大小</span>
-         <span class="compare-info-value compressed" id="compareCompressedSize">-</span>
-       </div>
-       <div class="compare-info-item">
-         <span class="compare-info-label">节省</span>
-         <span class="compare-info-value savings" id="compareSavings">-</span>
-       </div>
-       <div class="compare-info-item">
-         <span class="compare-info-label">算法</span>
-         <span class="compare-info-value" id="compareAlgorithm">-</span>
-       </div>
-     </div>
-   </div>
-   <div class="compare-recompress">
-     <div class="recompress-row">
-       <label>重新压缩质量</label>
-       <input type="range" id="recompressQuality" min="10" max="100" value="75">
-       <span id="recompressQualityValue">75%</span>
-       <button class="btn btn-primary btn-recompress" id="recompressBtn" onclick="recompressWithQuality(document.getElementById('recompressQuality').value)">
-         <svg class="symbol-icon symbol-icon-small"><use href="#icon-recompress"/></svg>
-         重新压缩
-       </button>
-     </div>
-   </div>
-   <div class="compare-modal-footer">
-     <button class="btn btn-secondary" onclick="restoreFromCompare()">
-       <svg class="symbol-icon"><use href="#icon-restore"/></svg>
-       恢复原图
-     </button>
-     <button class="btn btn-primary" onclick="closeCompare()">
-       <svg class="symbol-icon"><use href="#icon-close"/></svg>
-       关闭
-     </button>
-   </div>
     </div>
   </div>
 
