@@ -187,6 +187,9 @@ const compareSavings = document.getElementById('compareSavings');
 const compareAlgorithm = document.getElementById('compareAlgorithm');
 let currentCompareResult = null;
 let currentCompareZoom = 1;
+let compareRequestId = 0;
+let compareSliderFrame = 0;
+let pendingCompareSliderValue = null;
 const outputDirRow = document.getElementById('outputDirRow');
 const outputSuffixRow = document.getElementById('outputSuffixRow');
 const outputSuffixInput = document.getElementById('outputSuffix');
@@ -998,6 +1001,7 @@ function formatBytes(bytes) {
 async function recompressWithQuality(quality) {
   if (!currentCompareResult) return;
   const result = currentCompareResult;
+  const requestId = compareRequestId;
   const recompressBtn = document.getElementById('recompressBtn');
   if (recompressBtn) recompressBtn.disabled = true;
 
@@ -1011,17 +1015,34 @@ async function recompressWithQuality(quality) {
     };
     const newResult = await invoke('compress_single', { filePath: result.file, options: options });
     if (newResult && newResult.success && newResult.outputPath) {
+      if (requestId !== compareRequestId || !currentCompareResult || currentCompareResult.file !== result.file) return;
       // Load the new compressed image
-      await loadOriginalImage(compareCompressedImg, newResult.outputPath);
+      const loadedPreview = await loadOriginalImage(compareCompressedImg, newResult.outputPath);
+      if (requestId !== compareRequestId || !currentCompareResult || currentCompareResult.file !== result.file) return;
+      if (!loadedPreview) {
+        showToast('重新压缩预览加载失败');
+        return;
+      }
       compareCompressedSize.textContent = newResult.compressedSizeFormatted || '?';
       compareSavings.textContent = (newResult.savings >= 0 ? '-' : '+') + Math.abs(newResult.savings).toFixed(1) + '%';
       compareAlgorithm.textContent = newResult.algorithm || '?';
 
       const idx = results.findIndex(r => r.file === result.file);
       if (idx >= 0) {
-        results[idx] = Object.assign({}, results[idx], newResult);
+        const existing = results[idx];
+        results[idx] = Object.assign({}, existing, newResult, {
+          // compress_single writes a temporary preview. Keep the real output
+          // and backup metadata so Restore still targets the original result.
+          outputPath: existing.outputPath,
+          backupPath: existing.backupPath,
+          outputMode: existing.outputMode,
+        });
       }
-      currentCompareResult = Object.assign({}, result, newResult);
+      currentCompareResult = Object.assign({}, result, newResult, {
+        outputPath: result.outputPath,
+        backupPath: result.backupPath,
+        outputMode: result.outputMode,
+      });
       showToast('重新压缩完成 (质量: ' + quality + '%)');
     } else {
       showToast('重新压缩失败');
@@ -1034,54 +1055,65 @@ async function recompressWithQuality(quality) {
 }
 
 async function openCompare(result) {
+  const requestId = ++compareRequestId;
+  const modalBackdrop = document.getElementById('modalBackdrop');
+  const outer = document.getElementById('compareSliderOuter');
+
+  // Make the modal participate in layout before measuring it. Keeping it
+  // invisible avoids flashing an empty/old image while the two files load.
+  if (outer) outer.style.aspectRatio = '4 / 3';
+  if (modalBackdrop) modalBackdrop.style.display = 'block';
+  comparePanel.style.display = 'flex';
+  comparePanel.style.visibility = 'hidden';
+  document.body.style.overflow = 'hidden';
+
   releaseCompareImages();
   currentCompareResult = result;
 
-  // Determine the original image path (backup for replace mode, else original file)
-  const originalPath = result.backupPath || result.file;
-  const loadedOriginal = await loadOriginalImage(compareOriginalImg, originalPath);
-  if (!loadedOriginal) {
-    showToast('无法加载原图');
-    return;
-  }
-
-  // Load compressed image from output path
-  const compressedPath = result.outputPath || result.file;
-  const loadedCompressed = await loadOriginalImage(compareCompressedImg, compressedPath);
-  if (!loadedCompressed) {
-    showToast('无法加载压缩图');
-    releaseCompareImages();
-    return;
-  }
-
-  // Set container aspect-ratio to match image
-  var outer = document.getElementById('compareSliderOuter');
-  var setRatio = function() {
-    var w = compareOriginalImg.naturalWidth || compareCompressedImg.naturalWidth;
-    var h = compareOriginalImg.naturalHeight || compareCompressedImg.naturalHeight;
-    if (w && h) {
-      outer.style.aspectRatio = w + ' / ' + h;
+  try {
+    // These reads are independent and can be performed concurrently.
+    const originalPath = result.backupPath || result.file;
+    const compressedPath = result.outputPath || result.file;
+    const loaded = await Promise.all([
+      loadOriginalImage(compareOriginalImg, originalPath),
+      loadOriginalImage(compareCompressedImg, compressedPath),
+    ]);
+    if (requestId !== compareRequestId) return;
+    if (!loaded[0] || !loaded[1]) {
+      showToast(!loaded[0] ? '无法加载原图' : '无法加载压缩图');
+      closeCompare();
+      return;
     }
-  };
-  if (compareOriginalImg.naturalWidth) setRatio();
-  else compareOriginalImg.onload = setRatio;
 
-  var fitW = compareOriginalImg.naturalWidth || compareCompressedImg.naturalWidth || 1;
-  var fitH = compareOriginalImg.naturalHeight || compareCompressedImg.naturalHeight || 1;
-  var fitZoom = Math.min(outer.clientWidth / fitW, outer.clientHeight / fitH, 1);
-  if (!isFinite(fitZoom) || fitZoom <= 0) fitZoom = 1;
-  setCompareZoom(fitZoom);
-  updateCompareSlider(50);
+    const setRatio = function() {
+      const w = compareOriginalImg.naturalWidth || compareCompressedImg.naturalWidth;
+      const h = compareOriginalImg.naturalHeight || compareCompressedImg.naturalHeight;
+      if (outer && w && h) outer.style.aspectRatio = w + ' / ' + h;
+    };
+    setRatio();
+    // The aspect-ratio change affects clientHeight; wait for the browser to
+    // commit it before calculating the initial fit zoom.
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    if (requestId !== compareRequestId) return;
 
-  compareFilename.textContent = basename(result.file);
-  compareOriginalSize.textContent = result.originalSizeFormatted || '?';
-  compareCompressedSize.textContent = result.compressedSizeFormatted || '?';
-  compareSavings.textContent = (result.savings >= 0 ? '-' : '+') + Math.abs(result.savings).toFixed(1) + '%';
-  compareAlgorithm.textContent = result.algorithm || '?';
+    const fitW = compareOriginalImg.naturalWidth || compareCompressedImg.naturalWidth || 1;
+    const fitH = compareOriginalImg.naturalHeight || compareCompressedImg.naturalHeight || 1;
+    let fitZoom = outer ? Math.min(outer.clientWidth / fitW, outer.clientHeight / fitH, 1) : 1;
+    if (!isFinite(fitZoom) || fitZoom <= 0) fitZoom = 1;
+    setCompareZoom(fitZoom);
+    updateCompareSlider(50);
 
-  document.getElementById('modalBackdrop').style.display = 'block';
-  comparePanel.style.display = 'flex';
-  document.body.style.overflow = 'hidden';
+    compareFilename.textContent = basename(result.file);
+    compareOriginalSize.textContent = result.originalSizeFormatted || '?';
+    compareCompressedSize.textContent = result.compressedSizeFormatted || '?';
+    compareSavings.textContent = (result.savings >= 0 ? '-' : '+') + Math.abs(result.savings).toFixed(1) + '%';
+    compareAlgorithm.textContent = result.algorithm || '?';
+    comparePanel.style.visibility = 'visible';
+  } catch (err) {
+    if (requestId !== compareRequestId) return;
+    showToast('打开对比失败: ' + (err.message || err));
+    closeCompare();
+  }
 }
 
 // ── Compare slider: clip-path + handle position ──────────────────
@@ -1105,6 +1137,15 @@ function updateCompareSlider(value) {
   compareOriginalImg.style.clipPath = 'inset(0 ' + clipRight + '% 0 0)';
   compareHandle.style.left = clipLinePct + '%';
   compareHandle.style.display = 'block';
+}
+
+function scheduleCompareSlider(value) {
+  pendingCompareSliderValue = value;
+  if (compareSliderFrame) return;
+  compareSliderFrame = requestAnimationFrame(function() {
+    compareSliderFrame = 0;
+    updateCompareSlider(pendingCompareSliderValue);
+  });
 }
 
 function setCompareZoom(level) {
@@ -1156,7 +1197,9 @@ function toggleFullscreen() {
 }
 
 function closeCompare() {
+  compareRequestId++;
   comparePanel.style.display = 'none';
+  comparePanel.style.visibility = '';
   comparePanel.classList.remove('fullscreen');
   document.getElementById('modalBackdrop').style.display = 'none';
   document.body.style.overflow = '';
@@ -1200,7 +1243,7 @@ if (recompressQualitySlider) {
 
   outer.addEventListener('mousemove', function(e) {
     var pct = getPercent(e.clientX);
-    updateCompareSlider(pct);
+    scheduleCompareSlider(pct);
   });
 
   function onPointerDown(e) {
@@ -1211,14 +1254,14 @@ if (recompressQualitySlider) {
       if (selection) selection.removeAllRanges();
     }
     var clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    updateCompareSlider(getPercent(clientX));
+    scheduleCompareSlider(getPercent(clientX));
   }
 
   function onPointerMove(e) {
     if (!isPointerDown) return;
     e.preventDefault();
     var clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    updateCompareSlider(getPercent(clientX));
+    scheduleCompareSlider(getPercent(clientX));
   }
 
   function onPointerUp() { isPointerDown = false; }
@@ -1232,16 +1275,25 @@ if (recompressQualitySlider) {
 
   if (sliderBar) {
     sliderBar.addEventListener('input', function() {
-      updateCompareSlider(this.value);
+      scheduleCompareSlider(this.value);
     });
   }
 
   outer.addEventListener('wheel', function(e) {
-    e.preventDefault();
     if (e.metaKey) {
+      e.preventDefault();
       navigateCompare(e.deltaY < 0 ? -1 : 1);
       return;
     }
+    // Let ordinary wheel events scroll the zoomed image. Use Ctrl/Alt plus
+    // wheel for zoom so panning remains possible without a separate control.
+    if (!e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      container.scrollLeft += e.deltaX || (e.shiftKey ? e.deltaY : 0);
+      container.scrollTop += e.deltaY;
+      return;
+    }
+    e.preventDefault();
     var oldZoom = currentCompareZoom || 1;
     var delta = e.deltaY < 0 ? 0.25 : -0.25;
     var newZoom = Math.max(0.1, Math.min(8, oldZoom + delta));
@@ -1272,7 +1324,7 @@ if (recompressQualitySlider) {
   }, { passive: false });
 
   container.addEventListener('scroll', function() {
-    if (sliderBar) updateCompareSlider(sliderBar.value);
+    if (sliderBar) scheduleCompareSlider(sliderBar.value);
   });
 
   var zoomSliderEl = document.getElementById('zoomSlider');
@@ -1441,7 +1493,9 @@ function navigateCompare(direction) {
   if (!currentCompareResult) return;
   var okResults = results.filter(function(r) { return r && r.success; });
   if (okResults.length === 0) return;
-  var idx = okResults.indexOf(currentCompareResult);
+  // Recompression replaces the result object. Locate the current item by its
+  // stable file path so next/previous remains correct after that update.
+  var idx = okResults.findIndex(function(r) { return r.file === currentCompareResult.file; });
   if (idx < 0) idx = 0;
   var newIdx = Math.max(0, Math.min(okResults.length - 1, idx + direction));
   if (newIdx === idx) return;

@@ -1194,7 +1194,16 @@ body {
   max-height: 100vh;
   border-radius: 0;
 }
-.compare-modal.fullscreen .compare-slider-outer { flex: 1; }
+.compare-modal.fullscreen .compare-modal-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.compare-modal.fullscreen .compare-slider-outer {
+  flex: 1;
+  min-height: 0;
+  aspect-ratio: auto;
+}
 
 /* ─── Compare Slider ──────────────────────────────────────── */
 .compare-slider-outer {
