@@ -27,6 +27,40 @@ enum CompressionEngine {
         }
     }
 
+    /// 智能模式：与 Tauri `compress_smart` 对齐——PNG 同时尝试 pngquant 与 WebP，取体积更小者。
+    static func compressSmart(file: String, options: CompressOptions) -> EngineResult {
+        if options.processingMode == .system {
+            return SystemImageConverter.convert(file: file, options: options)
+        }
+        var opts = options
+        if opts.quality <= 0 { opts.quality = analyzeQuality(file: file) }
+        if opts.outputFormat != .original {
+            return compressToFormat(file: file, target: opts.outputFormat.rawValue, options: opts)
+        }
+        let imgType = detectImageType(path: file)
+        let candidates: [EngineResult]
+        switch imgType {
+        case "png": candidates = [compressPNG(file: file, options: opts), compressToWebP(file: file, options: opts)]
+        case "jpg": candidates = [compressJPG(file: file, options: opts)]
+        case "gif": candidates = [compressGIF(file: file, options: opts)]
+        case "webp": candidates = [compressToWebP(file: file, options: opts)]
+        case "heic": candidates = [compressHEIC(file: file, options: opts)]
+        default: return compress(file: file, options: opts)
+        }
+        return candidates.min(by: { $0.compressed.count < $1.compressed.count })
+            ?? compress(file: file, options: opts)
+    }
+
+    /// 按文件体积推测质量（仅当 quality 为 0 时使用，与 Tauri analyze_quality 一致）
+    private static func analyzeQuality(file: String) -> Int {
+        let size = (try? FileManager.default.attributesOfItem(atPath: file)[.size] as? Int64) ?? 0
+        if size > 5 * 1024 * 1024 { return 60 }
+        if size > 2 * 1024 * 1024 { return 65 }
+        if size > 1 * 1024 * 1024 { return 70 }
+        if size > 500 * 1024 { return 75 }
+        return 80
+    }
+
     static func compressToFormat(file: String, target: String, options: CompressOptions) -> EngineResult {
         if options.processingMode == .system {
             var opts = options
@@ -91,7 +125,7 @@ enum CompressionEngine {
         }
 
         if let data = compressPNGImageIO(file: file), data.count < originalSize {
-            return EngineResult(success: true, compressed: data, outType: "png", algorithm: "ImageIO")
+            return EngineResult(success: true, compressed: data, outType: "png", algorithm: "image-png")
         }
         return noImprovement(original: original, outType: "png", algorithm: "pngquant", originalSize: originalSize)
     }
@@ -130,7 +164,7 @@ enum CompressionEngine {
         }
 
         if let data = compressJPGImageIO(file: file, quality: quality), data.count < originalSize {
-            return EngineResult(success: true, compressed: data, outType: "jpg", algorithm: "ImageIO")
+            return EngineResult(success: true, compressed: data, outType: "jpg", algorithm: "image-jpeg")
         }
         return noImprovement(original: original, outType: "jpg", algorithm: "mozjpeg", originalSize: originalSize)
     }
@@ -327,7 +361,12 @@ enum CompressionEngine {
     }
 
     static func noImprovement(original: Data, outType: String, algorithm: String, originalSize: Int) -> EngineResult {
-        let msg = "压缩后 \(CompressResult.formatBytes(Int64(original.count))) ≥ 原始 \(CompressResult.formatBytes(Int64(originalSize)))，原图已是最优压缩"
+        let msg: String
+        if original.count >= originalSize {
+            msg = "压缩后 \(CompressResult.formatBytes(Int64(original.count))) > 原始 \(CompressResult.formatBytes(Int64(originalSize)))，原图已是最优压缩"
+        } else {
+            msg = "压缩后体积未减小"
+        }
         return EngineResult(success: true, compressed: original, outType: outType, algorithm: algorithm, error: msg)
     }
 }

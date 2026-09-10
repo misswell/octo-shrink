@@ -21,28 +21,49 @@ struct CompressResult: Identifiable {
     var outputPath: String?
     var backupPath: String?
     var outputMode: String?
+    /// 本批次使用的压缩参数快照（复制日志用，与 Tauri 的 result.compressOptions 对应）
+    var options: CompressOptions?
 
     var originalSizeFormatted: String { Self.formatBytes(originalSize) }
     var compressedSizeFormatted: String { Self.formatBytes(compressedSize) }
     var savingsFormatted: String { String(format: "%.1f%%", savings) }
+    /// 与 Tauri 前端一致：节省 >= 0 显示 "-N.N%"，否则 "+N.N%"
+    var savingsSignedText: String {
+        "\(savings >= 0 ? "-" : "+")\(String(format: "%.1f", abs(savings)))%"
+    }
 
+    /// 与 Rust `engine::format_bytes` 对齐（用于 originalSizeFormatted / compressedSizeFormatted）
     static func formatBytes(_ bytes: Int64) -> String {
         if bytes < 1024 { return String(format: "%.1fB", Double(bytes)) }
         if bytes < 1024 * 1024 { return String(format: "%.1fKB", Double(bytes) / 1024.0) }
         return String(format: "%.1fMB", Double(bytes) / (1024.0 * 1024.0))
     }
 
-    init(engine: EngineResult, file: String, originalSize: Int64) {
+    /// 与前端 JS `formatBytes` 对齐（用于统计条、队列行大小）：0 显示为 "0B"
+    static func formatBytesJS(_ bytes: Int64) -> String {
+        if bytes == 0 { return "0B" }
+        if bytes < 1024 { return String(format: "%.1fB", Double(bytes)) }
+        if bytes < 1024 * 1024 { return String(format: "%.1fKB", Double(bytes) / 1024.0) }
+        return String(format: "%.1fMB", Double(bytes) / (1024.0 * 1024.0))
+    }
+
+    init(engine: EngineResult, file: String, originalSize: Int64, options: CompressOptions? = nil) {
+        let compressedSize = Int64(engine.compressed.count)
         self.success = engine.success
         self.file = file
         self.originalSize = originalSize
-        self.compressedSize = Int64(engine.compressed.count)
-        self.savings = originalSize > 0
-            ? (1.0 - Double(engine.compressed.count) / Double(originalSize)) * 100.0
-            : 0
+        self.compressedSize = compressedSize
+        let raw: Double
+        if originalSize > 0 {
+            raw = (Double(originalSize) - Double(min(compressedSize, originalSize))) / Double(originalSize) * 100.0
+        } else {
+            raw = 0
+        }
+        self.savings = (raw * 10).rounded() / 10
         self.outType = engine.outType
         self.algorithm = engine.algorithm
         self.error = engine.error
+        self.options = options
     }
 }
 
@@ -51,8 +72,10 @@ enum QueueStatus: String {
     case compressing = "compressing"
     case done = "done"
     case failed = "failed"
+    /// 用户从队列里移除（等待中移除）
+    case removed = "removed"
+    /// 压缩过程中被取消 / 跳过
     case cancelled = "cancelled"
-    case skipped = "skipped"
     case restored = "restored"
 }
 
@@ -92,9 +115,17 @@ func detectImageType(path: String) -> String {
     return "unknown"
 }
 
+/// 与 Tauri 后端 collect_image_files 的支持扩展名保持一致
 let supportedExtensions: Set<String> = [
-    "png", "jpg", "jpeg", "gif", "webp", "bmp", "heic", "heif", "avif"
+    "png", "jpg", "jpeg", "gif", "webp", "bmp",
+    "avif", "jxl", "heic", "heif", "tif", "tiff"
 ]
+
+/// 规范化路径（解析符号链接，如 /tmp → /private/tmp），与 Tauri `canonicalize` 对齐。
+/// 去重必须基于规范化路径，否则同一文件以两种写法出现时会重复入队。
+func canonicalPath(_ path: String) -> String {
+    URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+}
 
 func expandImageFiles(paths: [String]) -> [String] {
     var result: [String] = []
@@ -103,6 +134,7 @@ func expandImageFiles(paths: [String]) -> [String] {
         var isDir: ObjCBool = false
         guard fm.fileExists(atPath: path, isDirectory: &isDir) else { continue }
         if isDir.boolValue {
+            var dirFiles: [String] = []
             if let enumerator = fm.enumerator(atPath: path) {
                 while let item = enumerator.nextObject() as? String {
                     let full = (path as NSString).appendingPathComponent(item)
@@ -110,18 +142,19 @@ func expandImageFiles(paths: [String]) -> [String] {
                     guard fm.fileExists(atPath: full, isDirectory: &itemIsDir), !itemIsDir.boolValue else { continue }
                     let ext = (full as NSString).pathExtension.lowercased()
                     if supportedExtensions.contains(ext) {
-                        result.append(full)
+                        dirFiles.append(canonicalPath(full))
                     }
                 }
             }
+            result.append(contentsOf: dirFiles.sorted())
         } else {
             let ext = (path as NSString).pathExtension.lowercased()
             if supportedExtensions.contains(ext) {
-                result.append(path)
+                result.append(canonicalPath(path))
             }
         }
     }
-    // 去重但保持原始顺序（目录枚举顺序 + 文件选择顺序）
+    // 去重但保持顺序（目录内已排序 + 文件选择顺序）
     var seen = Set<String>()
     return result.filter { seen.insert($0).inserted }
 }

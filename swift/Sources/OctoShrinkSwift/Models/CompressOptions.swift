@@ -40,8 +40,8 @@ enum OutputMode: String, CaseIterable {
     var label: String {
         switch self {
         case .replace: return "覆盖原文件"
-        case .suffix: return "自定义后缀"
-        case .folder: return "输出到文件夹"
+        case .suffix: return "添加自定义后缀"
+        case .folder: return "输出到指定文件夹"
         }
     }
 }
@@ -54,10 +54,20 @@ enum SystemImageSize: String, CaseIterable {
 
     var label: String {
         switch self {
-        case .actual: return "实际尺寸"
-        case .large: return "大（1280px）"
-        case .medium: return "中（640px）"
-        case .small: return "小（320px）"
+        case .actual: return "实际大小"
+        case .large: return "大（最长边 1280 px）"
+        case .medium: return "中（最长边 640 px）"
+        case .small: return "小（最长边 320 px）"
+        }
+    }
+
+    /// 与 Tauri 一致的算法后缀标签
+    var shortLabel: String {
+        switch self {
+        case .actual: return "实际大小"
+        case .large: return "大"
+        case .medium: return "中"
+        case .small: return "小"
         }
     }
 }
@@ -70,7 +80,7 @@ enum CompressionBackend: String, CaseIterable {
     var label: String {
         switch self {
         case .auto: return "自动选择（推荐）"
-        case .sharp: return "现代引擎"
+        case .sharp: return "现代引擎（推荐）"
         case .cli: return "CLI 工具"
         }
     }

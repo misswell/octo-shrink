@@ -154,7 +154,14 @@ cargo test --features inproc-backends          # 进程内版
 - ✅ 输出文件名后缀支持自定义：默认 `_compressed`，两条产物线共用 `outputSuffix`，并对路径分隔符做安全清理
 - ✅ 两条产物线功能对齐：JXL 已从前端输出格式下拉移除（两版一致）；GIF 两版均有压缩功能（Direct gifsicle 减色更优，App Store image crate 重编码，属质量差异非功能差异）
 - ✅ 对比视图已改为独立原生窗口（未发版）：`compare.html` + `compare_window.js`，label="compare"，由 `open_compare_window` 命令创建（Direct 用 tauri:// 内嵌页，App Store 用本地 HTTP 页），自由缩放可大于主窗口、自带红绿灯；载荷经 `pending_compare` 状态 + `take_compare_window_payload` 首屏取回，`compare-open` / `compare-results-changed` 事件双向同步；`on_window_event` 仅在 label=="main" 关闭时 exit(0)
-- ✅ Swift 原生版已就绪（v2.5.30）：`swift/` 目录 SwiftUI 应用，`scripts/build_swift.sh` 独立构建，`build_all.sh` 第三步自动调用；复用 Direct 线 CLI 工具 + dylib；Bundle ID `com.misswell.octoshrink.swift`，最低 macOS 13.0，约 14MB
+- ✅ Swift 原生版已就绪（v2.5.30）：`swift/` 目录 SwiftUI 应用，`scripts/build_swift.sh` 独立构建，`build_all.sh` 第三步自动调用；复用 Direct 线 CLI 工具 + dylib；Bundle ID `com.misswell.octoshrink.swift`，最低 macOS 13.0，约 15MB
+- ✅ Swift 原生版功能对齐 Tauri/Direct 线（v2.5.32）：
+  - 引擎：PNG/JPG/GIF/WebP/AVIF/HEIC 走同一批 CLI 工具与参数（pngquant / cjpeg / gifsicle / cwebp / avifenc / sips）；智能模式与 Tauri `compress_smart` 一致（PNG 同时试 pngquant 与 WebP，取体积更小者）；系统转换用 ImageIO，算法名 `macOS ImageIO · 大/中/小/实际大小`
+  - 队列/工作流：状态文案与 Tauri 一致（等待中 / 压缩中… / 已完成百分比 / 失败 / 已移除 / 已跳过 / 已恢复），含清空/恢复全部确认弹窗、单文件重试、导出全部、另存为、复制日志、自动压缩续队列
+  - 三种输出模式语义一致：覆盖（首次备份 + 恢复）、自定义后缀（同一 `_compressed` 默认值 + 清洗规则）、指定文件夹（保留相对路径）
+  - 对比窗口：独立 `NSWindow`（label=`compare`），分割滑块 + 缩放 0.1–8、上一个/下一个、重新压缩预览（不改真实输出/备份）、恢复原图并同步主窗口、⌘+滚轮切换、Esc 关闭、←/→ 切换
+  - ⚠️ **Swift 特有实现差异（勿"修复"成 Rust 写法）**：`FileManager.copyItem` 在目标已存在时会失败，而 Rust `fs::copy` 会覆盖。所有覆盖写路径必须走 `AppState.copyOverwriting`，否则 replace 模式恢复会静默失败并丢备份（曾实测踩坑）
+  - 导入去重基于 `canonicalPath`（`/tmp` → `/private/tmp`），与 Tauri `canonicalize` 对齐，避免同一文件两种写法重复入队
 - ✅ 临时目录双时机清理（三条线共用）：启动（清崩溃残留）+ 退出（Tauri 挂 RunEvent::Exit，Swift 挂 applicationWillTerminate），删除 $TMPDIR 下 `octoshrink-backups`、`octoshrink-display` 与 `octoshrink-work`（Swift 压缩中间文件专用目录），避免长期累积
 - 🟡 App Store 审核待提交：2.2.9 已上传 ASC，需补全元数据 + 回复 network.server 解释（路径B）后提交审核
 - ⬜ 引擎迁移后续：JXL（未来接入 jpegxl-sys 后可恢复 UI 选项）；GIF 减色优化（未来可用 imagequant 逐帧量化，当前有帧间闪烁风险暂不做）

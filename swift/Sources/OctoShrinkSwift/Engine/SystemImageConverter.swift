@@ -11,7 +11,7 @@ enum SystemImageConverter {
         guard let original = FileManager.default.contents(atPath: file) else {
             return EngineResult(
                 success: false, compressed: Data(), outType: options.outputFormat.rawValue,
-                algorithm: "macOS ImageIO", error: "无法读取文件"
+                algorithm: "macOS ImageIO", error: "macOS 无法读取此图像"
             )
         }
 
@@ -90,14 +90,14 @@ enum SystemImageConverter {
         guard CGImageDestinationFinalize(dest) else {
             return EngineResult(
                 success: false, compressed: original, outType: outType,
-                algorithm: "macOS ImageIO", error: "系统转换失败"
+                algorithm: "macOS ImageIO", error: "macOS 系统转换失败"
             )
         }
 
         let compressed = destData as Data
         return EngineResult(
             success: true, compressed: compressed, outType: outType,
-            algorithm: "macOS ImageIO", error: nil
+            algorithm: "macOS ImageIO · \(options.systemImageSize.shortLabel)", error: nil
         )
     }
 }
