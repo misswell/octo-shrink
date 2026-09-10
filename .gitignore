@@ -8,6 +8,9 @@ dist/
 src-tauri/target/
 src-tauri/gen/
 
+# Swift native build artifacts
+swift/.build/
+
 # Original Electron version (not part of Tauri project)
 electron/
 

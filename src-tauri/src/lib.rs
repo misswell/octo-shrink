@@ -492,6 +492,9 @@ pub fn run() {
             cancel_update,
         ])
         .setup(move |app| {
+            // 启动时清掉上次崩溃残留的临时目录（正常退出已有 RunEvent::Exit 清理）
+            commands::cleanup_temp_dirs();
+
             // 初始化压缩工具资源目录
             if let Ok(res_dir) = app.path().resource_dir() {
                 engine::set_resource_dir(res_dir);
@@ -585,6 +588,12 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(context)
-        .expect("error while running OctoShrink");
+        .build(context)
+        .expect("error while building OctoShrink")
+        .run(|_app, event| {
+            // 应用退出（关主窗 / Cmd+Q / 重启）时清理临时目录，避免长期累积
+            if matches!(event, tauri::RunEvent::Exit) {
+                commands::cleanup_temp_dirs();
+            }
+        });
 }

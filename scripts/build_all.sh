@@ -152,10 +152,23 @@ if [ "${SIGN:-0}" = "1" ]; then
   ok "App Store 版已签名"
 fi
 
-# ========== 3. 报告 ==========
+# ========== 3. 原生 Swift 版 ==========
+log "构建原生 Swift 版"
+bash "$PROJECT_DIR/scripts/build_swift.sh" || echo "    ⚠ Swift 版构建失败（不影响其他两版）"
+SWIFT_APP="$PROJECT_DIR/swift/.build/OctoShrink_swift.app"
+
+# ========== 4. 报告 ==========
 echo ""
-log "🎉 两版构建完成！"
-echo "    Direct    : $DIRECT_RENAMED"
-echo "    App Store : $APPSTORE_APP"
-echo "    Direct 大小    : $(du -sh "$DIRECT_RENAMED" | awk '{print $1}')"
-echo "    App Store 大小 : $(du -sh "$APPSTORE_APP" | awk '{print $1}')"
+log "🎉 三版构建完成！"
+echo "    Direct       : $DIRECT_RENAMED"
+echo "    App Store    : $APPSTORE_APP"
+if [ -d "$SWIFT_APP" ]; then
+  echo "    Swift Native : $SWIFT_APP"
+else
+  echo "    Swift Native : (构建失败)"
+fi
+echo "    Direct 大小      : $(du -sh "$DIRECT_RENAMED" | awk '{print $1}')"
+echo "    App Store 大小   : $(du -sh "$APPSTORE_APP" | awk '{print $1}')"
+if [ -d "$SWIFT_APP" ]; then
+  echo "    Swift 大小       : $(du -sh "$SWIFT_APP" | awk '{print $1}')"
+fi

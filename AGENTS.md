@@ -1,19 +1,28 @@
 # OctoShrink 工程准则（Codex / Agent 必读）
 
-本文件是项目的权威工程约定。每次在此仓库工作时，**必须先读本文件**，并严格遵守其中"强制规则"。它们的目的是保证两条分发产物线长期并行、互不破坏。
+本文件是项目的权威工程约定。每次在此仓库工作时，**必须先读本文件**，并严格遵守其中"强制规则"。它们的目的是保证三条分发产物线长期并行、互不破坏。
 
 ---
 
 ## 🚨 强制规则（不可违反）
 
-### 1. OctoShrink 有且仅有两条分发产物线，必须始终并行
+### 1. OctoShrink 有三条分发产物线，必须始终并行
 
-| 产物线 | 用途 | 默认 feature | 构建脚本 | 证书 | 产物 |
+| 产物线 | 用途 | 技术栈 | 构建脚本 | 证书 | 产物 |
 ---|---|---|---|---|---|
-| Direct（直发） | GitHub Releases DMG，开发者/高级用户 | default = cli-backends | scripts/notarize.sh | Developer ID Application | .app + .dmg |
-| App Store | Mac App Store 审核/上架 | appstore = inproc-backends | scripts/build_appstore.sh | Apple Distribution | .app + .pkg |
+| Direct（直发） | GitHub Releases DMG，开发者/高级用户 | Tauri 2 + Rust (cli-backends) | scripts/notarize.sh | Developer ID Application | .app + .dmg |
+| App Store | Mac App Store 审核/上架 | Tauri 2 + Rust (inproc-backends) | scripts/build_appstore.sh | Apple Distribution | .app + .pkg |
+| Swift Native（原生） | 原生 macOS 版，无 Tauri/Rust 依赖 | SwiftUI + ImageIO + CLI 工具 | scripts/build_swift.sh | Developer ID Application | .app |
 
-两条线共存于同一个 master 分支、同一套源码，靠 Cargo feature + #[cfg] 分叉实现。
+三条线共存于同一个 master 分支。Tauri 两线靠 Cargo feature + #[cfg] 分叉；Swift 线为独立 `swift/` 目录，复用 `src-tauri/resources/bin` 的 CLI 工具和 `src-tauri/icons` 图标，压缩管线与 Direct 线（cli-backends）对齐。
+
+**Swift 线要点**：
+- Bundle ID：`com.misswell.octoshrink.swift`（与 Direct/App Store 分开）
+- 最低系统：macOS 13.0
+- 系统转换模式用 Swift 原生 ImageIO（`SystemImageConverter.swift`），高级压缩模式调内置 CLI（`CompressionEngine.swift` + `CLIRunner.swift`）
+- UI 为 SwiftUI（`Views/`），状态管理在 `ViewModels/AppState.swift`
+- 构建产物：`swift/.build/OctoShrink_swift.app`（约 14MB，含 6 个 CLI + 17 个 dylib）
+- Swift 构建失败不影响 Direct / App Store 两线（build_all.sh 中用 `||` 容错）
 
 ### 2. 任意改动都不得破坏默认构建（Direct 产物线）
 
@@ -88,10 +97,10 @@ pub async fn compress_png(file: &Path, opts: &CompressOptions) -> EngineResult {
 ## 构建命令速查
 
 ```bash
-# 两版同时构建（日常开发首选）
-bash scripts/build_all.sh                      # 编译两版 + 复制资源（不签名）
-SIGN=1 bash scripts/build_all.sh               # 编译 + 签名两版
-# 产物：OctoShrink_direct.app（Direct）+ OctoShrink.app（App Store）
+# 三版同时构建（日常开发首选）
+bash scripts/build_all.sh                      # 编译三版 + 复制资源（不签名）
+SIGN=1 bash scripts/build_all.sh               # 编译 + 签名三版
+# 产物：OctoShrink_direct.app（Direct）+ OctoShrink.app（App Store）+ swift/.build/OctoShrink_swift.app（Swift）
 
 # Direct（默认，发布到 GitHub Releases）
 cargo tauri build                              # 或 cargo tauri build --features default
@@ -99,7 +108,13 @@ bash scripts/notarize.sh                       # 一键：构建→签名→公�
 
 # App Store（开发循环）
 cargo tauri build --features appstore --bundles app -- --no-default-features
-bash scripts/build_appstore.sh                 # 一键：构建→签名→productbuild→PKG（待落地）
+bash scripts/build_appstore.sh                 # 一键：构建→签名→productbuild→PKG
+
+# Swift 原生版
+bash scripts/build_swift.sh                    # 编译 + 组装 .app（不签名）
+SIGN=1 bash scripts/build_swift.sh             # 编译 + 签名
+bash scripts/package_swift_dmg.sh              # 构建 + 签名 + DMG（一键）
+NOTARIZE=1 bash scripts/package_swift_dmg.sh   # 构建 + 签名 + DMG + 公证 + 装订
 
 # 单元测试
 cargo test                                     # 默认 feature（cli-backends）
@@ -112,12 +127,14 @@ cargo test --features inproc-backends          # 进程内版
 ---|---|---|---|---|
 | Direct | OctoShrink-<ver>-macos.dmg | GitHub Releases | 下载 + 拖到「应用程序」 | Apple 公证（自动 ~2 分钟）|
 | App Store | OctoShrink-<ver>.pkg | App Store Connect | App Store 搜索安装 | 人工 + 自动审核（1-3 周）|
+| Swift Native | OctoShrink_swift.app | 本地 / 未来可上 GitHub Releases | 构建后直接 .app | Apple 公证（可选）|
 
-- 两渠道独立发布，各自节奏
+- 三渠道独立发布，各自节奏
 - 版本号保持一致，避免用户混淆
 - Bundle ID 分开（推荐）：
   - Direct：com.misswell.octoshrink（现状）
   - App Store：com.misswell.octoshrink.appstore（独立配置文件 src-tauri/tauri.conf.appstore.json）
+  - Swift：com.misswell.octoshrink.swift（swift/Info.plist）
 
 ## 完整改造蓝图
 
@@ -137,16 +154,19 @@ cargo test --features inproc-backends          # 进程内版
 - ✅ 输出文件名后缀支持自定义：默认 `_compressed`，两条产物线共用 `outputSuffix`，并对路径分隔符做安全清理
 - ✅ 两条产物线功能对齐：JXL 已从前端输出格式下拉移除（两版一致）；GIF 两版均有压缩功能（Direct gifsicle 减色更优，App Store image crate 重编码，属质量差异非功能差异）
 - ✅ 对比视图已改为独立原生窗口（未发版）：`compare.html` + `compare_window.js`，label="compare"，由 `open_compare_window` 命令创建（Direct 用 tauri:// 内嵌页，App Store 用本地 HTTP 页），自由缩放可大于主窗口、自带红绿灯；载荷经 `pending_compare` 状态 + `take_compare_window_payload` 首屏取回，`compare-open` / `compare-results-changed` 事件双向同步；`on_window_event` 仅在 label=="main" 关闭时 exit(0)
+- ✅ Swift 原生版已就绪（v2.5.30）：`swift/` 目录 SwiftUI 应用，`scripts/build_swift.sh` 独立构建，`build_all.sh` 第三步自动调用；复用 Direct 线 CLI 工具 + dylib；Bundle ID `com.misswell.octoshrink.swift`，最低 macOS 13.0，约 14MB
+- ✅ 临时目录双时机清理（三条线共用）：启动（清崩溃残留）+ 退出（Tauri 挂 RunEvent::Exit，Swift 挂 applicationWillTerminate），删除 $TMPDIR 下 `octoshrink-backups`、`octoshrink-display` 与 `octoshrink-work`（Swift 压缩中间文件专用目录），避免长期累积
 - 🟡 App Store 审核待提交：2.2.9 已上传 ASC，需补全元数据 + 回复 network.server 解释（路径B）后提交审核
 - ⬜ 引擎迁移后续：JXL（未来接入 jpegxl-sys 后可恢复 UI 选项）；GIF 减色优化（未来可用 imagequant 逐帧量化，当前有帧间闪烁风险暂不做）
 
-### 8. 每次编译必须同时构建两条产物线（强制）
+### 8. 每次编译必须同时构建三条产物线（强制）
 
-日常开发首选 `bash scripts/build_all.sh`，一次编译两版：
+日常开发首选 `bash scripts/build_all.sh`，一次编译三版：
 - **Direct 版**（default=cli-backends）→ 产物 `OctoShrink_direct.app`（加 `_direct` 后缀，与 App Store 版区分）
 - **App Store 版**（appstore=inproc-backends）→ 产物 `OctoShrink.app`（原名）
+- **Swift 原生版**（SwiftUI）→ 产物 `swift/.build/OctoShrink_swift.app`（独立目录，失败不影响前两版）
 
-两条线的 `productName` 都是 "OctoShrink"，Tauri 输出到同一路径。build_all.sh 先建 Direct 再重命名，避免覆盖。**不要只编译一版**——改完代码必须两版都过 `cargo check`，发布时用 `build_all.sh` 同时出两版。单独发布某一条线时用 `notarize.sh`（Direct）或 `build_appstore.sh`（App Store）。
+Tauri 两条线的 `productName` 都是 "OctoShrink"，Tauri 输出到同一路径。build_all.sh 先建 Direct 再重命名，避免覆盖。**不要只编译一版**——改完代码必须 Tauri 两版都过 `cargo check`，发布时用 `build_all.sh` 同时出三版。单独发布某一条线时用 `notarize.sh`（Direct）、`build_appstore.sh`（App Store）或 `scripts/build_swift.sh`（Swift）。
 
 ---
 
@@ -163,6 +183,7 @@ cargo test --features inproc-backends          # 进程内版
 | 对比窗口（compare 独立窗口）| WebviewUrl::App 加载内嵌 compare.html，经 convertFileSrc / read_image_dataurl 读图 | WebviewUrl::External 指向本地 HTTP 服务器 `http://localhost:<port>/compare.html`（`frontend_http_port()`），经 read_image_dataurl（bookmark 授权范围内）读图，窗口创建时 `visible(false)` + on_page_load show 防白屏 | 沙盒阻止 tauri://；两版窗口行为一致，URL 按 feature 分叉 |
 | open_in_finder | Command::new("open").arg("-R") | tauri-plugin-opener（NSWorkspace）| 沙盒禁 spawn Finder |
 | ~/Library/... 访问 | 任意 | 仅 App Support / Caches / Tmp（sandbox 允许子集）| 沙盒 |
+| 临时目录清理（启动+退出）| setup() 启动时 + RunEvent::Exit 退出时 fs::remove_dir_all($TMPDIR/octoshrink-backups + octoshrink-display)；Swift 版另清 octoshrink-work | 同上 | 两版共用同一目录名；沙盒允许写自身 tmp；恢复原图仅限当前会话（前端队列内存态），退出后备份无从引用，直接删除；Swift 压缩中间文件集中在 `$TMPDIR/octoshrink-work/`，崩溃残留由下次启动清理 |
 
 ## Entitlements 对照
 

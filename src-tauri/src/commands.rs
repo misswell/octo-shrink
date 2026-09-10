@@ -576,6 +576,15 @@ pub async fn compress_single(
     Ok(result)
 }
 
+/// 应用退出时清理临时目录：`octoshrink-backups`（replace 模式原图备份）与
+/// `octoshrink-display`（单图重压缩对比文件）。恢复原图仅限当前会话
+/// （前端队列为内存态，重启后无恢复入口），退出后备份无从引用，直接删除。
+pub fn cleanup_temp_dirs() {
+    for name in ["octoshrink-backups", "octoshrink-display"] {
+        let _ = fs::remove_dir_all(std::env::temp_dir().join(name));
+    }
+}
+
 #[tauri::command]
 pub fn cancel_file(file_path: String, state: State<'_, AppState>) -> bool {
     state.cancel_queue.lock().unwrap().insert(file_path);
