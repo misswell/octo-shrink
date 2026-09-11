@@ -145,7 +145,7 @@ cargo test --features inproc-backends          # 进程内版
 ## 当前状态（编辑此节以保持最新）
 
 - ✅ v2.5.33 已发布（2026-09-10）：GitHub Release 含 macOS arm64/x86_64/Universal DMG + Universal 更新包（latest.json）+ Windows exe/MSI + Linux AppImage/deb；本版 Swift 原生线与 Tauri 功能完全对齐并重做布局样式
-- ⚠️ 本机钥匙串 `octoshrink-notary` 凭据已丢失（2026-09-10 发现，v2.5.33 Swift DMG 公证受阻）：需用户在终端执行一次 `xcrun notarytool store-credentials octoshrink-notary --apple-id misswell@foxmail.com --team-id U8U443D7ZL` 输入 App 专用密码后，再 `SKIP_BUILD=1 NOTARIZE=1 bash scripts/package_swift_dmg.sh` 补公证
+- ✅ 本机钥匙串 `octoshrink-notary` 公证凭据已于 2026-09-11 恢复：**该 profile 存在 login keychain，绑定 Apple ID/Team，不绑定项目——本机所有项目共用**（`xcrun notarytool submit <文件> --keychain-profile octoshrink-notary`）。注意：凭据条目可能无故消失（2026-09-10 曾发生一次），公证报 "No Keychain password item found" 时先跑 `xcrun notarytool history --keychain-profile octoshrink-notary` 验证，失效则请用户重新执行 `xcrun notarytool store-credentials octoshrink-notary --apple-id misswell@foxmail.com --team-id U8U443D7ZL`
 - ✅ Direct 产物线已就绪：v2.2.0 已签名公证发布，notarize.sh 工作
 - ✅ App Store 产物线已构建并上传：v2.2.9 PKG 已上传 App Store Connect（Apple ID: 6792604654，Delivery UUID 6d414d74-5d30-449f-a666-ac11f6ea4814）
 - ✅ 白屏与 IPC 问题已最终修复（v2.2.9）：固定端口段 41845-41847 + HTTP 服务器 + 完整 ACL（allow-* + remote.urls 精确带端口 origin），详见第 3 节「白屏与 IPC 反复 bug 终极解法」
