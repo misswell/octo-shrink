@@ -53,10 +53,13 @@ if [ -n "$foreign" ]; then
   echo "$foreign" >&2
   fail "App Store 包里混进了外部可执行文件/dylib（沙盒线必须全进程内）"
 fi
-extra_macho=$(find "$APP/Contents/MacOS" -type f ! -name "$APP_NAME" 2>/dev/null || true)
-if [ -n "$extra_macho" ]; then
-  echo "$extra_macho" >&2
-  fail "Contents/MacOS 下有额外可执行文件"
+# 守的不变量是"MacOS 下只有唯一一个主程序"，与它叫什么名字无关：Tauri 只把 .app
+# 目录建成 productName（OctoShrink），可执行文件仍是 Cargo 包名（octoshrink），
+# 按 $APP_NAME 比对会把主程序自己判成"额外可执行文件"，自检就永久失败了。
+binaries=$(find "$APP/Contents/MacOS" -mindepth 1 2>/dev/null | wc -l | tr -d ' ')
+if [ "$binaries" != "1" ]; then
+  find "$APP/Contents/MacOS" -mindepth 1 >&2
+  fail "Contents/MacOS 必须只有唯一一个主程序（当前 $binaries 项）"
 fi
 spawns=$(sed -n '1,/#\[cfg(test)\]/p' "$TAURI_DIR/src/engine_inproc.rs" \
   | sed 's://.*::' \

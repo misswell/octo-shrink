@@ -422,7 +422,7 @@ xcrun productbuild --component \
 `scripts/build_appstore.sh` 与 `scripts/build_all.sh` 在签名前都会检查 App Store 版 `.app`：
 
 1. `Contents/**` 里不许有 `*.dylib`，也不许有 `Contents/Resources/bin/*`（第三方可执行文件）。
-2. `Contents/MacOS/` 里除 `OctoShrink` 主程序外不许有别的可执行文件。
+2. `Contents/MacOS/` 里**必须只有唯一一个主程序**。⚠️ 判据不许按名字比：Tauri 只把 `.app` 目录建成 `productName`（`OctoShrink`），里面的可执行文件仍是 Cargo 包名 `octoshrink`，写成 `! -name "$APP_NAME"` 会把主程序自己判成"额外可执行文件"，于是两条 App Store 构建脚本**永久自检失败**（这个坑已在 v2.5.35 修掉，改回按名字比就是再次踩）。
 3. `src-tauri/src/engine_inproc.rs` 的生产代码里不许出现 `find_tool` / `make_command` / `cli_to_file` / `Command::new`。
 
 任一条不过就 `exit 1`。为什么值得写成脚本 + 测试各一份：App Store 的自动分析会看"包里有可执行文件 / 有 entitlements 却声明不做网络或子进程"，一次驳回就是 1-3 周；而 `cs.disable-library-validation` 在沙盒线根本不允许，带进来的 dylib 连加载都过不去。历史上 `build_all.sh` 曾把 pngquant/oxipng/gifsicle 连同两个 homebrew dylib 复制进 App Store 包以求"与 Direct 画质对齐"，现在已删除 —— Direct 版的 `resources/bin` + `resources/lib` 照旧打包，不受影响（规则 4）。

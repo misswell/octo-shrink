@@ -89,16 +89,19 @@ rm -rf "$APPSTORE_APP/Contents/Resources/bin" "$APPSTORE_APP/Contents/Resources/
 # bundle 自检：App Store 包里除主程序外不许有第三方 Mach-O / dylib，
 # 引擎源码里不许有 spawn CLI 的写法（注释里提到这些词不算）。
 check_appstore_bundle() {
-  local app="$1" foreign macho spawns
+  local app="$1" foreign binaries spawns
   foreign=$(find "$app/Contents" \( -name '*.dylib' -o -path '*/Resources/bin/*' \) -type f 2>/dev/null || true)
   if [ -n "$foreign" ]; then
     echo "$foreign" >&2
     fail "App Store 包里混进了外部可执行文件/dylib（沙盒线必须全进程内）"
   fi
-  macho=$(find "$app/Contents/MacOS" -type f ! -name "$APP_NAME" 2>/dev/null || true)
-  if [ -n "$macho" ]; then
-    echo "$macho" >&2
-    fail "Contents/MacOS 下有额外可执行文件"
+  # 守的不变量是"MacOS 下只有唯一一个主程序"，与它叫什么名字无关：Tauri 只把 .app
+  # 目录建成 productName（OctoShrink），可执行文件仍是 Cargo 包名（octoshrink），
+  # 按 $APP_NAME 比对会把主程序自己判成"额外可执行文件"，自检就永久失败了。
+  binaries=$(find "$app/Contents/MacOS" -mindepth 1 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$binaries" != "1" ]; then
+    find "$app/Contents/MacOS" -mindepth 1 >&2
+    fail "Contents/MacOS 必须只有唯一一个主程序（当前 $binaries 项）"
   fi
   # 只扫生产代码：自检测试里就写着这些词（截到第一个 #[cfg(test)] 之前）。
   spawns=$(sed -n '1,/#\[cfg(test)\]/p' "$TAURI_DIR/src/engine_inproc.rs" \
