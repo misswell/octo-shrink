@@ -63,6 +63,11 @@
       <symbol id="icon-split-grip" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M1 12l6-6v12Z M17 6l6 6-6 6Z M10 4h4v16h-4Z"/></symbol>
       <symbol id="icon-sort-asc" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M5 3l5 6H7v12H4V9H1Z M12 4h4v3h-4Z M12 10h7v3h-7Z M12 16h10v3H12Z"/></symbol>
       <symbol id="icon-sort-desc" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M4 3h3v12h3l-5 6-4-6h3Z M12 4h10v3H12Z M12 10h7v3h-7Z M12 16h4v3h-4Z"/></symbol>
+      <symbol id="icon-pause" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M6 4h4v16H6Z M14 4h4v16h-4Z"/></symbol>
+      <symbol id="icon-play" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M7 4l13 8-13 8Z"/></symbol>
+      <symbol id="icon-history" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M12 2a10 10 0 1 1-7.6 16.5l1.6-1.5A7.5 7.5 0 1 0 12 4.5c-1.8 0-3.4.7-4.6 1.8l2.4-.5.6 2.9-6-.3 2-1.9A10 10 0 0 1 12 2Z M11 7h2v5.6l3.4 2-1 1.7L11 13.8Z"/></symbol>
+      <symbol id="icon-settings" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M10.4 2h3.2l.5 2.6 1.7.7 2.1-1.6 2.3 2.3-1.6 2.1.7 1.7 2.6.5v3.2l-2.6.5-.7 1.7 1.6 2.1-2.3 2.3-2.1-1.6-1.7.7-.5 2.6h-3.2l-.5-2.6-1.7-.7-2.1 1.6-2.3-2.3 1.6-2.1-.7-1.7L2 13.6v-3.2l2.6-.5.7-1.7L3.7 6.3 6 4l2.1 1.6 1.7-.7Z M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/></symbol>
+      <symbol id="icon-back" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M12 4l-8 8 8 8 1.8-1.8L8.6 13H20v-2H8.6l5.2-5.2Z"/></symbol>
     </defs>
   </svg>
  <!-- Title Bar -->
@@ -85,19 +90,25 @@
       <button class="titlebar-info-btn" id="aboutUpdateBtn" onclick="manualCheckUpdate()">检查更新</button>
       <button class="titlebar-info-btn" onclick="resetSettings()">还原默认设置</button>
      </span>
-     <button class="tb-btn" onclick="toggleTitlebarInfo()" title="关于">
-       <svg class="symbol-icon"><use href="#icon-info"/></svg>
+     <button class="tb-btn" id="historyViewBtn" onclick="showView('history')" title="历史记录">
+       <svg class="symbol-icon"><use href="#icon-history"/></svg>
+     </button>
+     <button class="tb-btn" id="settingsViewBtn" onclick="showView('settings')" title="设置">
+       <svg class="symbol-icon"><use href="#icon-settings"/></svg>
      </button>
      <button class="tb-btn" id="themeToggleBtn" onclick="cycleTheme()" title="切换主题">
        <svg class="symbol-icon theme-icon theme-icon-auto"><use href="#icon-theme-auto"/></svg>
        <svg class="symbol-icon theme-icon theme-icon-light" style="display:none"><use href="#icon-sun"/></svg>
        <svg class="symbol-icon theme-icon theme-icon-dark" style="display:none"><use href="#icon-moon"/></svg>
      </button>
+     <button class="tb-btn" onclick="toggleTitlebarInfo()" title="关于">
+       <svg class="symbol-icon"><use href="#icon-info"/></svg>
+     </button>
    </div>
  </div>
 
   <!-- Main Layout -->
-  <div class="container">
+  <div class="container" id="mainView">
     <!-- Drop Zone -->
     <div class="dropzone" id="dropzone" onclick="selectFiles()">
       <div class="dropzone-content" id="dropzoneContent">
@@ -184,6 +195,13 @@
           <span class="compress-btn-text" id="compressBtnText">
             <svg class="symbol-icon"><use href="#icon-compress"/></svg>
             开始压缩
+          </span>
+        </button>
+        <button class="btn btn-small btn-secondary" id="pauseCompressBtn" type="button"
+          onclick="toggleCompressionPause()" style="display:none;">
+          <span class="pause-btn-text" id="pauseBtnText">
+            <svg class="symbol-icon symbol-icon-small"><use href="#icon-pause"/></svg>
+            暂停
           </span>
         </button>
       </div>
@@ -388,6 +406,99 @@
         <span>共压缩 <strong id="resultCount">0</strong> 个文件，节省 <strong id="resultTotalSavings">0B</strong></span>
       </div>
       <div class="results-list" id="resultsList"></div>
+    </div>
+  </div>
+
+  <!-- History View（独立页面：主窗口内部视图，不影响队列与压缩） -->
+  <div class="container" id="historyView" style="display:none;">
+    <div class="view-header">
+      <button class="btn btn-small btn-ghost" type="button" onclick="showView('main')" title="返回">
+        <svg class="symbol-icon symbol-icon-small"><use href="#icon-back"/></svg>
+        返回
+      </button>
+      <h3 class="view-title">
+        <svg class="symbol-icon"><use href="#icon-history"/></svg>
+        历史记录
+      </h3>
+      <div class="view-header-right">
+        <span class="view-meta" id="historyMeta"></span>
+        <button class="btn btn-small btn-ghost" type="button" onclick="clearHistory()" title="清空历史记录">
+          <svg class="symbol-icon symbol-icon-small"><use href="#icon-trash"/></svg>
+          清空历史
+        </button>
+      </div>
+    </div>
+    <div class="history-list" id="historyList"></div>
+    <div class="history-empty" id="historyEmpty" hidden>还没有压缩记录</div>
+  </div>
+
+  <!-- Settings View（App 级设置，与压缩参数面板分开） -->
+  <div class="container" id="settingsView" style="display:none;">
+    <div class="view-header">
+      <button class="btn btn-small btn-ghost" type="button" onclick="showView('main')" title="返回">
+        <svg class="symbol-icon symbol-icon-small"><use href="#icon-back"/></svg>
+        返回
+      </button>
+      <h3 class="view-title">
+        <svg class="symbol-icon"><use href="#icon-settings"/></svg>
+        设置
+      </h3>
+    </div>
+    <div class="settings-panel">
+      <div class="settings-header view-section-header">
+        <h3>历史记录与原图</h3>
+      </div>
+      <div class="settings-body">
+        <div class="settings-row">
+          <label for="retentionDays">原图备份保留时间</label>
+          <div class="select-wrapper">
+            <select id="retentionDays" class="settings-select">
+              <option value="0">不保留</option>
+              <option value="1">1 天</option>
+              <option value="3">3 天</option>
+              <option value="7">7 天</option>
+              <option value="14">14 天</option>
+              <option value="30">30 天</option>
+            </select>
+          </div>
+        </div>
+        <p class="settings-copy">
+          覆盖原文件时，OctoShrink 会先保存一份原图备份。<br>
+          <span id="retentionCopy">过期的历史记录和原图备份将在下次启动应用时自动清理。</span>
+        </p>
+      </div>
+    </div>
+    <div class="settings-panel">
+      <div class="settings-header view-section-header">
+        <h3>性能</h3>
+      </div>
+      <div class="settings-body">
+        <div class="settings-row cpu-device-row">
+          <label>当前设备</label>
+          <div class="cpu-device-col">
+            <span class="cpu-device" id="cpuDevice">检测中…</span>
+            <span class="cpu-cores" id="cpuCoreInfo"></span>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label for="cpuLimitSlider">CPU 使用上限</label>
+          <div class="cpu-control-col">
+            <div class="quality-control cpu-control">
+              <input type="range" id="cpuLimitSlider" min="1" max="8" step="1" value="3"
+                aria-label="OctoShrink 最多使用的 CPU 并行份数">
+              <span class="cpu-limit-value" id="cpuLimitValue">自动</span>
+              <button class="btn btn-small cpu-auto-btn active" type="button" id="cpuLimitAuto"
+                title="不指定，按机器性能自动决定">自动</button>
+            </div>
+            <div class="cpu-scale"><span>低占用</span><span>高性能</span></div>
+          </div>
+        </div>
+        <p class="settings-copy">
+          限制 OctoShrink 同时使用的 CPU 并行能力。<br>
+          较低的数值会降低压缩速度，但可为其他应用保留更多性能。
+          <span id="cpuSchedulingNote" style="display:none;"><br>系统会自动在性能核与能效核之间调度任务。</span>
+        </p>
+      </div>
     </div>
   </div>
 

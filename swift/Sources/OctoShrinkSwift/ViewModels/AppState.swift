@@ -74,6 +74,12 @@ enum SortKey: String, CaseIterable {
     }
 }
 
+// MARK: - App Page（主窗口内部页面：与 Tauri 前端 showView 一致）
+
+enum AppPage: String, CaseIterable {
+    case main, history, settings
+}
+
 // MARK: - AppState
 
 @MainActor
@@ -109,9 +115,114 @@ final class AppState: ObservableObject {
     // 版本
     @Published var appVersion: String = ""
 
+    // 页面导航（主窗口内部视图，切换不销毁队列、不影响压缩）
+    @Published var page: AppPage = .main
+
+    // 暂停：只拦「还没开始」的文件，正在跑的那个会正常完成
+    @Published var compressionPaused = false
+
+    // 历史记录页 / 设置页
+    @Published var historyEntries: [HistoryEntry] = []
+    @Published var retentionDays = Retention.defaultDays
+    // CPU 使用上限：nil = 自动。生效值还要按本机并行能力 clamp。
+    @Published var cpuThreadLimit: Int? = nil
+
+    // 持久层：压缩历史 + 原图备份（App Support，去留由保留档位决定）
+    let history = HistoryStore()
+    let settingsStore = SettingsStore()
+    let cpuInfo = CpuInfo.detect()
+    // 暂停和 CPU 上限是同一套闸门，不分两层锁。用 let 而不是 lazy var：
+    // 压缩 worker 在别的线程上读它，lazy 的隐式初始化判定不是线程安全的。
+    let scheduler: CompressionScheduler
+
+    /// 本机真正生效的并行份数（换到核更少的机器会自动收敛）。
+    var effectiveCpuThreadLimit: Int {
+        CPULimit.effective(configured: cpuThreadLimit, detected: cpuInfo.budgetCeiling)
+    }
+
+    /// 队列摘要里的「CPU 4/10」。自动档不假装知道具体数字。
+    var cpuSummaryText: String {
+        CPUStatusText.summary(info: cpuInfo,
+                              configured: cpuThreadLimit,
+                              effective: effectiveCpuThreadLimit)
+    }
+
+    init() {
+        let settings = settingsStore.load()
+        retentionDays = settings.originalRetentionDays
+        cpuThreadLimit = settings.cpuThreadLimit
+        scheduler = CompressionScheduler(maxParallelism: CPULimit.effective(
+            configured: settings.cpuThreadLimit, detected: cpuInfo.budgetCeiling))
+        let report = history.cleanupExpired(retentionDays: retentionDays)
+        if report.removedEntries > 0 || report.removedBackups > 0 {
+            NSLog("OctoShrink 启动清理: 历史记录 -%d 条，原图备份 -%d 份，保留 %d 份",
+                  report.removedEntries, report.removedBackups, report.keptBackups)
+        }
+        for warning in report.warnings { NSLog("OctoShrink 启动清理未完成: %@", warning) }
+        historyEntries = history.list()
+    }
+
     // 自动压缩续队列
     private var pendingAutoCompress = false
     private let cancelBox = CancelBox()
+
+    // MARK: - 页面导航
+
+    func showPage(_ page: AppPage) {
+        self.page = page
+        if page == .history { refreshHistory() }
+    }
+
+    // MARK: - 历史记录页
+
+    func refreshHistory() {
+        historyEntries = history.list()
+    }
+
+    /// 历史页的「恢复原图」：路径全部从存储里读，前端不自己拼。
+    func restoreHistoryEntry(id: String) {
+        guard let entry = history.find(id) else {
+            showToast("找不到这条历史记录")
+            refreshHistory()
+            return
+        }
+        restore(entry: entry)
+    }
+
+    func clearHistory() {
+        guard !historyEntries.isEmpty else { return }
+        let alert = NSAlert()
+        alert.messageText = "确定要清空 \(historyEntries.count) 条历史记录吗？"
+        alert.informativeText = "只清理 OctoShrink 保存的原图备份，不会删除你的图片。"
+        alert.addButton(withTitle: "清空")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let report = history.clear()
+        refreshHistory()
+        var message = "已清空历史记录"
+        if report.removedBackups > 0 { message += "，原图备份 \(report.removedBackups) 份已删除" }
+        showToast(message)
+        for warning in report.warnings { showToast(warning) }
+    }
+
+    func setRetentionDays(_ days: Int) {
+        let clamped = Retention.clamp(days)
+        retentionDays = clamped
+        settingsStore.setRetentionDays(clamped)
+        showToast(clamped == Retention.noRetain
+            ? "原图备份改为不保留，关闭应用时清理"
+            : "原图备份保留 \(clamped) 天，下次启动时清理过期记录")
+    }
+
+    /// 改 CPU 上限：正在跑的任务不抢回来，只影响之后启动的新任务（与暂停同语义）。
+    func setCpuThreadLimit(_ limit: Int?) {
+        cpuThreadLimit = limit
+        settingsStore.setCpuThreadLimit(limit)
+        scheduler.setMaxParallelism(effectiveCpuThreadLimit)
+        showToast(limit == nil
+            ? "CPU 上限改为自动（\(effectiveCpuThreadLimit)）"
+            : "CPU 上限改为 \(effectiveCpuThreadLimit) / \(cpuInfo.budgetCeiling)")
+    }
 
     // MARK: - Display items (filter + sort)
 
@@ -397,6 +508,8 @@ final class AppState: ObservableObject {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         // 压缩中清空时先取消当前批次（与 Tauri clearAllFiles 语义一致）
         if isCompressing {
+            scheduler.resume()
+            compressionPaused = false
             for item in items { cancelBox.insert(item.path) }
         }
         items.removeAll()
@@ -457,20 +570,22 @@ final class AppState: ObservableObject {
             && (options.smartMode || effectiveOutputFormat != .original)
 
         let counter = CounterBox()
-        let semaphore = DispatchSemaphore(value: 3)
         let group = DispatchGroup()
         let queue = DispatchQueue(label: "octoshrink.compress", attributes: .concurrent)
+        // 新批次从未暂停开始，不继承上一批的状态；上限取设置页当前值。
+        scheduler.beginBatch(maxParallelism: effectiveCpuThreadLimit)
+        compressionPaused = false
+        let gate = scheduler
+        let store = history
+        let retention = retentionDays
 
         for path in paths {
-            DispatchQueue.main.async { [self] in
-                if let idx = items.firstIndex(where: { $0.path == path }), items[idx].status == .waiting {
-                    items[idx].status = .compressing
-                }
-            }
             group.enter()
             queue.async { [self] in
-                semaphore.wait()
-                defer { semaphore.signal(); group.leave() }
+                // 暂停中或 CPU 名额已满就堵在这里；拿到名额的一刻闸门一定是开着的。
+                // 已经在跑的文件会正常完成（不 kill、不 SIGSTOP）。
+                let permit = gate.acquire()
+                defer { permit.release(); group.leave() }
                 if isCancelled(path) {
                     DispatchQueue.main.async {
                         self.updateStatus(path, .cancelled)
@@ -478,7 +593,17 @@ final class AppState: ObservableObject {
                     }
                     return
                 }
-                let result = Self.compressOneStatic(path: path, options: opts, useSmart: useSmart)
+                // 「压缩中」只在真正开工这一刻标记，等待中的行保持「等待」。
+                DispatchQueue.main.async {
+                    if let idx = self.items.firstIndex(where: { $0.path == path }),
+                       self.items[idx].status == .waiting {
+                        self.items[idx].status = .compressing
+                    }
+                }
+                let result = Self.compressOneStatic(
+                    path: path, options: opts, useSmart: useSmart,
+                    history: store, retentionDays: retention
+                )
                 DispatchQueue.main.async {
                     self.applyResult(path, result: result)
                     self.tick(counter: counter, total: paths.count)
@@ -487,9 +612,12 @@ final class AppState: ObservableObject {
         }
 
         group.notify(queue: .main) { [self] in
+            gate.endBatch()
+            compressionPaused = false
             self.isCompressing = false
             self.compressDoneText = options.processingMode == .system ? "转换完成" : "压缩完成"
             cancelBox.removeAll()
+            refreshHistory()
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [self] in
                 compressDoneText = ""
             }
@@ -512,8 +640,25 @@ final class AppState: ObservableObject {
         compressProgress = total > 0 ? Double(counter.value) / Double(total) : 0
     }
 
+    /// 暂停 / 继续：后端只决定「要不要再启动新文件」，绝不打断正在跑的压缩。
+    func togglePause() {
+        guard isCompressing else { return }
+        if compressionPaused {
+            scheduler.resume()
+            compressionPaused = false
+            showToast("继续压缩")
+        } else {
+            scheduler.pause()
+            compressionPaused = true
+            showToast("已暂停，正在压缩的文件会先完成")
+        }
+    }
+
     /// 取消全部：等待中/压缩中的行标记为已跳过（与 Tauri 的 cancelled 状态一致）
     func cancelAll() {
+        // 暂停中取消：等待中的 worker 必须先被唤醒，否则整批永远收不了尾。
+        scheduler.resume()
+        compressionPaused = false
         for i in items.indices {
             if items[i].status == .waiting || items[i].status == .compressing {
                 cancelBox.insert(items[i].path)
@@ -523,6 +668,8 @@ final class AppState: ObservableObject {
     }
 
     func cancelFile(path: String) {
+        scheduler.resume()
+        compressionPaused = false
         cancelBox.insert(path)
         if let idx = items.firstIndex(where: { $0.path == path }),
            items[idx].status == .compressing || items[idx].status == .waiting {
@@ -548,17 +695,28 @@ final class AppState: ObservableObject {
 
     // MARK: - Single compress
 
-    nonisolated private static func compressOneStatic(path: String, options: CompressOptions, useSmart: Bool) -> CompressResult {
+    nonisolated private static func compressOneStatic(
+        path: String, options: CompressOptions, useSmart: Bool,
+        history: HistoryStore, retentionDays: Int
+    ) -> CompressResult {
         let originalSize = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64) ?? 0
         let engineResult = useSmart
             ? CompressionEngine.compressSmart(file: path, options: options)
             : CompressionEngine.compress(file: path, options: options)
         var result = CompressResult(engine: engineResult, file: path, originalSize: originalSize, options: options)
-        writeOutputStatic(&result, compressed: engineResult.compressed, options: options)
+        writeOutputStatic(
+            &result, compressed: engineResult.compressed, options: options,
+            history: history, retentionDays: retentionDays
+        )
         return result
     }
 
-    nonisolated private static func writeOutputStatic(_ result: inout CompressResult, compressed: Data, options: CompressOptions) {
+    /// 落盘 + 记历史，与 Tauri 的 write_output_file 同构：
+    /// replace 先备份再覆盖，输出确认写成后才追加一条历史记录。
+    nonisolated private static func writeOutputStatic(
+        _ result: inout CompressResult, compressed: Data, options: CompressOptions,
+        history: HistoryStore, retentionDays: Int
+    ) {
         guard result.success, !compressed.isEmpty else { return }
         let isFormatConversion = options.outputFormat != .original
         if !isFormatConversion && Int64(compressed.count) >= result.originalSize {
@@ -566,19 +724,22 @@ final class AppState: ObservableObject {
             return
         }
 
+        var backupFile: String?
         let outExt = ".\(result.outType)"
         let fm = FileManager.default
         let path = result.file
+        let outPath: String?
 
         switch options.outputMode {
         case .replace:
-            let backupDir = NSTemporaryDirectory() + "octoshrink-backups"
-            try? fm.createDirectory(atPath: backupDir, withIntermediateDirectories: true)
-            let backupPath = (backupDir as NSString).appendingPathComponent(Self.base64URLName(path))
-            if !fm.fileExists(atPath: backupPath) {
-                Self.copyOverwriting(from: path, to: backupPath)
+            // 先备份再覆盖：备份没写成就不碰用户文件，否则原图永久丢失。
+            guard let backup = history.ensureBackup(for: path) else {
+                result.success = false
+                result.error = "无法保存原图备份，已跳过覆盖"
+                return
             }
-            result.backupPath = backupPath
+            backupFile = backup
+            result.backupPath = backup
 
             let currentExt = ((path as NSString).pathExtension).lowercased()
             let sameFormat = currentExt == result.outType
@@ -586,92 +747,90 @@ final class AppState: ObservableObject {
                 || (currentExt == "jpg" && result.outType == "jpeg")
                 || (currentExt == "heif" && result.outType == "heic")
                 || (currentExt == "heic" && result.outType == "heif")
-            let outPath: String
             if options.processingMode == .system && isFormatConversion && !sameFormat {
                 outPath = availableSystemConversionPath(file: path, outType: result.outType)
             } else {
                 outPath = path
             }
-            try? compressed.write(to: URL(fileURLWithPath: outPath), options: .atomic)
-            if outPath != path {
-                try? fm.removeItem(atPath: path)
-            }
-            result.outputPath = outPath
 
         case .suffix:
             let stem = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
             let dir = (path as NSString).deletingLastPathComponent
             let suffix = normalizedOutputSuffix(options.outputSuffix)
-            let outPath = (dir as NSString).appendingPathComponent("\(stem)\(suffix)\(outExt)")
-            try? compressed.write(to: URL(fileURLWithPath: outPath), options: .atomic)
-            result.outputPath = outPath
+            outPath = (dir as NSString).appendingPathComponent("\(stem)\(suffix)\(outExt)")
 
         case .folder:
             guard let outDir = options.outputDir else { return }
             let rel = relativePathFromRoots(file: path, roots: options.sourceRoots)
                 ?? (path as NSString).lastPathComponent
             let relOut = (rel as NSString).deletingPathExtension + outExt
-            let outPath = (outDir as NSString).appendingPathComponent(relOut)
+            let target = (outDir as NSString).appendingPathComponent(relOut)
             try? fm.createDirectory(
-                atPath: (outPath as NSString).deletingLastPathComponent,
+                atPath: (target as NSString).deletingLastPathComponent,
                 withIntermediateDirectories: true
             )
-            try? compressed.write(to: URL(fileURLWithPath: outPath), options: .atomic)
-            result.outputPath = outPath
+            outPath = target
         }
+
+        guard let target = outPath else { return }
+        guard (try? compressed.write(to: URL(fileURLWithPath: target), options: .atomic)) != nil else { return }
+        if options.outputMode == .replace && target != path {
+            try? fm.removeItem(atPath: path)
+        }
+        result.outputPath = target
         result.outputMode = options.outputMode.rawValue
-    }
-
-    // MARK: - Restore
-
-    func restoreFile(path: String) {
-        guard let idx = items.firstIndex(where: { $0.path == path }),
-              let result = items[idx].result else { return }
-        let succeeded = Self.performRestore(result: result, outputSuffix: result.options?.outputSuffix)
-        if succeeded {
-            items[idx].result = nil
-            items[idx].status = .restored
-            items[idx].fileSize = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64) ?? items[idx].fileSize
-            showToast("已恢复原图: \(items[idx].fileName)")
-        } else {
-            showToast("恢复失败: 未知错误")
+        // 输出确认落盘之后才记历史：历史里绝不出现没写成的文件。
+        let entry = HistoryEntry.record(
+            source: path, result: result, output: target,
+            backup: backupFile, retentionDays: retentionDays
+        )
+        if !history.add(entry) {
+            NSLog("OctoShrink 写入压缩历史失败: %@", entry.id)
         }
     }
 
-    nonisolated private static func performRestore(result: CompressResult, outputSuffix: String?) -> Bool {
-        let fm = FileManager.default
-        let mode = result.outputMode ?? "suffix"
-        switch mode {
-        case "replace":
-            guard let backup = result.backupPath, fm.fileExists(atPath: backup) else { return false }
-            if let out = result.outputPath, out != result.file {
-                try? fm.removeItem(atPath: out)
-            }
-            // FileManager.copyItem 在目标已存在时会失败（Rust fs::copy 会覆盖），
-            // 必须先移除再复制，否则 replace 模式恢复会静默失败并丢掉备份。
-            try? fm.removeItem(atPath: result.file)
-            guard (try? fm.copyItem(atPath: backup, toPath: result.file)) != nil else { return false }
-            try? fm.removeItem(atPath: backup)
-            return true
-        case "suffix":
-            if let out = result.outputPath {
-                if fm.fileExists(atPath: out) { try? fm.removeItem(atPath: out) }
-            } else {
-                let stem = ((result.file as NSString).lastPathComponent as NSString).deletingPathExtension
-                let dir = (result.file as NSString).deletingLastPathComponent
-                let ext = (result.file as NSString).pathExtension
-                let suffix = normalizedOutputSuffix(outputSuffix ?? "_compressed")
-                let path = (dir as NSString).appendingPathComponent("\(stem)\(suffix).\(ext)")
-                if fm.fileExists(atPath: path) { try? fm.removeItem(atPath: path) }
-            }
-            return true
-        case "folder":
-            if let out = result.outputPath, fm.fileExists(atPath: out) { try? fm.removeItem(atPath: out) }
-            if let backup = result.backupPath, fm.fileExists(atPath: backup) { try? fm.removeItem(atPath: backup) }
-            return true
-        default:
+    // MARK: - Restore（统一服务：主队列 / 历史页 / 对比窗口 / 恢复全部 都走 HistoryStore.restore）
+
+    /// 恢复一条历史记录。压缩之后又被外部改过时先问用户，坚持才 force 覆盖。
+    /// 所有路径都由历史记录提供，调用方不参与拼路径。
+    @discardableResult
+    func restore(entry: HistoryEntry) -> Bool {
+        var outcome = history.restoreOutcome(entry: entry, force: false)
+        if outcome.conflict {
+            let alert = NSAlert()
+            alert.messageText = "这个文件在压缩后又被修改过。"
+            alert.informativeText = "恢复原图会覆盖当前版本。"
+            alert.addButton(withTitle: "仍然恢复")
+            alert.addButton(withTitle: "取消")
+            guard alert.runModal() == .alertFirstButtonReturn else { return false }
+            outcome = history.restoreOutcome(entry: entry, force: true)
+        }
+        guard outcome.success else {
+            showToast(outcome.error ?? "恢复失败")
             return false
         }
+        markItemsRestored(forSource: entry.sourcePath)
+        refreshHistory()
+        showToast("已恢复原图: \(entry.fileName)")
+        return true
+    }
+
+    /// 后端确认恢复成功后，把指向同一源路径的行改成「已恢复」。
+    private func markItemsRestored(forSource sourcePath: String) {
+        for index in items.indices where canonicalPath(items[index].path) == sourcePath {
+            items[index].result = nil
+            items[index].status = .restored
+            let size = fileLength(sourcePath)
+            if size >= 0 { items[index].fileSize = size }
+        }
+    }
+
+    func restoreFile(path: String) {
+        guard let entry = history.findLatest(forSource: path) else {
+            showToast("找不到这条历史记录")
+            return
+        }
+        restore(entry: entry)
     }
 
     func restoreAll() {
@@ -683,18 +842,28 @@ final class AppState: ObservableObject {
         alert.addButton(withTitle: "取消")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
-        var count = 0
+        var restored = 0
+        var conflicts = 0
+        var failed = 0
         for item in restorable {
-            guard let result = item.result else { continue }
-            if Self.performRestore(result: result, outputSuffix: result.options?.outputSuffix) {
-                count += 1
-                if let idx = items.firstIndex(where: { $0.id == item.id }) {
-                    items[idx].result = nil
-                    items[idx].status = .restored
-                }
+            guard let file = item.result?.file,
+                  let entry = history.findLatest(forSource: file) else { failed += 1; continue }
+            let outcome = history.restoreOutcome(entry: entry, force: false)
+            if outcome.success {
+                restored += 1
+                markItemsRestored(forSource: entry.sourcePath)
+            } else if outcome.conflict {
+                conflicts += 1
+            } else {
+                failed += 1
             }
         }
-        showToast("已恢复 \(count) 个文件到原图")
+        refreshHistory()
+        // 冲突不静默覆盖：整批里遇到的都记下来，让用户去历史页逐个确认。
+        var message = "已恢复 \(restored) 个文件到原图"
+        if conflicts > 0 { message += "，\(conflicts) 个文件压缩后又被修改过，请在历史记录里逐个确认" }
+        if failed > 0 { message += "，\(failed) 个未能恢复" }
+        showToast(message)
     }
 
     // MARK: - Save as
@@ -822,18 +991,21 @@ final class AppState: ObservableObject {
         return newResult
     }
 
-    /// 对比窗口恢复后同步主窗口行状态
+    /// 对比窗口恢复后同步主窗口行状态（真正的恢复已走统一服务）
     func markRestored(path: String) {
         guard let idx = items.firstIndex(where: { $0.path == path }) else { return }
         items[idx].result = nil
         items[idx].status = .restored
+        refreshHistory()
         showToast("已恢复原图: \(items[idx].fileName)")
     }
 
     func restoreFromCompare(path: String) -> Bool {
-        guard let idx = items.firstIndex(where: { $0.path == path }),
-              let result = items[idx].result else { return false }
-        return Self.performRestore(result: result, outputSuffix: result.options?.outputSuffix)
+        guard let entry = history.findLatest(forSource: path) else {
+            showToast("找不到这条历史记录")
+            return false
+        }
+        return restore(entry: entry)
     }
 
     // MARK: - Helpers
@@ -852,22 +1024,10 @@ final class AppState: ObservableObject {
 
     private func uniqueFilePaths(_ paths: [String]) -> [String] { Self.uniqueFilePaths(paths) }
 
-    nonisolated private static func base64URLName(_ path: String) -> String {
-        let data = Data(path.utf8)
-        return data.base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-    }
-
     /// 覆盖式复制：FileManager.copyItem 目标存在即失败，此处对齐 Rust fs::copy 的覆盖语义。
     @discardableResult
     nonisolated static func copyOverwriting(from src: String, to dst: String) -> Bool {
-        let fm = FileManager.default
-        if fm.fileExists(atPath: dst) {
-            try? fm.removeItem(atPath: dst)
-        }
-        return (try? fm.copyItem(atPath: src, toPath: dst)) != nil
+        copyFileOverwriting(from: src, to: dst)
     }
 
     nonisolated static func normalizedOutputSuffix(_ suffix: String) -> String {

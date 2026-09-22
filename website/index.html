@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0d0e">
+  <meta name="description" content="章小压 · OctoShrink：免费开源、本地运行的桌面图片压缩工具。拖入图片或文件夹，批量压缩，不上传素材。">
+  <meta property="og:title" content="章小压 · 让图片轻一点">
+  <meta property="og:description" content="本地优先的桌面图片压缩工具。更小的文件，更轻的工作流。">
+  <meta property="og:image" content="assets/icon.png">
+  <meta property="og:type" content="website">
+  <title>章小压 · 让图片轻一点</title>
+  <link rel="icon" href="assets/icon.png" type="image/png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+  <div class="cursor-glow" aria-hidden="true"></div>
+
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="章小压首页">
+      <span class="brand-mark"><img src="assets/icon.png" alt=""></span>
+      <span class="brand-name">章小压 <i>·</i> OctoShrink</span>
+    </a>
+    <nav class="site-nav" aria-label="主导航">
+      <a href="#features">为什么是它</a>
+      <a href="#local">本地优先</a>
+      <a href="#gallery">看看界面</a>
+      <a href="https://github.com/misswell/octo-shrink" target="_blank" rel="noreferrer">GitHub <span class="arrow">↗</span></a>
+    </nav>
+    <a class="header-download" href="https://github.com/misswell/octo-shrink/releases/latest" target="_blank" rel="noreferrer">
+      下载应用 <span>↗</span>
+    </a>
+    <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="mobileNav" aria-label="打开菜单">
+      <span></span><span></span>
+    </button>
+    <div class="mobile-nav" id="mobileNav">
+      <a href="#features">为什么是它</a>
+      <a href="#local">本地优先</a>
+      <a href="#gallery">看看界面</a>
+      <a href="https://github.com/misswell/octo-shrink" target="_blank" rel="noreferrer">GitHub ↗</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero section-shell" id="top">
+      <div class="hero-backdrop hero-backdrop-one" aria-hidden="true"></div>
+      <div class="hero-backdrop hero-backdrop-two" aria-hidden="true"></div>
+      <div class="hero-copy reveal">
+        <p class="eyebrow"><span class="eyebrow-pulse"></span> LOCAL-FIRST IMAGE TOOL</p>
+        <h1>让图片轻一点，<br><em>让创作更快。</em></h1>
+        <p class="hero-lede">章小压是一款免费开源的桌面图片压缩工具。拖入图片或文件夹，在你的电脑上批量处理，不上传任何素材。</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="https://github.com/misswell/octo-shrink/releases/latest" target="_blank" rel="noreferrer">
+            免费下载 <span class="button-arrow">↗</span>
+          </a>
+          <a class="button button-quiet" href="#features">探索能力 <span>↓</span></a>
+        </div>
+        <div class="hero-meta">
+          <span><b class="meta-dot dot-lime"></b>不上传图片</span>
+          <span><b class="meta-dot dot-coral"></b>MIT 开源</span>
+          <span><b class="meta-dot dot-lilac"></b>macOS · Windows · Linux</span>
+        </div>
+      </div>
+
+      <div class="hero-stage reveal reveal-delay" aria-label="章小压应用预览">
+        <div class="stage-coordinate coordinate-top">LOCAL / 001</div>
+        <div class="stage-coordinate coordinate-bottom">OCTO.SHRINK</div>
+        <div class="stage-orbit orbit-a" aria-hidden="true"></div>
+        <div class="stage-orbit orbit-b" aria-hidden="true"></div>
+        <div class="stage-window">
+          <div class="window-bar">
+            <span class="window-dots"><i></i><i></i><i></i></span>
+            <span class="window-title">OctoShrink</span>
+            <span class="window-mode">◐</span>
+          </div>
+          <div class="window-body">
+            <div class="drop-preview">
+              <span class="drop-icon">✦</span>
+              <span>拖拽图片或文件夹到此处</span>
+              <span class="drop-button">选择文件</span>
+            </div>
+            <div class="preview-heading"><span>压缩结果</span><small>5 / 5 已完成</small></div>
+            <div class="preview-stats">
+              <div><small>原始大小</small><strong>12.4MB</strong></div>
+              <div><small>压缩后</small><strong class="stat-purple">4.1MB</strong></div>
+              <div><small>已节省</small><strong class="stat-green">8.3MB</strong></div>
+            </div>
+            <div class="preview-list">
+              <div><span class="file-type">PNG</span><span class="file-name">hero-banner.png</span><b>-72.2%</b></div>
+              <div><span class="file-type type-pink">JPG</span><span class="file-name">product-photo.jpg</span><b>-64.7%</b></div>
+              <div><span class="file-type type-orange">GIF</span><span class="file-name">animation.gif</span><b>-67.1%</b></div>
+            </div>
+          </div>
+        </div>
+        <div class="float-card local-card">
+          <span class="float-icon">◎</span>
+          <span><b>0 uploads</b><small>素材留在本机</small></span>
+        </div>
+        <div class="float-card result-card">
+          <span class="result-check">✓</span>
+          <span><b>−66.9%</b><small>文件体积</small></span>
+        </div>
+        <div class="hero-mascot" aria-hidden="true"><img src="assets/icon.png" alt=""></div>
+      </div>
+    </section>
+
+    <section class="signal-strip section-shell reveal" aria-label="产品数据">
+      <div class="signal-label">压缩应该<br><em>不添麻烦</em></div>
+      <div class="signal-stat"><strong>18<span>MB</span></strong><small>轻量应用体积</small></div>
+      <div class="signal-stat"><strong>3<span>×</span></strong><small>桌面平台支持</small></div>
+      <div class="signal-stat"><strong>7</strong><small>内置压缩引擎</small></div>
+      <div class="signal-stat signal-end"><strong>0</strong><small>图片上传</small></div>
+    </section>
+
+    <section class="section-shell feature-section" id="features">
+      <div class="section-intro reveal">
+        <p class="eyebrow">WHY OCTOSHRINK</p>
+        <h2>少一点等待，<br><em>多一点专注。</em></h2>
+        <p>把常用的压缩工具装进一个安静、顺手的桌面工作流里。你只需要拖入，剩下的交给章小压。</p>
+      </div>
+      <div class="feature-grid">
+        <article class="feature-card feature-card-wide reveal">
+          <div class="feature-card-copy">
+            <span class="card-index">01 / WORKFLOW</span>
+            <h3>拖入一整个文件夹，<br>批量搞定。</h3>
+            <p>递归找到子目录里的图片，排进队列，一次完成。适合网站素材、设计稿、截图和日常相册。</p>
+            <a href="#download" class="text-link">开始你的第一批 <span>↗</span></a>
+          </div>
+          <div class="folder-graphic" aria-hidden="true">
+            <div class="folder-back"></div><div class="folder-front"></div>
+            <span class="folder-file file-one">PNG</span><span class="folder-file file-two">JPG</span><span class="folder-file file-three">WEBP</span>
+            <span class="folder-spark">✦</span>
+          </div>
+        </article>
+        <article class="feature-card feature-card-dark reveal reveal-delay-short">
+          <span class="card-index">02 / PRIVACY</span>
+          <div class="privacy-orbit" aria-hidden="true"><span>NO</span><b>UPLOAD</b><i></i></div>
+          <h3>你的图片，<br>不必离开你的电脑。</h3>
+          <p>没有上传、没有等待下载，也没有第三方服务器。私密素材就该在自己的机器上处理。</p>
+        </article>
+        <article class="feature-card feature-card-lime reveal">
+          <span class="card-index">03 / QUALITY</span>
+          <div class="quality-graphic" aria-hidden="true"><span>BEFORE</span><i></i><b>AFTER</b></div>
+          <h3>小一点，<br>看起来一样好。</h3>
+          <p>压缩前后滑动对比，确认每一次变小都值得。</p>
+        </article>
+        <article class="feature-card feature-card-outline reveal reveal-delay-short">
+          <span class="card-index">04 / FORMAT</span>
+          <div class="format-cloud" aria-hidden="true"><span>PNG</span><span>JPG</span><span>GIF</span><span>WEBP</span><span>AVIF</span></div>
+          <h3>从常见格式，<br>到下一代格式。</h3>
+          <p>支持 PNG、JPG、GIF、WebP、BMP，并可输出 WebP、AVIF、JPEG、PNG。</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="local-section section-shell" id="local">
+      <div class="local-visual reveal">
+        <div class="local-card-shell">
+          <div class="local-card-top"><span>OCTOSHRINK / LOCAL ENGINE</span><span>RUNNING</span></div>
+          <div class="local-code">
+            <span class="code-muted">01</span><span>input</span><b>→</b><em>your-folder/</em>
+            <span class="code-muted">02</span><span>engine</span><b>→</b><em class="code-lime">on-device</em>
+            <span class="code-muted">03</span><span>output</span><b>→</b><em>smaller-files/</em>
+          </div>
+          <div class="local-card-foot"><span><i></i> no remote request</span><span>privacy by default</span></div>
+        </div>
+        <div class="local-sticker">keep<br>it<br>local<span>✦</span></div>
+      </div>
+      <div class="local-copy reveal reveal-delay">
+        <p class="eyebrow">A QUIET PROMISE</p>
+        <h2>轻量，<br><em>也可以很认真。</em></h2>
+        <p>在线工具很方便，但不是所有图片都适合上传。章小压把常用引擎和参数藏在后台，让你不用配环境、不用记命令，也不必把素材交给陌生服务器。</p>
+        <div class="local-list">
+          <div><span>↳</span><p><b>开箱即用</b><small>不需要额外安装 Homebrew 或 CLI 工具</small></p></div>
+          <div><span>↳</span><p><b>可控的输出</b><small>覆盖、加后缀或输出到指定目录</small></p></div>
+          <div><span>↳</span><p><b>不满意就恢复</b><small>覆盖前自动备份，随时还原原图</small></p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="compare-section section-shell" id="compare">
+      <div class="compare-copy reveal">
+        <p class="eyebrow">SEE THE DIFFERENCE</p>
+        <h2>变小的同时，<br><em>保留值得的。</em></h2>
+        <p>每张图片都值得先看一眼。章小压让压缩结果变得可见，而不是一个盲盒。</p>
+        <div class="compare-meter">
+          <div class="meter-label"><span>压缩力度</span><b id="compressionValue">66%</b></div>
+          <input id="compressionRange" type="range" min="35" max="88" value="66" aria-label="调整压缩力度">
+          <div class="meter-track"><span id="meterFill"></span></div>
+          <div class="meter-foot"><span>更保真</span><span>更小体积</span></div>
+        </div>
+      </div>
+      <div class="compare-art reveal reveal-delay">
+        <div class="compare-frame"><img src="assets/compare.png" alt="压缩前后文件体积对比：12.4MB 变为 4.1MB"></div>
+        <span class="compare-note note-left">BEFORE / 12.4 MB</span>
+        <span class="compare-note note-right">AFTER / <b id="compressionSize">4.1 MB</b></span>
+        <div class="compare-arrow" aria-hidden="true">↔</div>
+      </div>
+    </section>
+
+    <section class="gallery-section section-shell" id="gallery">
+      <div class="gallery-heading reveal">
+        <div><p class="eyebrow">THE INTERFACE</p><h2>简单到，<em>不用说明书。</em></h2></div>
+        <p>安静的界面、清楚的队列、即时的结果。亮色和暗色，都为长时间工作而生。</p>
+      </div>
+      <div class="gallery-grid">
+        <figure class="gallery-shot gallery-shot-light reveal"><span class="shot-tag">DAY MODE</span><img src="assets/screenshot-light.png" alt="章小压亮色模式界面"></figure>
+        <figure class="gallery-shot gallery-shot-dark reveal reveal-delay-short"><span class="shot-tag">NIGHT MODE</span><img src="assets/screenshot-dark.png" alt="章小压暗色模式界面"></figure>
+      </div>
+    </section>
+
+    <section class="download-section section-shell" id="download">
+      <div class="download-orbit orbit-left" aria-hidden="true"></div>
+      <div class="download-orbit orbit-right" aria-hidden="true"></div>
+      <div class="download-mascot reveal"><img src="assets/icon.png" alt="章小压章鱼图标"></div>
+      <div class="download-copy reveal reveal-delay">
+        <p class="eyebrow">READY WHEN YOU ARE</p>
+        <h2>给你的图片，<br><em>留一点呼吸。</em></h2>
+        <p>免费、开源、本地运行。下载章小压，把下一批图片变轻。</p>
+        <div class="download-actions">
+          <a class="button button-primary button-large" href="https://github.com/misswell/octo-shrink/releases/latest" target="_blank" rel="noreferrer">下载最新版本 <span class="button-arrow">↗</span></a>
+          <a class="button button-quiet light-quiet" href="https://apps.apple.com/cn/app/octoshrink-%E5%9B%BE%E7%89%87%E5%8E%8B%E7%BC%A9/id6792604654?mt=12" target="_blank" rel="noreferrer">中国 App Store <span>↗</span></a>
+          <a class="button button-quiet light-quiet" href="https://github.com/misswell/octo-shrink" target="_blank" rel="noreferrer">查看源代码 <span>↗</span></a>
+        </div>
+        <div class="platform-row"><span>macOS</span><span>Windows</span><span>Linux</span><span>MIT License</span></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer section-shell">
+    <a class="brand footer-brand" href="#top"><span class="brand-mark"><img src="assets/icon.png" alt=""></span><span class="brand-name">章小压 <i>·</i> OctoShrink</span></a>
+    <p>让图片轻一点，让创作更快。</p>
+    <div class="footer-links"><a href="https://github.com/misswell/octo-shrink" target="_blank" rel="noreferrer">GitHub ↗</a><a href="https://github.com/misswell/octo-shrink/releases" target="_blank" rel="noreferrer">Releases ↗</a><a href="#top">回到顶部 ↑</a></div>
+    <small>© <span id="currentYear">2026</span> OctoShrink · Built for a lighter workflow.</small>
+  </footer>
+
+  <script src="main.js"></script>
+</body>
+</html>

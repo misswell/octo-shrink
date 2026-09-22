@@ -1618,6 +1618,188 @@ body.compare-page .compare-recompress { flex-shrink: 0; }
   font-size: 12px;
 }
 
+/* ─── 暂停按钮（与进度按钮同排，不新增大块 UI）─────────────── */
+.queue-actions #pauseCompressBtn {
+  flex: 0 0 auto;
+  justify-content: center;
+}
+.pause-btn-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ─── 独立页面视图（历史 / 设置）───────────────────────────── */
+.tb-btn.active {
+  background: var(--bg-selected);
+  color: var(--accent);
+}
+.view-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  background: var(--bg-content);
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.view-title {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  margin: 0;
+}
+.view-title svg { color: var(--accent); }
+.view-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.view-meta {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.view-section-header { cursor: default; }
+
+/* ─── 设置页：CPU 使用上限 ──────────────────────────────────── */
+.cpu-device-row { align-items: flex-start; }
+.cpu-device-col, .cpu-control-col {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 210px;
+  align-items: stretch;
+}
+.cpu-device { font-size: 12px; font-weight: 500; color: var(--text); }
+.cpu-cores { font-size: 11px; color: var(--text-secondary); }
+.cpu-control { justify-content: flex-end; }
+.cpu-control input[type="range"] { flex: 1; width: auto; min-width: 90px; }
+.cpu-limit-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  min-width: 74px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.cpu-auto-btn.active {
+  background: var(--bg-selected);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.cpu-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+.settings-copy {
+  padding: 0 0 10px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+/* ─── 历史列表（密集行，最新在上）─────────────────────────── */
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--bg-content);
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 6px 10px;
+}
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  transition: background 0.15s;
+}
+.history-item:hover { background: var(--bg-secondary); }
+.history-item.restored { opacity: 0.62; }
+.history-icon {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--success);
+}
+.history-item.restored .history-icon { color: var(--text-tertiary); }
+.history-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.history-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-weight: 500;
+}
+.history-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+.history-metrics {
+  flex-shrink: 0;
+  width: 132px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+.history-metrics span:last-child { color: var(--success); font-weight: 600; }
+.history-item.restored .history-metrics span:last-child { color: var(--text-tertiary); font-weight: 500; }
+.history-when {
+  flex-shrink: 0;
+  width: 104px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+.history-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.history-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+.history-empty[hidden] { display: none; }
+
 @media (prefers-reduced-motion: reduce) {
   .progress-file-spinner { animation: none; }
 }

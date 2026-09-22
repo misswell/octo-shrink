@@ -43,6 +43,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         cleanupTempDirs()
+        purgeBackupsIfNotRetained()
+    }
+
+    /// 「不保留」档（默认）：原图备份的寿命就是这次运行，退出时清干净。
+    ///
+    /// 只挂在正常退出上 —— 崩溃 / 强杀现场的那份备份可能是唯一还活着的原图，
+    /// 这笔欠账留给下一次正常退出收，启动时只扫无人引用的孤儿。
+    private func purgeBackupsIfNotRetained() {
+        guard SettingsStore().load().originalRetentionDays == Retention.noRetain else { return }
+        let report = HistoryStore().purgeBackupsOnExit()
+        if report.removedBackups > 0 || !report.warnings.isEmpty {
+            NSLog("OctoShrink 退出清理: 原图备份 -%d 份（历史记录保留）", report.removedBackups)
+        }
+        for warning in report.warnings { NSLog("OctoShrink 退出清理未完成: %@", warning) }
     }
 
     @objc private func windowWillClose(_ notification: Notification) {
@@ -54,8 +68,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// 删除所有临时目录：原图备份、重压缩对比文件、压缩中间产物。
-    /// 恢复原图仅限当前会话，退出后备份无从引用，直接删除。
+    /// 删除临时目录：重压缩对比文件、压缩中间产物。
+    /// 原图备份在 App Support 下，去留由保留档位决定（见 purgeBackupsIfNotRetained），
+    /// 这里绝不能再删；octoshrink-backups 只是旧版本留下的临时备份残骸，顺手清掉。
     private func cleanupTempDirs() {
         let fm = FileManager.default
         for name in ["octoshrink-backups", "octoshrink-display", "octoshrink-work"] {

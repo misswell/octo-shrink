@@ -31,9 +31,24 @@
     "allow-install-update",
     "allow-cancel-update",
     "allow-open-compare-window",
-    "allow-take-compare-window-payload"
+    "allow-take-compare-window-payload",
+    "allow-pause-compression",
+    "allow-resume-compression",
+    "allow-get-compression-state",
+    "allow-list-history",
+    "allow-clear-history",
+    "allow-restore-history-entry",
+    "allow-get-app-settings",
+    "allow-set-original-retention-days",
+    "allow-set-cpu-thread-limit",
+    "allow-get-cpu-resource-settings",
+    "allow-get-cpu-info"
   ],
   "remote": {
-    "urls": ["http://localhost:41845", "http://localhost:41846", "http://localhost:41847"]
+    "urls": [
+      "http://localhost:41845",
+      "http://localhost:41846",
+      "http://localhost:41847"
+    ]
   }
 }

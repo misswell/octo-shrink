@@ -23,6 +23,14 @@ permissions = [
   "allow-install-update",
   "allow-open-compare-window",
   "allow-take-compare-window-payload",
+  "allow-pause-compression",
+  "allow-resume-compression",
+  "allow-get-compression-state",
+  "allow-list-history",
+  "allow-clear-history",
+  "allow-restore-history-entry",
+  "allow-get-app-settings",
+  "allow-set-original-retention-days",
 ]
 
 [[permission]]
@@ -139,3 +147,58 @@ commands.allow = ["open_compare_window"]
 identifier = "allow-take-compare-window-payload"
 description = "Take the pending comparison payload inside the compare window"
 commands.allow = ["take_compare_window_payload"]
+
+[[permission]]
+identifier = "allow-pause-compression"
+description = "Stop starting new compression tasks; running ones finish"
+commands.allow = ["pause_compression"]
+
+[[permission]]
+identifier = "allow-resume-compression"
+description = "Let the paused queue start new tasks again"
+commands.allow = ["resume_compression"]
+
+[[permission]]
+identifier = "allow-get-compression-state"
+description = "Read the queue state: idle, running or paused"
+commands.allow = ["get_compression_state"]
+
+[[permission]]
+identifier = "allow-list-history"
+description = "List persisted compression history, newest first"
+commands.allow = ["list_history"]
+
+[[permission]]
+identifier = "allow-clear-history"
+description = "Clear history entries and the original backups they own"
+commands.allow = ["clear_history"]
+
+[[permission]]
+identifier = "allow-restore-history-entry"
+description = "Restore the original behind one history entry"
+commands.allow = ["restore_history_entry"]
+
+[[permission]]
+identifier = "allow-get-app-settings"
+description = "Read persisted app settings, including original backup retention"
+commands.allow = ["get_app_settings"]
+
+[[permission]]
+identifier = "allow-set-original-retention-days"
+description = "Persist how long original backups are kept, applied at next launch"
+commands.allow = ["set_original_retention_days"]
+
+[[permission]]
+identifier = "allow-get-cpu-info"
+description = "Read detected CPU capability plus the configured and effective parallelism limit"
+commands.allow = ["get_cpu_info"]
+
+[[permission]]
+identifier = "allow-get-cpu-resource-settings"
+description = "Read the persisted CPU usage limit setting"
+commands.allow = ["get_cpu_resource_settings"]
+
+[[permission]]
+identifier = "allow-set-cpu-thread-limit"
+description = "Change the CPU parallelism budget; running jobs finish under the old limit"
+commands.allow = ["set_cpu_thread_limit"]

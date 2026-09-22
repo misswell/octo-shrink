@@ -59,10 +59,10 @@
         </button>
         <div class="compare-zoom-control">
           <button class="zoom-step-btn" onclick="stepZoom(-0.25)" title="缩小" aria-label="缩小"><svg class="symbol-icon symbol-icon-small"><use href="#icon-zoom-out"/></svg></button>
-          <input type="range" class="zoom-slider" id="zoomSlider" min="0.1" max="8" step="0.1" value="1">
+          <input type="range" class="zoom-slider" id="zoomSlider" min="0.02" max="8" step="0.01" value="1">
           <button class="zoom-step-btn" onclick="stepZoom(0.25)" title="放大" aria-label="放大"><svg class="symbol-icon symbol-icon-small"><use href="#icon-zoom-in"/></svg></button>
           <span class="zoom-value" id="zoomValue">100%</span>
-          <button class="zoom-reset-btn" onclick="setCompareZoom(1)" title="重置缩放" aria-label="重置缩放"><svg class="symbol-icon symbol-icon-small"><use href="#icon-reset-view"/></svg></button>
+          <button class="zoom-reset-btn" onclick="fitToWindow()" title="重置为适合窗口" aria-label="重置为适合窗口"><svg class="symbol-icon symbol-icon-small"><use href="#icon-reset-view"/></svg></button>
         </div>
         <button class="btn btn-icon-close" onclick="closeCompareWindow()" title="关闭">
           <svg class="symbol-icon"><use href="#icon-close"/></svg>

@@ -362,7 +362,11 @@ fn compress_to_avif_with_avifenc(file: &Path, quality: u32) -> Option<Vec<u8>> {
     let pixels: Vec<ravif::RGBA8> = rgba.as_raw().chunks_exact(4)
         .map(|c| ravif::RGBA8 { r: c[0], g: c[1], b: c[2], a: c[3] })
         .collect();
-    let enc = ravif::Encoder::new().with_quality(quality as f32).with_speed(6);
+    // ravif 的线程数默认跟着 rayon 全局池走（= 全部核心），必须显式压到 1 份预算。
+    let enc = ravif::Encoder::new()
+        .with_quality(quality as f32)
+        .with_speed(6)
+        .with_num_threads(Some(super::per_task_threads()));
     let result = enc.encode_rgba(ravif::Img::new(&pixels, w, h)).ok()?;
     Some(result.avif_file)
 }

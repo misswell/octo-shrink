@@ -1,5 +1,9 @@
+mod app_settings;
 mod commands;
 pub mod engine;
+mod history;
+mod sandbox_access;
+mod system_info;
 #[cfg(target_os = "macos")]
 mod system_image;
 
@@ -444,10 +448,6 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
 
     builder
-        .manage(AppState {
-            cancel_queue: Mutex::new(HashSet::new()),
-            pending_compare: Mutex::new(None),
-        })
         .on_page_load(|_webview, _payload| {
             // App Store 版在 HTTP 页面完成加载前隐藏 WebView，避免导航期间露出
             // WKWebView 的默认白色画布。窗口本身始终可见，不使用 visible:false。
@@ -481,9 +481,20 @@ pub fn run() {
             commands::read_image_dataurl,
             commands::get_app_version,
             commands::restore_original,
+            commands::restore_history_entry,
             commands::export_all,
             commands::get_file_sizes,
             commands::restore_all,
+            commands::pause_compression,
+            commands::resume_compression,
+            commands::get_compression_state,
+            commands::list_history,
+            commands::clear_history,
+            commands::get_app_settings,
+            commands::set_original_retention_days,
+            commands::get_cpu_info,
+            commands::get_cpu_resource_settings,
+            commands::set_cpu_thread_limit,
             commands::open_compare_window,
             commands::take_compare_window_payload,
             set_startup_theme,
@@ -492,7 +503,48 @@ pub fn run() {
             cancel_update,
         ])
         .setup(move |app| {
-            // 启动时清掉上次崩溃残留的临时目录（正常退出已有 RunEvent::Exit 清理）
+            // 历史与原图备份放 AppData：绝不放临时目录。「不保留」（0，默认档）时
+            // 备份随这次运行存活、退出时清掉；按天保留的档位随退出留在磁盘上。
+            let data_root = app.path().app_data_dir().map_err(|error| error.to_string())?;
+            let history_root = data_root.join(history::HISTORY_DIR);
+            let history_store = std::sync::Arc::new(
+                history::HistoryStore::new(history_root.clone()).map_err(|error| error)?,
+            );
+            let settings_store =
+                std::sync::Arc::new(app_settings::SettingsStore::new(&data_root));
+            let settings = settings_store.load();
+
+            // 启动阶段清一次过期历史 + 无人引用的备份；单项失败只 warn，
+            // 绝不让 App 因为删不掉文件而起不来。
+            let report = history_store.cleanup_expired(settings.original_retention_days);
+            if report.removed_entries > 0 || report.removed_backups > 0 {
+                log::info!(
+                    "启动清理: 历史记录 -{} 条，原图备份 -{} 份，保留 {} 份",
+                    report.removed_entries,
+                    report.removed_backups,
+                    report.kept_backups
+                );
+            }
+            for warning in report.warnings {
+                log::warn!("启动清理未完成: {warning}");
+            }
+
+            // CPU 能力只在启动时检测一次：设置页展示的是真机数字，不是写死的核心数。
+            let cpu_info = system_info::CpuInfo::detect();
+            let cpu_limit =
+                app_settings::effective_cpu_limit(settings.cpu_thread_limit, cpu_info.budget_ceiling());
+
+            app.manage(AppState {
+                cancel_queue: Mutex::new(HashSet::new()),
+                pending_compare: Mutex::new(None),
+                compression: std::sync::Arc::new(commands::CompressionScheduler::new(cpu_limit)),
+                history_store,
+                settings_store,
+                access: sandbox_access::build_access(history_root.join("bookmarks")),
+                cpu_info,
+            });
+
+            // 启动时清掉上次崩溃残留的临时目录（正常退出时也清一次）
             commands::cleanup_temp_dirs();
 
             // 初始化压缩工具资源目录
@@ -590,10 +642,12 @@ pub fn run() {
         })
         .build(context)
         .expect("error while building OctoShrink")
-        .run(|_app, event| {
+        .run(|app, event| {
             // 应用退出（关主窗 / Cmd+Q / 重启）时清理临时目录，避免长期累积
             if matches!(event, tauri::RunEvent::Exit) {
                 commands::cleanup_temp_dirs();
+                // 「不保留」档：原图备份的寿命就是这次运行。
+                commands::purge_backups_if_not_retained(app);
             }
         });
 }

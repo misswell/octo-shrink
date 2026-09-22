@@ -19,13 +19,16 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp", "rayon"] }
+# CPU 预算（方案 §48/§50）：一个文件任务只占 1 份并行预算，所以进程内编解码器
+# 一律不开内部多线程 —— 这里刻意不给 image 开 rayon、不给 imagequant 开 threads、
+# 不给 oxipng 开 parallel。它们的 rayon 全局池一旦初始化就调不动运行时上限。
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
 base64 = "0.22"
 tempfile = "3"
 tokio = { version = "1", features = ["process", "rt-multi-thread", "macros", "fs", "io-util", "time"] }
 log = "0.4"
-imagequant = { version = "4", optional = true }
-oxipng = { version = "9", optional = true }
+imagequant = { version = "4", optional = true, default-features = false }
+oxipng = { version = "9", optional = true, default-features = false, features = ["zopfli"] }
 mozjpeg = { version = "0.10", optional = true }
 webp = { version = "0.2", optional = true, default-features = false }
 ravif = { version = "0.11", optional = true, default-features = false }
@@ -39,7 +42,7 @@ objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSAppearance", "NSApplication", "NSResponder"] }
 objc2-core-foundation = "0.3"
 objc2-core-graphics = "0.3"
-objc2-foundation = { version = "0.3", features = ["NSArray", "NSPathUtilities", "NSString"] }
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSData", "NSError", "NSPathUtilities", "NSString", "NSURL"] }
 objc2-image-io = "0.3"
 
 [features]

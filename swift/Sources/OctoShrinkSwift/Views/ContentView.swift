@@ -16,16 +16,14 @@ struct ContentView: View {
                 // Tauri .container：整体可滚动，padding 12/16，卡片间距 12
                 ScrollView {
                     VStack(spacing: AppMetrics.cardSpacing) {
-                        if appState.items.isEmpty {
-                            DropZoneView(isDragOver: $isDragOver)
-                                .onDrop(of: [.fileURL], isTargeted: $isDragOver) { handleDrop(providers: $0) }
-                            if appState.hasImported {
-                                SettingsPanelView(showSystemInfo: $showSystemInfo)
-                            }
-                        } else {
-                            QueuePanelView()
-                                .onDrop(of: [.fileURL], isTargeted: $isDragOver) { handleDrop(providers: $0) }
-                            SettingsPanelView(showSystemInfo: $showSystemInfo)
+                        // 历史 / 设置是主窗口内部页面：切过去不销毁队列，也不打断压缩
+                        switch appState.page {
+                        case .main:
+                            mainPage
+                        case .history:
+                            HistoryPageView()
+                        case .settings:
+                            AppSettingsPageView()
                         }
                     }
                     .padding(AppMetrics.containerPadding)
@@ -77,6 +75,21 @@ struct ContentView: View {
         }
     }
 
+    /// 主页面：空队列时是拖拽区，有文件时是队列卡片；压缩参数面板跟随其后。
+    @ViewBuilder private var mainPage: some View {
+        if appState.items.isEmpty {
+            DropZoneView(isDragOver: $isDragOver)
+                .onDrop(of: [.fileURL], isTargeted: $isDragOver) { handleDrop(providers: $0) }
+            if appState.hasImported {
+                SettingsPanelView(showSystemInfo: $showSystemInfo)
+            }
+        } else {
+            QueuePanelView()
+                .onDrop(of: [.fileURL], isTargeted: $isDragOver) { handleDrop(providers: $0) }
+            SettingsPanelView(showSystemInfo: $showSystemInfo)
+        }
+    }
+
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
         var urls: [URL] = []
         let group = DispatchGroup()
@@ -121,6 +134,22 @@ struct TitleBarView: View {
             HStack(spacing: 2) {
                 Color.clear.frame(width: 70, height: 1)
                 Spacer()
+                Button {
+                    appState.showPage(appState.page == .history ? .main : .history)
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                }
+                .buttonStyle(TitleBarButtonStyle(active: appState.page == .history))
+                .help("历史记录")
+
+                Button {
+                    appState.showPage(appState.page == .settings ? .main : .settings)
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                }
+                .buttonStyle(TitleBarButtonStyle(active: appState.page == .settings))
+                .help("设置")
+
                 Button {
                     appState.showAbout.toggle()
                 } label: {
@@ -399,6 +428,22 @@ struct QueuePanelView: View {
             Spacer(minLength: 8)
 
             CompressButton()
+
+            // 与 Tauri 一致：进度按钮保持原样，旁边只加一个小号暂停/继续，
+            // 不新增大按钮、不改变现有 UI 密度。
+            if appState.isCompressing {
+                Button {
+                    appState.togglePause()
+                } label: {
+                    Label(appState.compressionPaused ? "继续" : "暂停",
+                          systemImage: appState.compressionPaused ? "play.fill" : "pause.fill")
+                        .labelIconToTextSpacing(4)
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .help(appState.compressionPaused
+                      ? "继续压缩"
+                      : "暂停：正在压缩的文件会先完成，之后再开新的")
+            }
         }
         .padding(.horizontal, AppMetrics.sectionHPadding)
         .padding(.vertical, 8)
@@ -407,6 +452,8 @@ struct QueuePanelView: View {
     private var queueSummaryText: String {
         if appState.isCompressing || appState.doneCount > 0 {
             return "\(appState.doneCount) / \(appState.items.count) 已完成"
+                + (appState.isCompressing && appState.compressionPaused ? " · 已暂停" : "")
+                + appState.cpuSummaryText
         }
         return "\(appState.items.count) 个文件"
     }
@@ -635,6 +682,8 @@ struct CompressButton: View {
 
     private var buttonText: String {
         if appState.isCompressing {
+            // 暂停时进度按钮只换文案，不新增控件（与 Tauri 的「暂停中…」一致）
+            if appState.compressionPaused { return "暂停中…" }
             return appState.options.processingMode == .system ? "转换中…" : "压缩中…"
         }
         if !appState.compressDoneText.isEmpty {

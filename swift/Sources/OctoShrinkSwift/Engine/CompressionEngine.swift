@@ -247,7 +247,7 @@ enum CompressionEngine {
             if let data = CLIRunner.runToFile(
                 tool: "cwebp",
                 args: [
-                    "-q", "\(quality)", "-m", "6", "-pass", "10", "-mt",
+                    "-q", "\(quality)", "-m", "6", "-pass", "10",
                     "-o", tmp, file
                 ],
                 outputPath: tmp
@@ -290,7 +290,7 @@ enum CompressionEngine {
             if let data = CLIRunner.runToFile(
                 tool: "avifenc",
                 args: [
-                    "--speed", "6", "--jobs", "4", "--min", "0", "--max", "\(quality)",
+                    "--speed", "6", "--min", "0", "--max", "\(quality)",
                     "-o", tmp, file
                 ],
                 outputPath: tmp

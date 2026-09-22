@@ -1,28 +1,19 @@
 # OctoShrink 工程准则（Codex / Agent 必读）
 
-本文件是项目的权威工程约定。每次在此仓库工作时，**必须先读本文件**，并严格遵守其中"强制规则"。它们的目的是保证三条分发产物线长期并行、互不破坏。
+本文件是项目的权威工程约定。每次在此仓库工作时，**必须先读本文件**，并严格遵守其中"强制规则"。它们的目的是保证两条分发产物线长期并行、互不破坏。
 
 ---
 
 ## 🚨 强制规则（不可违反）
 
-### 1. OctoShrink 有三条分发产物线，必须始终并行
+### 1. OctoShrink 有且仅有两条分发产物线，必须始终并行
 
-| 产物线 | 用途 | 技术栈 | 构建脚本 | 证书 | 产物 |
+| 产物线 | 用途 | 默认 feature | 构建脚本 | 证书 | 产物 |
 ---|---|---|---|---|---|
-| Direct（直发） | GitHub Releases DMG，开发者/高级用户 | Tauri 2 + Rust (cli-backends) | scripts/notarize.sh | Developer ID Application | .app + .dmg |
-| App Store | Mac App Store 审核/上架 | Tauri 2 + Rust (inproc-backends) | scripts/build_appstore.sh | Apple Distribution | .app + .pkg |
-| Swift Native（原生） | 原生 macOS 版，无 Tauri/Rust 依赖 | SwiftUI + ImageIO + CLI 工具 | scripts/build_swift.sh | Developer ID Application | .app |
+| Direct（直发） | GitHub Releases DMG，开发者/高级用户 | default = cli-backends | scripts/notarize.sh | Developer ID Application | .app + .dmg |
+| App Store | Mac App Store 审核/上架 | appstore = inproc-backends | scripts/build_appstore.sh | Apple Distribution | .app + .pkg |
 
-三条线共存于同一个 master 分支。Tauri 两线靠 Cargo feature + #[cfg] 分叉；Swift 线为独立 `swift/` 目录，复用 `src-tauri/resources/bin` 的 CLI 工具和 `src-tauri/icons` 图标，压缩管线与 Direct 线（cli-backends）对齐。
-
-**Swift 线要点**：
-- Bundle ID：`com.misswell.octoshrink.swift`（与 Direct/App Store 分开）
-- 最低系统：macOS 13.0
-- 系统转换模式用 Swift 原生 ImageIO（`SystemImageConverter.swift`），高级压缩模式调内置 CLI（`CompressionEngine.swift` + `CLIRunner.swift`）
-- UI 为 SwiftUI（`Views/`），状态管理在 `ViewModels/AppState.swift`
-- 构建产物：`swift/.build/OctoShrink_swift.app`（约 14MB，含 6 个 CLI + 17 个 dylib）
-- Swift 构建失败不影响 Direct / App Store 两线（build_all.sh 中用 `||` 容错）
+两条线共存于同一个 master 分支、同一套源码，靠 Cargo feature + #[cfg] 分叉实现。
 
 ### 2. 任意改动都不得破坏默认构建（Direct 产物线）
 
@@ -97,10 +88,10 @@ pub async fn compress_png(file: &Path, opts: &CompressOptions) -> EngineResult {
 ## 构建命令速查
 
 ```bash
-# 三版同时构建（日常开发首选）
-bash scripts/build_all.sh                      # 编译三版 + 复制资源（不签名）
-SIGN=1 bash scripts/build_all.sh               # 编译 + 签名三版
-# 产物：OctoShrink_direct.app（Direct）+ OctoShrink.app（App Store）+ swift/.build/OctoShrink_swift.app（Swift）
+# 两版同时构建（日常开发首选）
+bash scripts/build_all.sh                      # 编译两版 + 复制资源（不签名）
+SIGN=1 bash scripts/build_all.sh               # 编译 + 签名两版
+# 产物：OctoShrink_direct.app（Direct）+ OctoShrink.app（App Store）
 
 # Direct（默认，发布到 GitHub Releases）
 cargo tauri build                              # 或 cargo tauri build --features default
@@ -108,17 +99,13 @@ bash scripts/notarize.sh                       # 一键：构建→签名→公�
 
 # App Store（开发循环）
 cargo tauri build --features appstore --bundles app -- --no-default-features
-bash scripts/build_appstore.sh                 # 一键：构建→签名→productbuild→PKG
-
-# Swift 原生版
-bash scripts/build_swift.sh                    # 编译 + 组装 .app（不签名）
-SIGN=1 bash scripts/build_swift.sh             # 编译 + 签名
-bash scripts/package_swift_dmg.sh              # 构建 + 签名 + DMG（一键）
-NOTARIZE=1 bash scripts/package_swift_dmg.sh   # 构建 + 签名 + DMG + 公证 + 装订
+bash scripts/build_appstore.sh                 # 一键：构建→签名→productbuild→PKG（待落地）
 
 # 单元测试
 cargo test                                     # 默认 feature（cli-backends）
 cargo test --features inproc-backends          # 进程内版
+npm run test:frontend                          # 前端纯逻辑（队列/暂停/历史页/恢复）
+bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停自检（真跑文件系统）
 ```
 
 ## 分发表
@@ -127,14 +114,12 @@ cargo test --features inproc-backends          # 进程内版
 ---|---|---|---|---|
 | Direct | OctoShrink-<ver>-macos.dmg | GitHub Releases | 下载 + 拖到「应用程序」 | Apple 公证（自动 ~2 分钟）|
 | App Store | OctoShrink-<ver>.pkg | App Store Connect | App Store 搜索安装 | 人工 + 自动审核（1-3 周）|
-| Swift Native | OctoShrink_swift.app | 本地 / 未来可上 GitHub Releases | 构建后直接 .app | Apple 公证（可选）|
 
-- 三渠道独立发布，各自节奏
+- 两渠道独立发布，各自节奏
 - 版本号保持一致，避免用户混淆
 - Bundle ID 分开（推荐）：
   - Direct：com.misswell.octoshrink（现状）
   - App Store：com.misswell.octoshrink.appstore（独立配置文件 src-tauri/tauri.conf.appstore.json）
-  - Swift：com.misswell.octoshrink.swift（swift/Info.plist）
 
 ## 完整改造蓝图
 
@@ -144,8 +129,6 @@ cargo test --features inproc-backends          # 进程内版
 
 ## 当前状态（编辑此节以保持最新）
 
-- ✅ v2.5.33 已发布（2026-09-10）：GitHub Release 含 macOS arm64/x86_64/Universal DMG + Universal 更新包（latest.json）+ Windows exe/MSI + Linux AppImage/deb；本版 Swift 原生线与 Tauri 功能完全对齐并重做布局样式
-- ✅ 本机钥匙串 `octoshrink-notary` 公证凭据已于 2026-09-11 恢复：**该 profile 存在 login keychain，绑定 Apple ID/Team，不绑定项目——本机所有项目共用**（`xcrun notarytool submit <文件> --keychain-profile octoshrink-notary`）。注意：凭据条目可能无故消失（2026-09-10 曾发生一次），公证报 "No Keychain password item found" 时先跑 `xcrun notarytool history --keychain-profile octoshrink-notary` 验证，失效则请用户重新执行 `xcrun notarytool store-credentials octoshrink-notary --apple-id misswell@foxmail.com --team-id U8U443D7ZL`
 - ✅ Direct 产物线已就绪：v2.2.0 已签名公证发布，notarize.sh 工作
 - ✅ App Store 产物线已构建并上传：v2.2.9 PKG 已上传 App Store Connect（Apple ID: 6792604654，Delivery UUID 6d414d74-5d30-449f-a666-ac11f6ea4814）
 - ✅ 白屏与 IPC 问题已最终修复（v2.2.9）：固定端口段 41845-41847 + HTTP 服务器 + 完整 ACL（allow-* + remote.urls 精确带端口 origin），详见第 3 节「白屏与 IPC 反复 bug 终极解法」
@@ -155,27 +138,21 @@ cargo test --features inproc-backends          # 进程内版
 - ✅ macOS 系统转换模式已接入：两条产物线共用 ImageIO/CoreGraphics，支持 JPEG/PNG/HEIF、Finder 尺寸档位和元数据保留，不调用外部进程
 - ✅ 输出文件名后缀支持自定义：默认 `_compressed`，两条产物线共用 `outputSuffix`，并对路径分隔符做安全清理
 - ✅ 两条产物线功能对齐：JXL 已从前端输出格式下拉移除（两版一致）；GIF 两版均有压缩功能（Direct gifsicle 减色更优，App Store image crate 重编码，属质量差异非功能差异）
-- ✅ 对比视图已改为独立原生窗口（未发版）：`compare.html` + `compare_window.js`，label="compare"，由 `open_compare_window` 命令创建（Direct 用 tauri:// 内嵌页，App Store 用本地 HTTP 页），自由缩放可大于主窗口、自带红绿灯；载荷经 `pending_compare` 状态 + `take_compare_window_payload` 首屏取回，`compare-open` / `compare-results-changed` 事件双向同步；`on_window_event` 仅在 label=="main" 关闭时 exit(0)
-- ✅ Swift 原生版已就绪（v2.5.30）：`swift/` 目录 SwiftUI 应用，`scripts/build_swift.sh` 独立构建，`build_all.sh` 第三步自动调用；复用 Direct 线 CLI 工具 + dylib；Bundle ID `com.misswell.octoshrink.swift`，最低 macOS 13.0，约 15MB
-- ✅ Swift 原生版功能对齐 Tauri/Direct 线（v2.5.32）：
-  - 引擎：PNG/JPG/GIF/WebP/AVIF/HEIC 走同一批 CLI 工具与参数（pngquant / cjpeg / gifsicle / cwebp / avifenc / sips）；智能模式与 Tauri `compress_smart` 一致（PNG 同时试 pngquant 与 WebP，取体积更小者）；系统转换用 ImageIO，算法名 `macOS ImageIO · 大/中/小/实际大小`
-  - 队列/工作流：状态文案与 Tauri 一致（等待中 / 压缩中… / 已完成百分比 / 失败 / 已移除 / 已跳过 / 已恢复），含清空/恢复全部确认弹窗、单文件重试、导出全部、另存为、复制日志、自动压缩续队列
-  - 三种输出模式语义一致：覆盖（首次备份 + 恢复）、自定义后缀（同一 `_compressed` 默认值 + 清洗规则）、指定文件夹（保留相对路径）
-  - 对比窗口：独立 `NSWindow`（label=`compare`），分割滑块 + 缩放 0.1–8、上一个/下一个、重新压缩预览（不改真实输出/备份）、恢复原图并同步主窗口、⌘+滚轮切换、Esc 关闭、←/→ 切换
-  - ⚠️ **Swift 特有实现差异（勿"修复"成 Rust 写法）**：`FileManager.copyItem` 在目标已存在时会失败，而 Rust `fs::copy` 会覆盖。所有覆盖写路径必须走 `AppState.copyOverwriting`，否则 replace 模式恢复会静默失败并丢备份（曾实测踩坑）
-  - 导入去重基于 `canonicalPath`（`/tmp` → `/private/tmp`），与 Tauri `canonicalize` 对齐，避免同一文件两种写法重复入队
-- ✅ 临时目录双时机清理（三条线共用）：启动（清崩溃残留）+ 退出（Tauri 挂 RunEvent::Exit，Swift 挂 applicationWillTerminate），删除 $TMPDIR 下 `octoshrink-backups`、`octoshrink-display` 与 `octoshrink-work`（Swift 压缩中间文件专用目录），避免长期累积
+- ✅ 对比视图已改为独立原生窗口（未发版）：`compare.html` + `compare_window.js`，label="compare"，由 `open_compare_window` 命令创建（Direct 用 tauri:// 内嵌页，App Store 用本地 HTTP 页），自由缩放可大于主窗口、自带红绿灯；载荷经 `pending_compare` 状态 + `take_compare_window_payload` 首屏取回，`compare-open` / `compare-results-changed` 事件双向同步；`on_window_event` 仅在 label=="main" 关闭时 exit(0)；首屏与 resize 均按"适合窗口"fit 适配（先 showPanel 再测量视口，隐藏态测量会得到 0 而回退 100%，大图只显示局部），缩放下限 0.02，重置按钮=重新适配，用户手动缩放后 resize 不再打断
+- ✅ 安全暂停已接入（三线一致）：压缩中可暂停/继续，只拦「还没开始」的文件，绝不 kill 正在跑的 CLI 子进程；进度按钮文案变「暂停中…」，旁边一个小号 [暂停]/[继续]
+- ✅ 压缩历史 + 原图保留/恢复已接入（三线一致）：`history.rs::HistoryStore` / Swift `Services/HistoryStore.swift` 落 App Support（**不再是临时目录**），历史页/设置页为主窗口内部视图，恢复统一走一个服务（`restore_original` / `restore_history_entry` / `restore_all` 共用 `HistoryStore::restore`），保留档位为「不保留」（默认，退出时清理）或 1/3/7/14/30 天（启动时按天清理，详见下一节）
+- ✅ CPU 使用上限已接入（三条线一致）：设置页「性能」小节 + `CompressionScheduler`（暂停与并行预算同一套闸门）+两层预算（并发文件数 × 单编码器内部线程），检测见 `system_info.rs` / `SystemInfo.swift`，详见「CPU 使用上限（三条线共用不变量）」
+- ✅ Swift 原生线（`swift/`）与两条 Tauri 线功能对齐，历史/备份/暂停语义一致，但存储根目录独立（`~/Library/Application Support/com.misswell.octoshrink.swift`），三条线互不读写对方的 history.json
 - 🟡 App Store 审核待提交：2.2.9 已上传 ASC，需补全元数据 + 回复 network.server 解释（路径B）后提交审核
 - ⬜ 引擎迁移后续：JXL（未来接入 jpegxl-sys 后可恢复 UI 选项）；GIF 减色优化（未来可用 imagequant 逐帧量化，当前有帧间闪烁风险暂不做）
 
-### 8. 每次编译必须同时构建三条产物线（强制）
+### 8. 每次编译必须同时构建两条产物线（强制）
 
-日常开发首选 `bash scripts/build_all.sh`，一次编译三版：
+日常开发首选 `bash scripts/build_all.sh`，一次编译两版：
 - **Direct 版**（default=cli-backends）→ 产物 `OctoShrink_direct.app`（加 `_direct` 后缀，与 App Store 版区分）
 - **App Store 版**（appstore=inproc-backends）→ 产物 `OctoShrink.app`（原名）
-- **Swift 原生版**（SwiftUI）→ 产物 `swift/.build/OctoShrink_swift.app`（独立目录，失败不影响前两版）
 
-Tauri 两条线的 `productName` 都是 "OctoShrink"，Tauri 输出到同一路径。build_all.sh 先建 Direct 再重命名，避免覆盖。**不要只编译一版**——改完代码必须 Tauri 两版都过 `cargo check`，发布时用 `build_all.sh` 同时出三版。单独发布某一条线时用 `notarize.sh`（Direct）、`build_appstore.sh`（App Store）或 `scripts/build_swift.sh`（Swift）。
+两条线的 `productName` 都是 "OctoShrink"，Tauri 输出到同一路径。build_all.sh 先建 Direct 再重命名，避免覆盖。**不要只编译一版**——改完代码必须两版都过 `cargo check`，发布时用 `build_all.sh` 同时出两版。单独发布某一条线时用 `notarize.sh`（Direct）或 `build_appstore.sh`（App Store）。
 
 ---
 
@@ -188,11 +165,13 @@ Tauri 两条线的 `productName` 都是 "OctoShrink"，Tauri 输出到同一路�
 | walk_dir 递归 | fs::read_dir 任意路径；稳定排序并按规范路径去重，前端批次使用已展开文件快照 | 同上 + 仅在已书签根内递归 | 沙盒只认授权范围；队列不能因重复目录或处理期间新增文件而改变 |
 | 队列批次文件清单 | 导入完成后展开并去重，开始处理时只提交该批次快照；目录根通过 `sourceRoots` 保留相对输出路径 | 同上，书签授权范围内执行 | 避免处理中追加、异步扫描乱序和清空后旧事件回流 |
 | write_output_file | fs::write；系统跨格式覆盖时改扩展名并避让同名目标；后缀模式使用自定义 `outputSuffix`（默认 `_compressed`） | 系统转换开始前强制经文件夹选择器授权，随后写入已授权目录；后缀模式使用同一自定义 `outputSuffix` | 沙盒不能依赖单文件授权写入旁路新文件；两版需保持输出命名一致 |
-| restore_original | fs::copy(backup, original)；删除本次生成的 output_path | 同上，原路径及输出路径需 bookmark | 沙盒；两版恢复语义一致 |
+| restore_original / restore_history_entry / restore_all | 三条命令共用同一个恢复服务 `HistoryStore::restore`：backup → `.octoshrink-restore-<nanos>.tmp` → rename 覆盖源文件 → 再删本次生成的压缩输出与备份目录；命中冲突（大小或 mtime 变化 >2 s，仅 replace 模式）时返回 `conflict=true`，前端确认后带 `force=true` 重试 | 同上，源图/输出/备份路径均经 bookmark 授权；路径一律由 historyId 从存储读取，前端不拼路径 | 沙盒；两版恢复语义一致，**不允许复制三套恢复逻辑** |
+| 历史记录与原图备份 | `HistoryStore` 落 `<appdata>/history/history.json` + `<appdata>/history/backups/<key>/`（App Support，跨启动长期保留） | 同上（沙盒容器内的 App Support）| 备份绝不放 temp_dir/Caches，否则系统清理会丢掉原图；Swift 线用独立根 `~/Library/Application Support/com.misswell.octoshrink.swift` |
+| 启动清理 | `setup` 里跑一次 `cleanup_expired(retention_days)`：只删过期 `HistoryEntry` 和只被该条目引用的备份目录；`retention_days == 0`（「不保留」，默认档）时**只扫无人引用的孤儿备份** | 同上 | 不留常驻计时器；「不保留」档的备份**只在正常退出时清**（`RunEvent::Exit` / `applicationWillTerminate`），因为崩溃现场那份可能是唯一的原图；**绝不删用户的 sourcePath / outputPath / 输出目录里的文件**（历史过期 ≠ 用户文件过期） |
+| 安全暂停 | `CompressionControl`（`pause_compression` / `resume_compression` / `compression_state`）：闸门只拦「还没开始」的文件，正在跑的 CLI 子进程绝不 kill；`Notify` + 250 ms 超时轮询 | 同上（进程内引擎同样只在新任务起点等待）| 两版行为一致；Swift 线为 `PauseGate` |
 | 对比窗口（compare 独立窗口）| WebviewUrl::App 加载内嵌 compare.html，经 convertFileSrc / read_image_dataurl 读图 | WebviewUrl::External 指向本地 HTTP 服务器 `http://localhost:<port>/compare.html`（`frontend_http_port()`），经 read_image_dataurl（bookmark 授权范围内）读图，窗口创建时 `visible(false)` + on_page_load show 防白屏 | 沙盒阻止 tauri://；两版窗口行为一致，URL 按 feature 分叉 |
 | open_in_finder | Command::new("open").arg("-R") | tauri-plugin-opener（NSWorkspace）| 沙盒禁 spawn Finder |
 | ~/Library/... 访问 | 任意 | 仅 App Support / Caches / Tmp（sandbox 允许子集）| 沙盒 |
-| 临时目录清理（启动+退出）| setup() 启动时 + RunEvent::Exit 退出时 fs::remove_dir_all($TMPDIR/octoshrink-backups + octoshrink-display)；Swift 版另清 octoshrink-work | 同上 | 两版共用同一目录名；沙盒允许写自身 tmp；恢复原图仅限当前会话（前端队列内存态），退出后备份无从引用，直接删除；Swift 压缩中间文件集中在 `$TMPDIR/octoshrink-work/`，崩溃残留由下次启动清理 |
 
 ## Entitlements 对照
 
@@ -225,6 +204,98 @@ Tauri 两条线的 `productName` 都是 "OctoShrink"，Tauri 输出到同一路�
 - 任何 PR / 提交若改变两条产物线的并行结构、文件访问差异、entitlements 配置、CLI↔crate 映射 → 必须在本文件同步更新对应小节
 - 本文件由 AI 失效风险最小化优先：每条规则都写成"行动项 + 为什么"，便于将来任何 Agent 读到时都能立即照做
 
+## 历史记录、原图备份与安全暂停（三条线共用不变量）
+
+> 这一节是"原图不能被弄丢"的硬约束。三条线（Direct / App Store / Swift 原生）各自的实现可以不同，但下列不变量**必须逐条成立**，改动任何一条都要同时在三条线里核对。
+
+### 存储位置：永远在 App Support，绝不在临时目录
+
+| 线 | 根目录 | history 文件 | 备份目录 |
+|---|---|---|---|
+| Direct | `app.path().app_data_dir()`（identifier `com.misswell.octoshrink`） | `<root>/history/history.json` | `<root>/history/backups/<key>/original.<ext>` |
+| App Store | 同上，identifier `com.misswell.octoshrink.appstore` → 自动落沙盒容器 | 同上 | 同上 |
+| Swift | `~/Library/Application Support/com.misswell.octoshrink.swift` | 同上 | 同上 |
+
+- 三条线的存储根**互不相同**，备份 key 的哈希算法也不同（Rust 用 `DefaultHasher` 取 16 位十六进制；Swift 用自实现的 FNV-1a 64 位，因为 Swift 的 `hashValue` 每进程随机播种、跨启动不稳定）。这是刻意设计：任何两条线都不能读写同一份 `history.json`。
+- ❌ 不要把备份放进 `temp_dir` / `NSTemporaryDirectory` / `Caches` —— 系统会随手清理，用户原图就没了。历史功能上线前的老版本确实在 temp 里放过，那份残骸（`<tmp>/octoshrink-backups`）只在启动时清目录本身。
+
+### 备份：一次写成，永不覆盖
+
+- `ensure_backup(source)` 在**覆盖原文件之前**调用；返回 `None`（备份没写成）时**必须放弃这次覆盖**，把该文件标记为失败并提示「无法保存原图备份，已跳过覆盖」。宁可压缩失败，也不能出现"覆盖了但没原图"。
+- **已有有效备份时绝不覆盖**：同一张图连压三次，备份里必须还是第一次压缩前的真正原图。哈希撞到其他源路径时往后挪槽位（`<key>-1` … `<key>-31`），不串别人的原图。
+- `history.json` 与 `backup-meta.json` 一律"写 tmp → fsync → rename"，崩溃不会留下半个文件。
+
+### 恢复：一个服务，三条入口
+
+- `restore_original` / `restore_history_entry` / `restore_all` **共用**同一个恢复实现（Rust `HistoryStore::restore`，Swift `HistoryStore.restore(entry:force:)`）。禁止复制三套恢复逻辑。
+- 前端**不拼路径**：只传 `historyId`，源图路径、输出路径、备份路径全部从存储读取。
+- 原子顺序：备份 → 同目录 `.octoshrink-restore-<nanos>.tmp` → rename 覆盖源文件 → 才删本次生成的压缩输出和备份目录。中途失败不留半个文件，也不许提前删备份。
+- 冲突保护：仅 replace 模式比对记录时的文件大小 / mtime（容差 2000 ms），任一不符即返回 `conflict=true`；前端弹「这个文件在压缩后又被修改过。恢复原图会覆盖当前版本。」→ 用户确认后带 `force=true` 重试。
+- 恢复后**历史记录不删**，只标 `restored` 并删备份；共享同一备份的兄弟条目一起标记。非 replace 模式没有备份，其"撤销"只删本次压缩输出并移除条目。
+
+### 保留期与退出/启动清理
+
+- 设置项 `原图备份保留时间`：**默认 `0` = 不保留**，可选 `不保留 / 1 / 3 / 7 / 14 / 30`（单位：天）。存在 `<app_data_dir>/settings.json`（Swift 线在自己的根目录下同名文件），字段 `original_retention_days` / `originalRetentionDays`，文件损坏则回落默认值。
+- **`0` 是一个真实档位，不是"没设置"**：常量 `KEEP_UNTIL_QUIT`（Rust）/ `Retention.noRetain`（Swift），默认值直接取它。三处必须守住：
+  - ❌ 不许 `if (days)` / `parseInt(v,10) || 3` 这类真值判断 —— 会把「不保留」静默吞成 3 天（前端已修过两处，`tests/history-view.cjs` 有回归断言）。
+  - ❌ 不许把 clamp 写成 `days.clamp(1, 30)` —— 会把 0 变成"保留 1 天"。clamp 只夹越界值，0 原样通过（`clamp_retention` / `Retention.clamp`）。
+  - ❌ 不许显示成「保留 0 天」（`Retention.label(0) == "不保留"`）。
+- **`0` 不按时间过期**：它的清理挂在**正常退出**上（Tauri `RunEvent::Exit` → `commands::purge_backups_if_not_retained`；Swift `AppDelegate.applicationWillTerminate` → `HistoryStore.purgeBackupsOnExit()`）。启动时这一档**只扫无人引用的孤儿备份**，不动还有人引用的（`cleanup_expired(0)` / `cleanupExpired(retentionDays: 0)` 里 `expires_by_time = days > 0` 为假）。
+  **为什么**：崩溃 / 强杀之后，那次留下的备份可能就是用户原图**唯一还活着的副本**（压缩结果已覆盖了源文件）。这笔欠账留给下一次正常退出收，绝不能在下一次启动时先删。
+- ⚠️ 「不保留」**不改变备份的写入**：`ensure_backup` 照旧在覆盖原文件前写备份，本次会话内随时可恢复。这一档只决定备份的**寿命**（到本次退出为止），不决定"要不要备份"。备份写不成仍然必须放弃覆盖。
+- 退出清理只抹 `backup_path` 并删备份目录，**历史条目本身保留** —— 那是用户的压缩记录，不是原图。前端/历史页读到 `backupExists == false` 就显示「原图备份已清理」并收起恢复按钮；此时 `restore` 必须返回 `BackupGone` / 抛 `RestoreError.backupGone`（「原图备份已清理，无法恢复」），❌ 不许伪装成 `NotRestorable`（"原图未被覆盖，无需恢复"）骗用户。
+- 按天保留的档位（1/3/7/14/30）：清理**只在启动时跑一次**，不留常驻计时器。
+- ⚠️ 清理对象的白名单是闭集，只允许删：① 本 store 里过期/无主的 `HistoryEntry` ② 只被这些过期条目引用的 `backups/<key>/` ③「不保留」档退出时所有已无引用的备份目录。**绝对不能删**：用户的 `sourcePath` 原图、`outputPath` 压缩结果、用户指定输出目录里的任何文件、`*_compressed.<ext>`、历史条目本身。历史过期 ≠ 用户文件过期。
+- 文案硬规定：按天档说「过期的历史记录和原图备份将在下次启动应用时自动清理」；「不保留」档说「原图备份只在这次运行期间保留，关闭应用时清理；期间可以随时恢复原图」。**永远不许**写「原图将在 3 天后删除」这类吓人的话，也**永远不许**把备份说成从不存在的功能（后半句「期间可以随时恢复原图」在「不保留」档是事实，可以写）。
+
+### 安全暂停
+
+- 暂停只拦"还没开始"的文件：闸门在取下一个任务前等待，**绝不 kill / SIGSTOP 正在运行的 CLI 子进程**，也不打断正在跑的进程内引擎。
+- 等待要有超时（Rust `tokio::sync::Notify` + 250 ms 兜底，防丢唤醒；Swift `CompressionScheduler` 的 `NSCondition.wait(until:)` 0.25 s），否则取消/退出会挂死。
+- 一批开始/结束时必然清除暂停态（Rust `begin_batch()` / `end_batch()`，Swift `beginBatch()` / `endBatch()`）；`cancel_file` / `clear_cancel_queue` 同样 `resume()`，防止"闸门关着却没人开"。
+- UI 保持现有密度：进度按钮仍是 `startCompressBtn`，旁边一个小号 `[暂停]/[继续]`，标题文案「暂停中…」，队列摘要追加「 · 已暂停」。不要做成大按钮。
+
+## CPU 使用上限（三条线共用不变量）
+
+> 设置页「性能」小节里的「CPU 使用上限」控制的是 **CPU 并行预算的份数**，不是 affinity。
+> ❌ 不做绑核（`taskpolicy` / `SetThreadAffinityMask` / `sched_setaffinity`）
+> ❌ 不做 P/E 核指定，❌ 不硬编码 M1…M5 的核数表。
+> 因此文案**永远不许**出现「使用 N 个性能核」这类承诺绑定核心的话（`tests/cpu-limit.cjs` 与 `scripts/test_swift_history.sh` 各自 grep 守这条）。
+
+### 1. 两层预算必须同时限，只限一层等于没限
+
+| 层级 | Direct（CLI 后端） | App Store（进程内后端） | Swift 原生 |
+|---|---|---|---|
+| L1 同时处理几个文件 | `commands.rs::CompressionScheduler`（两条 Tauri 线共用） | 同左 | `Services/CompressionScheduler.swift` → `acquire() -> Permit` |
+| L2 单个编码器内部几个 worker | `engine.rs::per_task_threads()` = 1，经 `configure_cpu_limits()` 注入 | `Cargo.toml` 编译期裁掉并行后端 + `ravif.with_num_threads(1)` | `Engine/CLIRunner.swift::CPUResourcePolicy` = 1 |
+
+真实 CPU 用量 ≈ L1 × L2。L2 曾被漏掉两次：`cwebp -mt`、`avifenc --jobs 4` 当时写在各压缩函数里，oxipng / imagequant 的 rayon 后端默认吃满全核 —— "上限 3"实际是"3 个文件 × 每个用满全部核心"，用户看到的占用率和设置完全对不上。
+
+### 2. L2 的三个强制写法
+
+- **命令行开关集中在一张表**：`engine.rs::cpu_flags(tool, threads)` ↔ Swift `CPUResourcePolicy.flags(for:)`，一一对应：`avifenc → --jobs N`、`oxipng → --threads N`、`cwebp → 只在 N > 1 时给 -mt`，其余工具不加参数。**新增压缩函数不许自己写 `-mt` / `--jobs`**，一律走 `make_command()` / `CLIRunner.run(…) / runToFile(…)`。
+- **线程类环境变量无条件注入**：`OMP_NUM_THREADS` / `RAYON_NUM_THREADS`（Rust `cpu_env()`，Swift `CLIRunner.environment()`）。Swift 侧这两个变量必须在 `DYLD_FALLBACK_LIBRARY_PATH` 那个 `if let lib` 分支**之外**设置，否则资源目录缺失时预算静默失效。
+- **进程内 crate 走编译期裁剪，不走运行时调线程数**：`oxipng` 的并行度由 `parallel` feature（rayon）决定、其 `Options` 没有 threads 字段；`imagequant` 的 `threads` feature 同理；rayon 全局池一旦初始化就调不动。所以这三个 crate 在 `Cargo.toml` 里一律 `default-features = false`，`ravif` 单独 `with_num_threads(Some(per_task_threads()))`。❌ 不要为"动态调线程"给它们重开 feature，❌ 不要 `rayon::ThreadPoolBuilder::build_global()`。
+
+### 3. 检测与取值
+
+- `system_info.rs` ↔ `Services/SystemInfo.swift`：预算基准取 `available_parallelism()`（Swift 取 `activeProcessorCount`）；sysctl（`hw.physicalcpu` / `hw.logicalcpu` / `hw.nperflevels` / `hw.perflevel0.*` / `hw.perflevel1.*`）**只用于展示**，不参与算预算。
+- `aarch64 ≠ Apple Silicon`：只有 `machdep.cpu.brand_string` 以 `Apple ` 开头才算。检测把结论作为 `appleSilicon` 字段序列化出去，❌ 前端不许自己从 `architecture` 猜（ARM Windows / Linux 同样报 aarch64）。
+- 设置存的是**用户选的原始值**，生效值按本机能力 clamp：`effective_cpu_limit(configured, detected)`；自动档 = `min(3, detected)`。16 核上设 12、换到 8 核 → 生效 8，静默收敛而不是报错。上限 0/负数夹到 1（0 会让闸门永远关着）。
+- 持久化：与保留天数**同一份** `settings.json` 的 `cpu_thread_limit` / `cpuThreadLimit`，`null` = 自动。❌ 不要再开一个 cpu-settings.json。写设置一律读-改-写（`set_retention_days` 顺手覆盖掉 `cpuThreadLimit` 是已修过的回归 bug）。
+
+### 4. 运行中改上限 = 与暂停同一套语义
+
+- 8 → 2 **不抢占**已在跑的 8 个（各自跑完），只是不再启动新任务；2 → 8 立刻唤醒等待者（不靠 250 ms 超时兜底）。
+- 因此暂停与 CPU 上限合并为**一个** `CompressionScheduler`（`paused` + `max_parallelism` + `active` + 一次通知/条件变量）。❌ 不要拆成 `PauseGate` + `ConcurrencyGate` + `CpuGate` 三层锁 —— Swift 侧 `PauseGate` 已删除，不许在 `HistoryStore.swift` 里复活。
+
+### 5. 命令与文案
+
+- Tauri 命令：`get_cpu_info`、`get_cpu_resource_settings`、`set_cpu_thread_limit(limit | null)`，三者返回同一份 `CpuStatus`（camelCase）。新增命令按"三处同改"注册：`commands.rs` handler + `lib.rs` `invoke_handler!` + `commands.toml` / `capabilities/default.json`。
+- 队列摘要（不另起面板）：`47 / 200 已完成 · CPU 4/10`；暂停时 `… · 已暂停 · CPU 4/10`；自动档 `… · CPU 自动`。
+- 文案固定：「限制 OctoShrink 同时使用的 CPU 并行能力。较低的数值会降低压缩速度，但可为其他应用保留更多性能。」，Apple Silicon 才追加「系统会自动在性能核与能效核之间调度任务。」；设备行报 `Apple M5 · ARM64` + `10 核 CPU（4 性能核 + 6 能效核）`，Intel 报 `6 个物理核心 · 12 个逻辑处理器`。
+- 承诺边界：这个开关调的是并行度，**不许**承诺"< 40% CPU"或"固定占用 N 个核"。
+
 ## 参考
 
 - [App Store 提交完整流程与注意事项](#app-store-提交完整流程与注意事项)
@@ -238,6 +309,10 @@ Tauri 两条线的 `productName` 都是 "OctoShrink"，Tauri 输出到同一路�
 - src-tauri/tauri.conf.appstore.json — App Store 配置（identifier = com.misswell.octoshrink.appstore，v2.2.6）
 - src-tauri/capabilities/default.json — IPC 权限（App Store 版需显式声明所有 app 命令权限）
 - src-tauri/permissions/commands.toml — app 命令 ACL 权限定义
+- src-tauri/src/history.rs + src-tauri/src/app_settings.rs — 历史记录、原图备份、保留期（两条 Tauri 线共用）
+- swift/Sources/OctoShrinkSwift/Services/HistoryStore.swift — 同上的 Swift 原生线实现（含 `PauseGate`）
+- tests/history-view.cjs（`npm run test:frontend`）— 前端历史页/恢复/暂停纯逻辑自检
+- scripts/test_swift_history.sh — Swift 线历史·备份·恢复·PauseGate 自检（真跑文件系统）
 
 ## App Store 提交完整流程与注意事项
 
@@ -291,7 +366,7 @@ xcrun productbuild --component \
 **正确方案（v2.2.9，缺一不可）**：
 - `lib.rs` `#[cfg(feature = "inproc-backends")]` 块：`TcpListener::bind` **固定端口段** `[41845u16, 41846, 41847]`（带 fallback 防冲突），serve resource_dir 前端，`window.navigate("http://localhost:PORT/")`
 - `entitlements-appstore.plist`：`network.server` + `network.client` 必需
-- `capabilities/default.json`：当前 22 个 `allow-*` app 命令权限 + `remote.urls: ["http://localhost:41845","http://localhost:41846","http://localhost:41847"]`（**精确匹配带端口 origin**）+ `core:window:allow-start-dragging` + `core:window:allow-close`；`windows` 必须同时含 `"main"` 和 `"compare"`（独立对比窗口按 label 授权，漏掉 compare 会让对比窗口 IPC 静默失效）
+- `capabilities/default.json`：当前 34 个 `allow-*` app 命令权限（与 `permissions/commands.toml` 的 34 个 `[[permission]]` 一一对应；permissions 数组共 39 项，其余 5 项是 `core:default` / `dialog:default` / `opener:default` / `core:window:allow-start-dragging` / `core:window:allow-close`）+ `remote.urls: ["http://localhost:41845","http://localhost:41846","http://localhost:41847"]`（**精确匹配带端口 origin**）+ `core:window:allow-start-dragging` + `core:window:allow-close`；`windows` 必须同时含 `"main"` 和 `"compare"`（独立对比窗口按 label 授权，漏掉 compare 会让对比窗口 IPC 静默失效）
 - 启动白闪：前端把最终解析出的 `light/dark` 通过 `set_startup_theme` 写入 `NSHomeDirectory()/Library/Application Support/OctoShrink/startup-theme`（App Store 自动落入沙盒容器）；Rust 在 `Builder::run` 创建窗口前读取主题（首次使用 macOS 系统外观）并改写运行时 `WindowConfig.background_color`。本地 HTTP 资源必须返回 `Cache-Control: no-store`，否则 WKWebView 可能复用旧版主题脚本。不要等到 `setup()` 后才设置背景，窗口创建瞬间会漏出静态浅色帧。
 
 **勿再犯**：
@@ -304,7 +379,7 @@ xcrun productbuild --component \
 
 ### 4. IPC 权限（App Store 版必须配置）
 
-- 在 `capabilities/default.json` 中显式声明所有 app 命令的 permission（当前 22 个）
+- 在 `capabilities/default.json` 中显式声明所有 app 命令的 permission（当前 34 个，与 `permissions/commands.toml` 的 `[[permission]]` 数量保持一致；新增 command 时三处同改：`commands.rs` 的 handler、`lib.rs` 的 `invoke_handler`、`commands.toml` + `capabilities/default.json` 的 kebab-case 权限名，如 `set_original_retention_days` → `allow-set-original-retention-days`）
 - 创建 `permissions/commands.toml` 定义权限 schema
 - 不配置 → 前端 invoke 全部失败（静默，不报错）
 - Direct 版不需要此配置（非沙盒，不检查 ACL）
@@ -357,6 +432,7 @@ xcrun altool --upload-app \
 | 窗口无法拖动 | 缺 start-dragging 权限 | capabilities 加 `core:window:allow-start-dragging` |
 | 中间有方形洞 | CSS/布局问题 | 检查前端透明区域 |
 | Transporter 无法安装 | macOS beta | 用 `xcrun altool` 命令行 |
+| release 构建报 `E0463: can't find crate for \`xxx_macro\``，但 `target/release/deps/libxxx_macro-*.dylib` 明明存在 | 上一次构建中途失败留下了半写坏的 proc-macro dylib，cargo 却认为它是新鲜的并复用（`panic` 设置不进 proc-macro 单元的 fingerprint，两条线共用同一个 `target/release` 时更容易踩） | 删掉那一个 crate 的产物和指纹后重编：`rm -rf target/release/deps/*<crate>* target/release/.fingerprint/<crate>*`。⚠️ `cargo clean -p <registry-crate>` 在这里**无效**（该包不在 workspace 里，只会 `Removed 0 files`） |
 
 ### 9. 版本号管理
 

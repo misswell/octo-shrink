@@ -38,6 +38,57 @@ fn get_lib_dir() -> Option<PathBuf> {
     None
 }
 
+/// 第一阶段的基础策略：一个文件任务只占 1 份 CPU 预算，编码器内部也只开 1 个 worker。
+///
+/// 于是"上限 = 4"真的是"约 4 份并行 CPU 工作"，而不是"3 个文件 × 每个吃满全核"。
+/// 将来要做动态分配（把预算分给单文件的多线程）只改这一个函数。
+pub fn per_task_threads() -> usize {
+    1
+}
+
+/// 工具自身的 CPU 开关。集中在这里，PNG/JPG/WebP/AVIF/GIF 各函数不再各写一套。
+fn cpu_flags(tool: &str, threads: usize) -> Vec<String> {
+    match tool {
+        // avifenc 的 --jobs 默认值在不同发行版本里不一致（有版本是 all），必须显式给。
+        "avifenc" => vec!["--jobs".into(), threads.to_string()],
+        // oxipng 内部是 rayon 多线程，显式 --threads 比只靠环境变量更确定。
+        "oxipng" => vec!["--threads".into(), threads.to_string()],
+        // cwebp 的 -mt 只能"开"或"不开"，没法指定几线程 —— 单 worker 就别开。
+        "cwebp" if threads > 1 => vec!["-mt".into()],
+        _ => Vec::new(),
+    }
+}
+
+/// 从可执行文件路径取纯工具名。Windows 的 `.exe` 后缀不能影响判断。
+fn tool_name(tool: &Path) -> String {
+    tool.file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// 子进程的统一线程类环境变量。
+///
+/// 只对认这些变量的 runtime 有效，不能假设所有第三方二进制都遵守 ——
+/// 所以真正的多线程工具另有命令行开关（见 `cpu_flags`）。
+fn cpu_env() -> Vec<(&'static str, String)> {
+    let threads = per_task_threads().to_string();
+    vec![
+        ("OMP_NUM_THREADS", threads.clone()),
+        ("RAYON_NUM_THREADS", threads),
+    ]
+}
+
+/// 给子进程套上 CPU 预算。
+fn configure_cpu_limits(cmd: &mut Command, tool: &Path) {
+    for (key, value) in cpu_env() {
+        cmd.env(key, value);
+    }
+    for flag in cpu_flags(&tool_name(tool), per_task_threads()) {
+        cmd.arg(flag);
+    }
+}
+
 /// 创建带有正确环境变量的 Command（自动设置 DYLD_FALLBACK_LIBRARY_PATH）
 fn make_command(tool: &Path) -> Command {
     let mut cmd = Command::new(tool);
@@ -62,6 +113,7 @@ fn make_command(tool: &Path) -> Command {
         cmd.env("DYLD_FALLBACK_LIBRARY_PATH", combined);
         }
     }
+    configure_cpu_limits(&mut cmd, tool);
     cmd
 }
 
@@ -536,7 +588,6 @@ async fn compress_to_webp(file: &Path, options: &CompressOptions) -> EngineResul
                 format!("-q"), quality.to_string(),
                 "-m".into(), "6".into(),
                 "-pass".into(), "10".into(),
-                "-mt".into(),
                 "-o".into(),
                 out.to_string_lossy().into(),
                 file.to_string_lossy().into(),
@@ -565,7 +616,6 @@ async fn compress_to_avif(file: &Path, options: &CompressOptions) -> EngineResul
             let out = td.path().join("c.avif");
             let args = vec![
                 "--speed".into(), "6".into(),
-                "--jobs".into(), "4".into(),
                 "--min".into(), "0".into(),
                 "--max".into(), quality.to_string(),
                 "-o".into(),
@@ -788,4 +838,58 @@ pub async fn compress_smart(file: &Path, options: &CompressOptions) -> EngineRes
 
     // Fallback
     compress_image(file, &opts).await
+}
+
+#[cfg(test)]
+mod cpu_budget_tests {
+    use super::*;
+
+    /// 某个工具真正拿到的 CPU 相关命令行参数。
+    fn flags_of(tool: &str) -> Vec<String> {
+        cpu_flags(&tool_name(Path::new(tool)), per_task_threads())
+    }
+
+    fn env_value(key: &str) -> Option<String> {
+        cpu_env()
+            .into_iter()
+            .find(|(name, _)| *name == key)
+            .map(|(_, value)| value)
+    }
+
+    #[test]
+    fn avifenc_gets_an_explicit_job_count_instead_of_the_default() {
+        // avifenc 的 --jobs 在不同发行版里默认值不一致（有版本是 all），必须显式给。
+        assert_eq!(flags_of("avifenc"), vec!["--jobs".to_string(), "1".to_string()]);
+    }
+
+    #[test]
+    fn oxipng_is_pinned_to_one_worker() {
+        assert_eq!(flags_of("oxipng"), vec!["--threads".to_string(), "1".to_string()]);
+    }
+
+    #[test]
+    fn cwebp_does_not_opt_into_multithreading_under_one_permit() {
+        // -mt 只能开关、不能指定线程数；单 worker 预算下传它就是超发。
+        assert!(flags_of("cwebp").is_empty());
+        assert_eq!(cpu_flags("cwebp", 4), vec!["-mt".to_string()]);
+    }
+
+    #[test]
+    fn thread_env_is_set_for_every_cli_tool() {
+        assert_eq!(env_value("RAYON_NUM_THREADS").as_deref(), Some("1"));
+        assert_eq!(env_value("OMP_NUM_THREADS").as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn exe_extension_does_not_hide_the_tool_name() {
+        assert_eq!(tool_name(Path::new("/opt/homebrew/bin/avifenc.exe")), "avifenc");
+        assert_eq!(flags_of("avifenc.exe"), flags_of("avifenc"));
+    }
+
+    #[test]
+    fn single_threaded_tools_get_no_extra_flags() {
+        for tool in ["pngquant", "gifsicle", "cjpeg", "cjxl"] {
+            assert!(flags_of(tool).is_empty(), "{tool} 不该拿到额外的 CPU 参数");
+        }
+    }
 }

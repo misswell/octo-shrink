@@ -8,6 +8,7 @@ let progress;
 const context = vm.createContext({
   console, Set, Map, Promise,
   files: [], results: [], inputPaths: [], isCompressing: false, pendingAutoCompress: false,
+  compressionPaused: false, currentView: 'main',
   document: { getElementById: id => id === 'queueSummary' ? summary : null, querySelector: () => null },
   settingsPanel: {style:{}}, resultsPanel: {style:{}},
   statOriginal: {}, statCompressed: {}, totalSavings: {}, totalRate: {},
@@ -19,6 +20,8 @@ const context = vm.createContext({
     return new Promise(resolve => runs.push({ paths: args.filePaths, resolve }));
   },
   formatBytes: String, showToast() {}, iconMarkup() {}, renderQueueResultActions() {}, updateStats() {}, showResults() {},
+  setPauseButtonVisible() {}, renderPauseControls() {}, refreshHistoryIfOpen() {},
+  emitCompareResultsChanged() {},
 });
 vm.runInContext(source.slice(source.indexOf('function uniqueFilePaths('), source.indexOf('async function renderFileQueue(')), context);
 vm.runInContext(source.slice(source.indexOf('async function startCompression('), source.indexOf('function updateStats(')), context);

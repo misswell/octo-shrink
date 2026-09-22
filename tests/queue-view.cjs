@@ -25,6 +25,7 @@ const context = vm.createContext({
     {file:files[2],success:true,originalSize:300,compressedSize:30,savings:90},
   ],
   basename: file => file.split('/').pop(),
+  iconMarkup: name => '<svg>' + name + '</svg>',
   document: {getElementById: id => controls[id]},
 });
 vm.runInContext(source.slice(source.indexOf('function toggleQueueSortDirection('), source.indexOf('async function renderFileQueue(')), context);

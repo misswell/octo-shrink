@@ -494,7 +494,9 @@ function updateQueueSummary() {
     return result && queued.has(result.file);
   }).map(function(result) { return result.file; }));
   if (isCompressing || completed.size > 0) {
-    summary.textContent = completed.size + ' / ' + queued.size + ' 已完成';
+    summary.textContent = completed.size + ' / ' + queued.size + ' 已完成'
+      + (isCompressing && compressionPaused ? ' · 已暂停' : '')
+      + cpuLimitText();
   } else {
     summary.textContent = files.length + ' 个文件';
   }
@@ -507,6 +509,24 @@ function updateBulkActionButtons() {
   if (!restoreBtn) return;
   var hasRestorable = results.some(function(r) { return r && r.success; });
   restoreBtn.style.display = hasRestorable ? 'inline-flex' : 'none';
+}
+
+// CPU 上限的展示口径：后端负责算生效值，前端只渲染"上限 / 可用并行数"。
+// 这里没有任何绑核语义 —— 数字只是"同时允许几份 CPU 并行压缩工作"。
+var cpuStatus = null;
+
+function cpuCeiling() {
+  return Math.max(1, (cpuStatus && cpuStatus.availableParallelism) || 1);
+}
+
+function cpuLimitText() {
+  if (!cpuStatus) return '';
+  if (cpuStatus.configuredLimit === null || cpuStatus.configuredLimit === undefined) {
+    return ' · CPU 自动';
+  }
+  var ceiling = cpuCeiling();
+  var limit = Math.min(Math.max(1, cpuStatus.effectiveLimit || 1), ceiling);
+  return ' · CPU ' + limit + '/' + ceiling;
 }
 
 function toggleQueueSortDirection() {
@@ -675,7 +695,7 @@ function renderQueueResultActions(row, result) {
       e.stopPropagation();
       if (def.action === 'save') saveResult(result.file);
       else if (def.action === 'compare') openCompareByFile(result.file);
-      else if (def.action === 'restore') restoreOriginal(result.file, result.backupPath || '', result.outputMode || 'suffix', result.outputPath || '', result.compressOptions && result.compressOptions.outputSuffix);
+      else if (def.action === 'restore') restoreOriginal(result.file);
       else if (def.action === 'finder') openInFinder(result.file);
       else if (def.action === 'retry') compressOneFile(result.file);
       else if (def.action === 'log') copyCompressLog(result);
@@ -915,6 +935,9 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
     var btnText = document.getElementById('compressBtnText');
     if (btnText) btnText.innerHTML = '<span class="progress-file-spinner"></span> ' + processingActionText('progress');
   }
+  compressionPaused = false;
+  setPauseButtonVisible(true);
+  renderPauseControls();
 
   renderFileQueue();
 
@@ -1016,6 +1039,8 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
     }
     isCompressing = false;
     cancelledFiles.clear();
+    compressionPaused = false;
+    setPauseButtonVisible(false);
     if (startBtn) {
       startBtn.classList.remove('compressing');
       startBtn.classList.add('done');
@@ -1035,6 +1060,7 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
     } else {
       updateQueueSummary();
     }
+    refreshHistoryIfOpen();
   }
 }
 
@@ -1103,24 +1129,40 @@ function openInFinder(filePath) {
   invoke('open_in_finder', { filePath: target });
 }
 
-async function restoreOriginal(filePath, backupPath, outputMode, outputPath, outputSuffix) {
-  const result = await invoke('restore_original', {
-    filePath,
-    backupPath: backupPath || null,
-    outputMode,
-    outputPath: outputPath || null,
-    outputSuffix: outputSuffix || getOutputSuffix()
-  });
-  if (result.success) {
-    showToast('已恢复原图: ' + basename(filePath));
-    results = results.filter(r => r.file !== filePath);
-    markQueueRowRestored(filePath);
-    showResults();
-    updateQueueSummary();
-    emitCompareResultsChanged();
-  } else {
-    showToast('恢复失败: ' + (result.error || '未知错误'));
+// 压缩后又用别的 App 改过图：恢复会覆盖那个新版本，必须先问。
+var RESTORE_CONFLICT_TEXT = '这个文件在压缩后又被修改过。\n恢复原图会覆盖当前版本。';
+
+/// 恢复成功后的统一收尾：主队列、历史页、对比窗口都只走这里。
+/// skipRefresh 供批量恢复使用，避免每个文件重绘一次结果列表。
+function afterRestore(filePath, skipRefresh) {
+  results = results.filter(function(r) { return r.file !== filePath; });
+  markQueueRowRestored(filePath);
+  if (skipRefresh) return;
+  showResults();
+  updateQueueSummary();
+  emitCompareResultsChanged();
+  refreshHistoryIfOpen();
+}
+
+async function restoreOriginal(filePath, force) {
+  var outcome;
+  try {
+    outcome = await invoke('restore_original', { filePath: filePath, force: !!force });
+  } catch (error) {
+    showToast('恢复失败: ' + (error.message || error));
+    return;
   }
+  if (outcome.conflict) {
+    if (!confirm(RESTORE_CONFLICT_TEXT)) return;
+    await restoreOriginal(filePath, true);
+    return;
+  }
+  if (!outcome.success) {
+    showToast(outcome.error || '恢复失败');
+    return;
+  }
+  showToast('已恢复原图: ' + basename(filePath));
+  afterRestore(outcome.filePath || filePath);
 }
 
 function markQueueRowRestored(filePath) {
@@ -1138,26 +1180,17 @@ function markQueueRowRestored(filePath) {
 async function restoreAllOriginals() {
   if (results.length === 0) return;
   if (!confirm('确定要恢复全部已压缩成功的原图吗？')) return;
-  var successCount = 0;
-  var restoredFiles = [];
-  for (var i = 0; i < results.length; i++) {
-    var r = results[i];
-    if (!r.success) continue;
-    try {
-      await invoke('restore_original', {
-        filePath: r.file,
-        backupPath: r.backupPath || null,
-        outputMode: r.outputMode || 'suffix',
-        outputPath: r.outputPath || null,
-        outputSuffix: r.compressOptions && r.compressOptions.outputSuffix
-      });
-      successCount++;
-      restoredFiles.push(r.file);
-    } catch(e) { /* ignore */ }
+  var outcome;
+  try {
+    outcome = await invoke('restore_all', { results: results.slice() });
+  } catch (error) {
+    showToast('恢复失败: ' + (error.message || error));
+    return;
   }
-  showToast('已恢复 ' + successCount + ' 个文件到原图');
-  restoredFiles.forEach(markQueueRowRestored);
-  results = [];
+  showToast(outcome.message);
+  (outcome.restoredFiles || []).forEach(function(filePath) {
+    afterRestore(filePath, true);
+  });
   showResults();
   updateQueueSummary();
   emitCompareResultsChanged();
@@ -1210,6 +1243,394 @@ function formatBytes(bytes) {
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'KB';
   return (bytes / (1024 * 1024)).toFixed(1) + 'MB';
 }
+
+// ─── 页面导航（main / history / settings）───────────────────────
+// 只切换 display：文件队列 DOM 与正在跑的压缩任务都不动，所以压缩中途也能进历史/设置。
+var VIEWS = ['main', 'history', 'settings'];
+var currentView = 'main';
+
+function showView(name) {
+  var view = VIEWS.indexOf(name) >= 0 ? name : 'main';
+  currentView = view;
+  VIEWS.forEach(function(id) {
+    var el = document.getElementById(id + 'View');
+    if (el) el.style.display = id === view ? '' : 'none';
+  });
+  var historyBtn = document.getElementById('historyViewBtn');
+  if (historyBtn) historyBtn.classList.toggle('active', view === 'history');
+  var settingsBtn = document.getElementById('settingsViewBtn');
+  if (settingsBtn) settingsBtn.classList.toggle('active', view === 'settings');
+  // 每次进入都重新读盘：历史是后端状态，不能只信启动时那份快照。
+  if (view === 'history') refreshHistory();
+  if (view === 'settings') { loadRetentionSetting(); loadCpuSetting(); }
+}
+
+// ─── 暂停 / 继续 ────────────────────────────────────────────────
+// 暂停只挡住"还没开始"的文件；已经在跑的子进程自己跑完，绝不 kill。
+var compressionPaused = false;
+
+function pauseButtonText(paused) {
+  return paused
+    ? '<svg class="symbol-icon symbol-icon-small"><use href="#icon-play"/></svg> 继续'
+    : '<svg class="symbol-icon symbol-icon-small"><use href="#icon-pause"/></svg> 暂停';
+}
+
+function renderPauseControls() {
+  var btn = document.getElementById('pauseCompressBtn');
+  var text = document.getElementById('pauseBtnText');
+  if (text) text.innerHTML = pauseButtonText(compressionPaused);
+  if (btn) btn.title = compressionPaused ? '继续压缩剩余文件' : '暂停：不再启动新文件';
+  var btnText = document.getElementById('compressBtnText');
+  if (btnText && isCompressing) {
+    btnText.innerHTML = '<span class="progress-file-spinner"></span> '
+      + (compressionPaused ? '暂停中…' : processingActionText('progress'));
+  }
+  updateQueueSummary();
+}
+
+function setPauseButtonVisible(visible) {
+  var btn = document.getElementById('pauseCompressBtn');
+  if (btn) btn.style.display = visible ? 'inline-flex' : 'none';
+}
+
+async function toggleCompressionPause() {
+  var next = !compressionPaused;
+  compressionPaused = next;
+  renderPauseControls();
+  try {
+    await invoke(next ? 'pause_compression' : 'resume_compression');
+  } catch (error) {
+    console.error('Pause toggle failed:', error);
+    compressionPaused = !next;
+    renderPauseControls();
+    showToast(next ? '暂停失败，请重试' : '继续失败，请重试');
+  }
+}
+
+// ─── 历史记录页 ─────────────────────────────────────────────────
+var historyEntries = [];
+var retentionDays = 0;   // 与后端默认一致：不保留（本次退出时清理）
+
+function pad2(value) {
+  return String(value).length < 2 ? '0' + value : String(value);
+}
+
+function historyTime(millis) {
+  if (!millis) return '';
+  var date = new Date(millis);
+  var today = new Date();
+  var yesterday = new Date(today.getTime() - 86400000);
+  var clock = pad2(date.getHours()) + ':' + pad2(date.getMinutes());
+  if (date.toDateString() === today.toDateString()) return '今天 ' + clock;
+  if (date.toDateString() === yesterday.toDateString()) return '昨天 ' + clock;
+  return date.getFullYear() + '-' + pad2(date.getMonth() + 1) + '-' + pad2(date.getDate()) + ' ' + clock;
+}
+
+function canRestoreHistory(entry) {
+  return entry.status === 'compressed'
+    && entry.outputMode === 'replace'
+    && !!entry.backupExists
+    && !!entry.sourceExists;
+}
+
+function historyStatusText(entry) {
+  if (entry.status === 'restored') {
+    return '已恢复' + (entry.restoredAt ? ' · ' + historyTime(entry.restoredAt) : '');
+  }
+  if (entry.outputMode !== 'replace') return '原图未覆盖';
+  if (!entry.sourceExists) return '原文件位置不存在';
+  if (!entry.backupExists) return '原图备份已清理';
+  return '已压缩';
+}
+
+function historyRow(entry) {
+  var row = document.createElement('div');
+  row.className = 'history-item' + (entry.status === 'restored' ? ' restored' : '');
+
+  var icon = document.createElement('span');
+  icon.className = 'history-icon';
+  icon.innerHTML = iconMarkup(entry.status === 'restored' ? 'restore' : 'check', true);
+
+  var main = document.createElement('span');
+  main.className = 'history-main';
+  var name = document.createElement('span');
+  name.className = 'history-name';
+  name.textContent = entry.fileName;
+  name.title = entry.sourcePath;
+  var sub = document.createElement('span');
+  sub.className = 'history-sub';
+  sub.textContent = dirname(entry.sourcePath) + ' · ' + historyStatusText(entry);
+  main.appendChild(name);
+  main.appendChild(sub);
+
+  var metrics = document.createElement('span');
+  metrics.className = 'history-metrics';
+  var sizes = document.createElement('span');
+  sizes.textContent = formatBytes(entry.originalSize) + ' → ' + formatBytes(entry.compressedSize);
+  var saving = document.createElement('span');
+  saving.textContent = '节省 ' + Math.abs(entry.savings).toFixed(1) + '%';
+  metrics.appendChild(sizes);
+  metrics.appendChild(saving);
+
+  var when = document.createElement('span');
+  when.className = 'history-when';
+  var created = document.createElement('span');
+  created.textContent = historyTime(entry.createdAt);
+  var algo = document.createElement('span');
+  algo.textContent = entry.algorithm || entry.outType || '';
+  when.appendChild(created);
+  when.appendChild(algo);
+
+  var actions = document.createElement('span');
+  actions.className = 'history-actions';
+  if (canRestoreHistory(entry)) {
+    var restoreBtn = document.createElement('button');
+    restoreBtn.className = 'btn btn-small';
+    restoreBtn.type = 'button';
+    restoreBtn.innerHTML = iconMarkup('restore', true) + ' 恢复原图';
+    restoreBtn.addEventListener('click', function() { restoreFromHistory(entry); });
+    actions.appendChild(restoreBtn);
+  }
+  var finderBtn = document.createElement('button');
+  finderBtn.className = 'queue-action-btn';
+  finderBtn.type = 'button';
+  finderBtn.title = '在访达中显示';
+  finderBtn.innerHTML = iconMarkup('finder', true);
+  finderBtn.addEventListener('click', function() {
+    var target = entry.outputPath && entry.outputPath !== entry.sourcePath && entry.sourceExists
+      ? entry.outputPath
+      : entry.sourcePath;
+    invoke('open_in_finder', { filePath: target }).catch(function() {});
+  });
+  actions.appendChild(finderBtn);
+
+  row.appendChild(icon);
+  row.appendChild(main);
+  row.appendChild(metrics);
+  row.appendChild(when);
+  row.appendChild(actions);
+  return row;
+}
+
+function renderHistory() {
+  var list = document.getElementById('historyList');
+  if (!list) return;
+  list.innerHTML = '';
+  historyEntries.forEach(function(entry) { list.appendChild(historyRow(entry)); });
+  var empty = document.getElementById('historyEmpty');
+  if (empty) empty.hidden = historyEntries.length > 0;
+  var meta = document.getElementById('historyMeta');
+  if (meta) meta.textContent = historyEntries.length + ' 条';
+}
+
+async function refreshHistory() {
+  try {
+    historyEntries = await invoke('list_history');
+  } catch (error) {
+    console.error('History load failed:', error);
+    historyEntries = [];
+    showToast('读取历史记录失败');
+  }
+  renderHistory();
+}
+
+function refreshHistoryIfOpen() {
+  if (currentView === 'history') refreshHistory();
+}
+
+async function restoreFromHistory(entry, force) {
+  var outcome;
+  try {
+    outcome = await invoke('restore_history_entry', { historyId: entry.id, force: !!force });
+  } catch (error) {
+    showToast('恢复失败: ' + (error.message || error));
+    return;
+  }
+  if (outcome.conflict) {
+    if (!confirm(RESTORE_CONFLICT_TEXT)) return;
+    await restoreFromHistory(entry, true);
+    return;
+  }
+  if (!outcome.success) {
+    showToast(outcome.error || '恢复失败');
+    return;
+  }
+  showToast('已恢复原图: ' + basename(entry.fileName));
+  afterRestore(outcome.filePath || entry.sourcePath);
+}
+
+async function clearHistory() {
+  if (historyEntries.length === 0) return;
+  if (!confirm('确定要清空 ' + historyEntries.length + ' 条历史记录吗？\n只清理 OctoShrink 保存的原图备份，不会删除你的图片。')) return;
+  try {
+    var removed = await invoke('clear_history');
+    showToast('已清空 ' + removed + ' 条历史记录');
+  } catch (error) {
+    showToast('清空失败: ' + (error.message || error));
+    return;
+  }
+  await refreshHistory();
+}
+
+// ─── 设置页：原图备份保留时间 ───────────────────────────────────
+async function loadRetentionSetting() {
+  try {
+    var settings = await invoke('get_app_settings');
+    // 0 是真实档位（不保留），不能用真值判断，否则会被当成"没设置"回落成 3 天。
+    if (settings && settings.originalRetentionDays != null) {
+      retentionDays = settings.originalRetentionDays;
+    }
+    applyRetentionSetting();
+  } catch (error) {
+    console.error('Settings load failed:', error);
+  }
+}
+
+async function saveRetentionDays(days) {
+  try {
+    var settings = await invoke('set_original_retention_days', { days: days });
+    retentionDays = settings.originalRetentionDays;
+    showToast(retentionDays === 0
+      ? '原图备份改为不保留，关闭应用时清理'
+      : '原图备份保留 ' + retentionDays + ' 天，下次启动时清理过期项');
+  } catch (error) {
+    showToast('设置失败: ' + (error.message || error));
+  }
+  // 失败也要回到 retentionDays 那份真值，不能把选错的档位停在半路上。
+  applyRetentionSetting();
+}
+
+// 「不保留」不是"关掉备份"：覆盖前照旧备份，只是寿命到本次退出为止。
+// 文案必须把这件事说清楚，也不能写成吓人的措辞。
+function applyRetentionSetting() {
+  var select = document.getElementById('retentionDays');
+  if (select) select.value = String(retentionDays);
+  var copy = document.getElementById('retentionCopy');
+  if (copy) {
+    copy.textContent = retentionDays === 0
+      ? '原图备份只在这次运行期间保留，关闭应用时清理；期间可以随时恢复原图。'
+      : '过期的历史记录和原图备份将在下次启动应用时自动清理。';
+  }
+}
+
+(function wireRetentionSelect() {
+  var select = document.getElementById('retentionDays');
+  if (!select) return;
+  select.addEventListener('change', function() {
+    var days = parseInt(select.value, 10);
+    // || 3 会把"不保留"吞成 3 天 —— 0 必须原样传下去。
+    saveRetentionDays(Number.isNaN(days) ? 0 : days);
+  });
+})();
+
+// ─── 设置页：CPU 使用上限 ───────────────────────────────────────
+// 后端负责检测与 clamp（含"换到核更少的机器"），前端只呈现与回传用户选择。
+
+function cpuArchitectureLabel(architecture) {
+  return architecture === 'aarch64' ? 'ARM64' : (architecture || '');
+}
+
+function cpuDeviceText(status) {
+  if (!status) return '检测中…';
+  return [status.modelName, cpuArchitectureLabel(status.architecture)]
+    .filter(function(part) { return !!part; }).join(' · ');
+}
+
+// 核心构成。Apple Silicon 才报 P/E 核，其他平台不能假装知道。
+function cpuCoreText(status) {
+  if (!status) return '';
+  var ceiling = Math.max(1, status.availableParallelism || 1);
+  if (status.appleSilicon && status.performanceCpus && status.efficiencyCpus) {
+    return (status.physicalCpus || ceiling) + ' 核 CPU（'
+      + status.performanceCpus + ' 性能核 + ' + status.efficiencyCpus + ' 能效核）';
+  }
+  if (status.physicalCpus && status.logicalCpus > status.physicalCpus) {
+    return status.physicalCpus + ' 个物理核心 · ' + status.logicalCpus + ' 个逻辑处理器';
+  }
+  if (status.logicalCpus) return status.logicalCpus + ' 个逻辑处理器';
+  return '最多 ' + ceiling + ' 份并行计算';
+}
+
+function cpuSliderLabel() {
+  var ceiling = cpuCeiling();
+  if (!cpuStatus) return '';
+  var configured = cpuStatus.configuredLimit;
+  var limit = Math.min(Math.max(1, cpuStatus.effectiveLimit || 1), ceiling);
+  if (configured === null || configured === undefined) return '自动（' + limit + '）';
+  return limit + ' / ' + ceiling + (limit >= ceiling ? '（全部）' : '');
+}
+
+function renderCpuSetting(status) {
+  if (status) cpuStatus = status;
+  var device = document.getElementById('cpuDevice');
+  if (device) device.textContent = cpuDeviceText(cpuStatus);
+  var cores = document.getElementById('cpuCoreInfo');
+  if (cores) cores.textContent = cpuCoreText(cpuStatus);
+  // 「系统会自动在性能核与能效核之间调度任务」只对大小核架构成立。
+  var note = document.getElementById('cpuSchedulingNote');
+  if (note) note.style.display = cpuStatus && cpuStatus.appleSilicon ? '' : 'none';
+  var slider = document.getElementById('cpuLimitSlider');
+  if (slider && cpuStatus) {
+    var ceiling = cpuCeiling();
+    slider.min = '1';
+    slider.max = String(ceiling);
+    slider.disabled = ceiling <= 1;
+    var configured = cpuStatus.configuredLimit;
+    slider.value = String(Math.min(Math.max(1,
+      configured == null ? cpuStatus.effectiveLimit : configured), ceiling));
+  }
+  var label = document.getElementById('cpuLimitValue');
+  if (label) label.textContent = cpuSliderLabel();
+  var autoBtn = document.getElementById('cpuLimitAuto');
+  if (autoBtn) {
+    var isAuto = !cpuStatus || cpuStatus.configuredLimit == null;
+    autoBtn.classList.toggle('active', isAuto);
+    autoBtn.disabled = isAuto;
+  }
+}
+
+async function loadCpuSetting() {
+  try {
+    renderCpuSetting(await invoke('get_cpu_info'));
+  } catch (error) {
+    console.error('CPU info load failed:', error);
+  }
+}
+
+async function saveCpuThreadLimit(limit) {
+  try {
+    renderCpuSetting(await invoke('set_cpu_thread_limit', { limit: limit }));
+    updateQueueSummary();
+    showToast(limit == null
+      ? 'CPU 上限改为自动（' + cpuStatus.effectiveLimit + '）'
+      : 'CPU 上限改为 ' + cpuStatus.effectiveLimit + ' / ' + cpuCeiling());
+  } catch (error) {
+    showToast('设置失败: ' + (error.message || error));
+    // 失败就回到后端那份真值，不能把预览值留在滑杆上骗用户。
+    await loadCpuSetting();
+  }
+}
+
+(function wireCpuLimitControls() {
+  var slider = document.getElementById('cpuLimitSlider');
+  if (slider) {
+    slider.addEventListener('input', function() {
+      // 拖动过程中只改本地预览，松手（change）才写盘 + 下发给调度器。
+      if (!cpuStatus) return;
+      var picked = Math.min(Math.max(1, parseInt(slider.value, 10) || 1), cpuCeiling());
+      cpuStatus = Object.assign({}, cpuStatus, { configuredLimit: picked, effectiveLimit: picked });
+      var label = document.getElementById('cpuLimitValue');
+      if (label) label.textContent = cpuSliderLabel();
+      var autoBtn = document.getElementById('cpuLimitAuto');
+      if (autoBtn) { autoBtn.classList.toggle('active', false); autoBtn.disabled = false; }
+    });
+    slider.addEventListener('change', function() {
+      saveCpuThreadLimit(parseInt(slider.value, 10));
+    });
+  }
+  var autoBtn = document.getElementById('cpuLimitAuto');
+  if (autoBtn) autoBtn.addEventListener('click', function() { saveCpuThreadLimit(null); });
+})();
 
 // ─── Comparison（独立原生窗口）─────────────────────────────────
 // 对比视图已迁移到独立窗口 compare.html + compare_window.js：
@@ -1265,10 +1686,7 @@ listen('compare-recompressed', function(event) {
 listen('compare-restored', function(event) {
   const filePath = event.payload && event.payload.filePath;
   if (!filePath) return;
-  results = results.filter(function(r) { return r.file !== filePath; });
-  markQueueRowRestored(filePath);
-  showResults();
-  updateQueueSummary();
+  afterRestore(filePath);
   showToast('已恢复原图: ' + basename(filePath));
 });
 
@@ -1277,7 +1695,10 @@ document.addEventListener('keydown', (e) => {
   var systemInfoPanel = document.getElementById('systemInfoPanel');
   if (systemInfoPanel && systemInfoPanel.style.display !== 'none') {
     closeSystemConversionInfo();
+    return;
   }
+  // Esc = 离开历史/设置页，回到主视图；压缩任务不受影响。
+  if (currentView !== 'main') showView('main');
 });
 
 function showToast(message) {
@@ -1499,6 +1920,8 @@ function loadCompressSettings() {
 // Init
 (function() {
   loadCompressSettings();
+  // 队列摘要里的「CPU 4/10」需要在进入设置页之前就拿到，所以启动即检测一次。
+  loadCpuSetting().then(function() { updateQueueSummary(); }).catch(function() {});
   var modeSwitch = document.getElementById('processingModeSwitch');
   var isMac = /Macintosh|Mac OS X/.test(navigator.userAgent);
   if (modeSwitch && !isMac) modeSwitch.style.display = 'none';

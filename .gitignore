@@ -23,3 +23,11 @@ src-tauri/.tauri/
 release-v2.5.*/
 output/
 OctoShrink-*.pkg
+
+# Local design explorations and marketing exports
+assets/icon-line.png
+logo-designs/app-icon-color-preview.png
+logo-designs/octoshrink-logo-generated-v1.png
+logo-designs/icon-candidates-v1/
+logo-designs/ip-as-logo-v1/
+marketing/

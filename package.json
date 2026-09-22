@@ -1,10 +1,11 @@
 {
   "name": "octoshrink",
-  "version": "2.2.0"
+  "version": "2.2.0",
   "description": "OctoShrink - Tauri edition",
   "scripts": {
     "dev": "cargo tauri dev",
-    "build": "cargo tauri build"
+    "build": "cargo tauri build",
+    "test:frontend": "node tests/queue-progress.cjs && node tests/queue-view.cjs && node tests/pause-resume.cjs && node tests/history-view.cjs && node tests/cpu-limit.cjs"
   },
   "license": "MIT"
 }

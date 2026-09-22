@@ -1,0 +1,1583 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OctoShrink · macOS 26 Liquid Glass 界面设计图（按项目技术栈）</title>
+<style>
+/* ==========================================================================
+   OctoShrink — macOS 26 (Liquid Glass) 界面设计图
+   一个功能模块一帧，共 8 帧。类名 / token / 文案均取自仓库真实代码：
+     frontend/index.html   frontend/compare.html   frontend/style.css
+     frontend/app.js       frontend/compare_window.js
+     swift/Sources/OctoShrinkSwift/UI/*.swift
+   玻璃层是新增 token（--glass-* / --radius-win / --radius-card / --titlebar-height-26），
+   旧 token 一个都不改含义，可直接并进 frontend/style.css。
+   ========================================================================== */
+
+/* 真实 token（浅色 = style.css :root） */
+:root {
+  color-scheme: light;
+  --accent: #007aff;
+  --accent-hover: #0062cc;
+  --accent-pressed: #0051a8;
+  --bg: #ececed;
+  --bg-content: #ffffff;
+  --bg-secondary: rgba(0,0,0,0.03);
+  --bg-hover: rgba(0,0,0,0.06);
+  --bg-selected: rgba(0,122,255,0.08);
+  --border: rgba(0,0,0,0.12);
+  --border-light: rgba(0,0,0,0.06);
+  --text: #1d1d1f;
+  --text-secondary: #86868b;
+  --text-tertiary: #aeaeb2;
+  --success: #34c759;
+  --success-light: rgba(52,199,89,0.10);
+  --danger: #ff3b30;
+  --danger-light: rgba(255,59,48,0.08);
+  --warning: #ff9500;
+  --warning-light: rgba(255,149,0,0.10);
+  --radius: 8px;
+  --radius-sm: 6px;
+  --shadow: 0 0.5px 1px rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.05);
+  --shadow-lg: 0 2px 12px rgba(0,0,0,0.10);
+  --modal-overlay: rgba(0,0,0,0.30);
+  --titlebar-height: 42px;
+  --slider-track: rgba(0,0,0,0.10);
+  --card-bg: #ffffff;
+  --input-bg: rgba(0,0,0,0.04);
+  --queue-done-bg: rgba(52,199,89,0.08);
+  --queue-failed-bg: rgba(255,59,48,0.08);
+
+  /* 新增：macOS 26 玻璃层（三线共用取值） */
+  --glass-blur: 38px;
+  --glass-saturate: 190%;
+  --glass-fill: rgba(255,255,255,0.62);
+  --glass-fill-solid: rgba(255,255,255,0.80);
+  --glass-tint-track: rgba(255,255,255,0.42);
+  --glass-rim: rgba(0,0,0,0.14);
+  --glass-spec: inset 0 1px 0 rgba(255,255,255,0.72);
+  --glass-inner: inset 0 0 0 0.5px rgba(255,255,255,0.55);
+  --radius-win: 22px;
+  --radius-card: 15px;
+  --titlebar-height-26: 52px;
+  --glass-shadow: 0 0 0 0.5px var(--glass-rim),
+                  0 28px 70px rgba(0,0,0,0.30),
+                  0 2px 8px rgba(0,0,0,0.16);
+}
+
+/* 深色 = style.css [data-theme="dark"]，图内用 .dark 局部翻转 */
+.dark {
+  color-scheme: dark;
+  --accent: #0a84ff;
+  --accent-hover: #0071e3;
+  --accent-pressed: #005bbf;
+  --bg: #1c1c1e;
+  --bg-content: #2c2c2e;
+  --bg-secondary: rgba(255,255,255,0.04);
+  --bg-hover: rgba(255,255,255,0.08);
+  --bg-selected: rgba(10,132,255,0.12);
+  --border: rgba(255,255,255,0.12);
+  --border-light: rgba(255,255,255,0.06);
+  --text: #f5f5f7;
+  --text-secondary: #98989d;
+  --text-tertiary: #636366;
+  --success: #30d158;
+  --success-light: rgba(48,209,88,0.12);
+  --danger: #ff453a;
+  --danger-light: rgba(255,69,58,0.12);
+  --warning: #ff9f0a;
+  --warning-light: rgba(255,159,10,0.12);
+  --shadow: 0 0.5px 1px rgba(0,0,0,0.3), 0 1px 3px rgba(0,0,0,0.2);
+  --shadow-lg: 0 4px 16px rgba(0,0,0,0.35);
+  --modal-overlay: rgba(0,0,0,0.50);
+  --slider-track: rgba(255,255,255,0.12);
+  --card-bg: #2c2c2e;
+  --input-bg: rgba(255,255,255,0.06);
+  --queue-done-bg: rgba(48,209,88,0.10);
+  --queue-failed-bg: rgba(255,69,58,0.10);
+
+  --glass-fill: rgba(38,38,42,0.58);
+  --glass-fill-solid: rgba(30,30,34,0.78);
+  --glass-tint-track: rgba(255,255,255,0.10);
+  --glass-rim: rgba(255,255,255,0.22);
+  --glass-spec: inset 0 1px 0 rgba(255,255,255,0.16);
+  --glass-inner: inset 0 0 0 0.5px rgba(255,255,255,0.12);
+  --glass-shadow: 0 0 0 0.5px var(--glass-rim),
+                  0 30px 80px rgba(0,0,0,0.55),
+                  0 2px 8px rgba(0,0,0,0.35);
+}
+
+/* 设计图外壳（不属于 app，不与 app token 混名） */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, 'Helvetica Neue', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  background: #08080a; color: #f2f2f5; -webkit-font-smoothing: antialiased;
+}
+.board { max-width: 1280px; margin: 0 auto; padding: 96px 40px 140px; }
+
+.cover { padding-bottom: 72px; border-bottom: 1px solid rgba(255,255,255,0.10); margin-bottom: 76px; }
+.eyebrow { font-size: 12px; letter-spacing: .22em; text-transform: uppercase; color: #8e8e96; font-weight: 600; margin-bottom: 18px; }
+.cover h1 {
+  font-size: 52px; line-height: 1.08; font-weight: 700; letter-spacing: -0.025em;
+  background: linear-gradient(150deg,#ffffff 10%,#a3c8ff 55%,#7fd3b0 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.cover .lede { font-size: 17px; line-height: 1.75; color: #b7b7c0; max-width: 78ch; margin-top: 22px; }
+.cover .lede b { color: #fff; font-weight: 600; }
+
+.stack { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; margin-top: 40px; }
+.stack-col {
+  border: 1px solid rgba(255,255,255,0.10); border-radius: 16px; padding: 20px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.015));
+}
+.stack-col h4 { font-size: 13px; color: #fff; margin-bottom: 4px; font-weight: 650; }
+.stack-col .sub { font-size: 11px; color: #7e7e88; margin-bottom: 14px; }
+.stack-col ul { list-style: none; display: flex; flex-direction: column; gap: 9px; }
+.stack-col li { font-size: 12.5px; line-height: 1.55; color: #a9a9b3; padding-left: 14px; position: relative; }
+.stack-col li::before { content: ''; position: absolute; left: 0; top: 7px; width: 5px; height: 5px; border-radius: 2px; background: #0a84ff; }
+.stack-col code { font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-size: 11.5px; color: #cfe3ff; background: rgba(10,132,255,0.12); padding: 1px 5px; border-radius: 4px; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 34px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 8px; font-size: 11.5px;
+  font-family: 'SF Mono', ui-monospace, Menlo, monospace; color: #c5c5cf;
+  border: 1px solid rgba(255,255,255,0.12); padding: 6px 10px; border-radius: 999px; background: rgba(255,255,255,0.04);
+}
+.chip i { width: 11px; height: 11px; border-radius: 4px; box-shadow: 0 0 0 0.5px rgba(255,255,255,.3); }
+.chip.new { border-color: rgba(10,132,255,.45); background: rgba(10,132,255,.10); color: #bcd8ff; }
+
+.block { margin-bottom: 104px; }
+.block-head { display: flex; align-items: flex-end; gap: 20px; margin-bottom: 8px; flex-wrap: wrap; }
+.block-num { font-size: 12px; font-weight: 700; letter-spacing: .12em; color: #0a84ff; border: 1px solid rgba(10,132,255,.4); border-radius: 8px; padding: 4px 9px; }
+.block-head h2 { font-size: 27px; font-weight: 680; letter-spacing: -0.018em; color: #fff; }
+.block-head .cap { font-size: 13.5px; color: #8e8e98; flex: 1; min-width: 240px; line-height: 1.6; }
+.impl { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 22px; }
+.impl span { font-size: 11px; font-family: 'SF Mono', ui-monospace, Menlo, monospace; color: #93a4bd; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.09); border-radius: 6px; padding: 4px 8px; }
+.impl span.swift { color: #ffc98a; background: rgba(255,149,0,0.08); border-color: rgba(255,149,0,0.24); }
+.impl span.guard { color: #8fe0ad; background: rgba(52,199,89,0.08); border-color: rgba(52,199,89,0.24); }
+
+/* 玻璃必须有背景可透，否则看不出材质 */
+.stage { position: relative; border-radius: 30px; padding: 46px; overflow: hidden; }
+.stage.duo { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; align-items: start; }
+.wall-day   { background: linear-gradient(135deg,#d9e6f5 0%,#f5e6d6 42%,#cfe3d6 100%); }
+.wall-dusk  { background: linear-gradient(140deg,#2b3550 0%,#6d4a6b 48%,#c9764f 100%); }
+.wall-night { background: linear-gradient(150deg,#0e1420 0%,#1b2740 52%,#0c1a1e 100%); }
+.stage::after {
+  content: ''; position: absolute; inset: -20% -10% auto; height: 70%; pointer-events: none;
+  background: radial-gradient(50% 60% at 22% 22%, rgba(255,255,255,.5), transparent 70%);
+}
+.stage .win, .stage .legend { position: relative; z-index: 1; }
+.stage + .stage { margin-top: 22px; }
+
+/* 窗口 */
+.win {
+  background: var(--glass-fill);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  border-radius: var(--radius-win);
+  box-shadow: var(--glass-shadow), var(--glass-spec);
+  color: var(--text); overflow: hidden; font-size: 13px;
+}
+
+/* .titlebar（真实类名） */
+.titlebar {
+  height: var(--titlebar-height-26); display: flex; align-items: center;
+  padding: 0 12px 0 16px; gap: 10px; position: relative;
+  border-bottom: 1px solid var(--border-light);
+  background: linear-gradient(180deg, var(--glass-tint-track), transparent);
+}
+.titlebar-drag { display: flex; align-items: center; gap: 8px; }
+.titlebar-icon-img {
+  width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center;
+  font-size: 11px; font-weight: 700; color: #fff; background: linear-gradient(160deg,#0a84ff,#0051a8);
+  box-shadow: var(--glass-spec), 0 1px 3px rgba(0,0,0,.25);
+}
+.titlebar-text { font-size: 13px; font-weight: 650; letter-spacing: -0.01em; }
+.titlebar-progress {
+  position: absolute; left: 0; bottom: -1px; height: 2px; border-radius: 2px;
+  background: linear-gradient(90deg,var(--accent),#6ec1ff); box-shadow: 0 0 10px rgba(10,132,255,.6);
+}
+.titlebar-actions { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.tb-btn {
+  width: 30px; height: 30px; border-radius: 10px; display: grid; place-items: center;
+  color: var(--text-secondary); background: var(--glass-tint-track);
+  box-shadow: var(--glass-inner), var(--glass-spec); border: none;
+}
+.tb-btn.active { color: #fff; background: var(--accent); box-shadow: var(--glass-spec), 0 2px 8px rgba(10,132,255,.45); }
+
+.icon-library { display: none; }
+.symbol-icon { width: 17px; height: 17px; fill: currentColor; flex: none; }
+.symbol-icon-small { width: 13px; height: 13px; }
+.symbol-icon-hero { width: 40px; height: 40px; }
+
+.container { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+
+/* .dropzone */
+.dropzone {
+  border: 2px dashed var(--border); border-radius: var(--radius-card);
+  padding: 40px 24px; display: grid; place-items: center; text-align: center;
+  background: var(--glass-fill-solid); box-shadow: var(--glass-spec), var(--glass-inner); min-height: 258px;
+}
+.dropzone.dragover { border-color: var(--accent); background: var(--bg-selected); }
+.dropzone-content { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.dropzone-icon-disc {
+  width: 76px; height: 76px; border-radius: 26px; display: grid; place-items: center; color: var(--accent);
+  background: linear-gradient(180deg, rgba(255,255,255,.9), rgba(255,255,255,.5));
+  box-shadow: var(--glass-spec), inset 0 0 0 .5px var(--glass-rim), 0 8px 22px rgba(0,0,0,.10);
+}
+.dark .dropzone-icon-disc { background: linear-gradient(180deg, rgba(255,255,255,.14), rgba(255,255,255,.05)); }
+.dropzone h2 { font-size: 16px; font-weight: 640; letter-spacing: -0.01em; }
+.dropzone p { font-size: 12px; color: var(--text-secondary); }
+.dropzone-buttons { display: flex; gap: 10px; margin-top: 6px; }
+
+/* .btn 族 */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px; justify-content: center;
+  font-size: 12.5px; font-weight: 550; font-family: inherit; border: none;
+  border-radius: var(--radius); padding: 8px 14px; white-space: nowrap;
+  box-shadow: var(--glass-spec), inset 0 0 0 .5px var(--glass-rim);
+}
+.btn-primary { color: #fff; background: linear-gradient(180deg, var(--accent), var(--accent-hover)); }
+.btn-secondary { color: var(--text); background: var(--glass-tint-track); }
+.btn-small { font-size: 11.5px; padding: 5px 9px; border-radius: var(--radius-sm); gap: 4px; }
+.btn-ghost { color: var(--text-secondary); background: transparent; box-shadow: none; }
+.btn-danger { color: #fff; background: linear-gradient(180deg, var(--danger), #d5241c); }
+.btn-full { width: 100%; }
+.btn-icon-close { color: var(--text-secondary); background: transparent; box-shadow: none; padding: 6px; }
+
+/* 面板 */
+.queue-panel, .settings-panel {
+  border-radius: var(--radius-card); background: var(--glass-fill-solid);
+  box-shadow: var(--glass-spec), inset 0 0 0 .5px var(--glass-rim), var(--shadow);
+}
+.queue-header, .settings-header, .view-header { display: flex; align-items: center; gap: 8px; padding: 12px 14px; }
+.queue-header h3, .settings-header h3 { font-size: 13.5px; font-weight: 650; display: flex; align-items: center; gap: 7px; letter-spacing: -0.01em; }
+.queue-header-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.queue-summary, .view-meta, .settings-summary { font-size: 11.5px; color: var(--text-secondary); }
+.settings-summary { font-weight: 400; margin-left: 4px; }
+.queue-stats { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; padding: 0 14px 12px; }
+.stat-item {
+  display: flex; flex-direction: column; gap: 3px; padding: 9px 11px; border-radius: 11px;
+  background: var(--glass-tint-track); box-shadow: var(--glass-inner), var(--glass-spec);
+}
+.stat-label { font-size: 10.5px; color: var(--text-secondary); }
+.stat-value { font-size: 15px; font-weight: 660; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.stat-original { color: var(--text-secondary); }
+.stat-savings { color: var(--success); }
+.stat-rate { color: var(--accent); }
+
+.queue-view-controls { display: flex; align-items: center; gap: 10px; padding: 0 14px 10px; border-bottom: 1px solid var(--border-light); }
+.queue-failure-filter { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-secondary); }
+.queue-sort-controls { margin-left: auto; display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--text-secondary); }
+input[type=checkbox] { accent-color: var(--accent); width: 13px; height: 13px; }
+select, .settings-select {
+  font-family: inherit; font-size: 12px; color: var(--text); background: var(--glass-tint-track);
+  border: none; border-radius: var(--radius-sm); padding: 5px 8px; box-shadow: inset 0 0 0 .5px var(--glass-rim);
+}
+.queue-sort-controls select { font-size: 11.5px; padding: 4px 6px; }
+
+/* ── 队列行：几何与状态类完全照 style.css，玻璃只换底材 ── */
+.file-queue-list { max-height: 260px; overflow: auto; padding: 6px 8px 4px; display: flex; flex-direction: column; gap: 3px; }
+.file-queue-item {
+  display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 6px 8px;
+  border-radius: var(--radius-card); font-size: 11px; border: 0.5px solid transparent;
+  box-shadow: var(--glass-spec);
+}
+.file-queue-item:hover { background: var(--bg-hover); }
+.file-queue-item.waiting { opacity: 0.8; }
+.file-queue-item.compressing { background: var(--bg-selected); }
+.file-queue-item.done { background: var(--queue-done-bg); }
+.file-queue-item.failed { background: var(--queue-failed-bg); }
+.file-queue-item.cancelled { opacity: 0.4; }
+.file-queue-item.restored { opacity: 0.7; }
+.queue-item-icon {
+  width: 24px; height: 24px; flex: none; display: flex; align-items: center; justify-content: center;
+  border-radius: 7px; background: var(--bg-secondary); color: var(--text-secondary);
+}
+.file-queue-item.done .queue-item-icon { color: var(--success); }
+.file-queue-item.failed .queue-item-icon { color: var(--danger); }
+.file-queue-item.restored .queue-item-icon { color: var(--text-tertiary); }
+.file-queue-item.compressing .queue-item-icon { color: var(--accent); }
+.queue-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.queue-item-size { flex: none; font-size: 10px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.file-queue-item.done .queue-item-size { color: var(--text-secondary); }
+.queue-item-status {
+  flex: none; min-width: 40px; text-align: right; display: flex; align-items: center; gap: 1px;
+  font-size: 10px; font-weight: 600; color: var(--text-tertiary); font-variant-numeric: tabular-nums;
+}
+.file-queue-item.compressing .queue-item-status { color: var(--accent); }
+.file-queue-item.done .queue-item-status { color: var(--success); }
+.file-queue-item.failed .queue-item-status { color: var(--danger); }
+.queue-item-actions { display: flex; align-items: center; gap: 2px; flex: none; }
+.queue-action-btn {
+  width: 22px; height: 22px; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text-tertiary); background: transparent; border: none;
+}
+.queue-action-btn:hover { color: var(--text); background: var(--bg-hover); }
+.queue-item-remove {
+  width: 18px; height: 18px; border: none; border-radius: 5px; background: transparent;
+  color: var(--text-tertiary); display: inline-flex; align-items: center; justify-content: center; flex: none;
+}
+.queue-item-remove:hover { background: var(--danger-light); color: var(--danger); }
+.progress-file-bar { display: none; }
+.progress-file-spinner { width: 11px; height: 11px; border-radius: 50%; flex: none; border: 1.5px solid var(--accent); border-top-color: transparent; }
+.error-info-btn { display: inline-flex; align-items: center; margin-left: 2px; color: var(--warning); }
+/* 深色下 done / failed 带 15% 同色描边（照 style.css 的 dark override） */
+.dark .file-queue-item.done { border-color: rgba(48,209,88,0.15); }
+.dark .file-queue-item.failed { border-color: rgba(255,69,58,0.15); }
+.queue-actions { display: flex; gap: 8px; padding: 10px 14px 14px; align-items: center; }
+.compress-progress-btn { position: relative; overflow: hidden; flex: 1; }
+.compress-btn-fill {
+  position: absolute; top: 0; left: 0; bottom: 0; width: 0%;
+  background: rgba(255,255,255,.18); box-shadow: var(--glass-spec);
+}
+.compress-progress-btn.compressing .compress-btn-fill { width: 100%; background: rgba(70,130,255,.35); animation: compress-pulse 1.5s ease-in-out infinite; }
+.compress-progress-btn.done .compress-btn-fill { width: 100%; background: rgba(52,199,89,.35); }
+@keyframes compress-pulse { 0%, 100% { opacity: .6; } 50% { opacity: 1; } }
+.compress-progress-btn.done .compress-btn-text { color: #34c759; }
+.compress-btn-text { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 6px; }
+.pause-btn-text { display: flex; align-items: center; gap: 5px; }
+
+/* 设置 */
+/* ── 设置行：几何完全照 style.css:714-727，玻璃只换底材 ── */
+.settings-body { padding: 2px 14px 12px; display: flex; flex-direction: column; }
+.settings-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 0.5px solid var(--border-light); font-size: 12.5px; }
+.settings-row:last-of-type { border-bottom: none; }
+.settings-row > label { min-width: 72px; flex: none; color: var(--text); font-size: 12px; font-weight: 500; }
+.settings-copy { font-size: 11.5px; line-height: 1.6; color: var(--text-secondary); padding: 0 0 10px; }
+.settings-hint { font-size: 11px; color: var(--text-tertiary); }
+.settings-chevron { color: var(--text-tertiary); margin-left: auto; }
+.view-section-header { cursor: default; }
+.select-wrapper { display: flex; align-items: center; }
+/* ── 性能面板：照 style.css:1672-1702 ── */
+.cpu-device-row { align-items: flex-start; }
+.cpu-device-col, .cpu-control-col { display: flex; flex-direction: column; gap: 3px; min-width: 210px; align-items: stretch; }
+.cpu-device { font-size: 12px; font-weight: 500; color: var(--text); }
+.cpu-cores { font-size: 11px; color: var(--text-secondary); }
+.cpu-control { justify-content: flex-end; }
+.cpu-control input[type="range"] { flex: 1; width: auto; min-width: 90px; }
+.cpu-limit-value { font-size: 12px; font-weight: 600; color: var(--text); min-width: 74px; text-align: right; font-variant-numeric: tabular-nums; }
+.cpu-auto-btn.active { background: var(--bg-selected); color: var(--accent); border-color: var(--accent); }
+.cpu-scale { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-tertiary); }
+.settings-text-input {
+  font-family: inherit; font-size: 12px; color: var(--text); flex: 1; background: var(--input-bg);
+  border: none; border-radius: var(--radius-sm); padding: 6px 9px; box-shadow: inset 0 0 0 .5px var(--glass-rim);
+}
+.toggle-wrapper { display: flex; align-items: center; gap: 9px; }
+.toggle { position: relative; width: 40px; height: 24px; flex: none; display: inline-block; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle-slider {
+  position: absolute; inset: 0; border-radius: 999px; background: var(--slider-track);
+  box-shadow: inset 0 0 0 .5px var(--glass-rim), var(--glass-spec);
+}
+.toggle-slider::after {
+  content: ''; position: absolute; left: 2px; top: 2px; width: 20px; height: 20px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3);
+}
+.toggle input:checked + .toggle-slider { background: var(--success); }
+.toggle input:checked + .toggle-slider::after { transform: translateX(16px); }
+.toggle-label { font-size: 12px; }
+.radio-group { display: flex; gap: 14px; flex-wrap: wrap; }
+.radio-label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.radio-label input { accent-color: var(--accent); width: 13px; height: 13px; }
+.quality-control { display: flex; align-items: center; gap: 10px; flex: 1; }
+input[type=range] {
+  -webkit-appearance: none; appearance: none; height: 4px; flex: 1; border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent) 0 65%, var(--slider-track) 65% 100%);
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 17px; height: 17px; border-radius: 50%; background: #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,.35), inset 0 0 0 .5px rgba(0,0,0,.08);
+}
+#qualityValue, .zoom-value, #recompressQualityValue {
+  font-size: 11.5px; font-variant-numeric: tabular-nums; width: 46px; text-align: right; color: var(--text-secondary);
+}
+.dir-picker { display: flex; align-items: center; gap: 8px; }
+.dir-display { font-size: 12px; color: var(--text-secondary); }
+
+/* 双轨 */
+.processing-mode-control { display: flex; align-items: center; gap: 9px; }
+.processing-mode-label { font-size: 12px; color: var(--text-tertiary); }
+.processing-mode-label.active { color: var(--text); font-weight: 600; }
+.processing-mode-toggle {
+  position: relative; width: 40px; height: 24px; border-radius: 999px; border: none; background: var(--accent);
+  box-shadow: var(--glass-spec), inset 0 0 0 .5px rgba(0,0,0,.08);
+}
+.processing-mode-slider {
+  position: absolute; left: 2px; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,.3);
+}
+.processing-mode-info { width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; color: var(--text-tertiary); background: transparent; border: none; }
+[data-processing-mode] { position: relative; }
+[data-processing-mode].dim { opacity: .34; }
+[data-processing-mode]::before {
+  content: attr(data-processing-mode); position: absolute; right: 0; top: -1px;
+  font-size: 9px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-tertiary); opacity: .6;
+}
+
+/* ── 历史行：度量列宽 / 双行结构照 style.css ── */
+.history-list {
+  margin: 6px 8px 12px; padding: 6px 10px; display: flex; flex-direction: column; gap: 2px;
+  background: var(--glass-fill-solid); border: 0.5px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--glass-spec), var(--shadow);
+}
+.history-item {
+  display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 6px 8px;
+  border-radius: var(--radius-card); font-size: 11px;
+}
+.history-item:hover { background: var(--bg-secondary); }
+.history-item.restored { opacity: 0.62; }
+.history-icon {
+  width: 24px; height: 24px; flex: none; display: flex; align-items: center; justify-content: center;
+  border-radius: 7px; background: var(--bg-secondary); color: var(--success);
+}
+.history-item.restored .history-icon { color: var(--text-tertiary); }
+.history-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.history-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-weight: 500; }
+.history-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-tertiary); font-size: 10px; }
+.history-metrics {
+  flex: none; width: 132px; display: flex; flex-direction: column; align-items: flex-end; gap: 1px;
+  font-size: 10px; font-variant-numeric: tabular-nums; color: var(--text-secondary);
+}
+.history-metrics span:last-child { color: var(--success); font-weight: 600; }
+.history-item.restored .history-metrics span:last-child { color: var(--text-tertiary); font-weight: 500; }
+.history-when {
+  flex: none; width: 104px; display: flex; flex-direction: column; align-items: flex-end; gap: 1px;
+  font-size: 10px; color: var(--text-tertiary);
+}
+.history-actions { flex: none; display: flex; align-items: center; gap: 4px; }
+.view-header-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.view-title { display: flex; align-items: center; gap: 7px; font-size: 13.5px; font-weight: 650; }
+
+/* 模态 */
+.modal-backdrop {
+  position: absolute; inset: 0; background: var(--modal-overlay); display: grid; place-items: center;
+  padding: 20px; border-radius: inherit; -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); z-index: 8;
+}
+.system-info-modal {
+  width: 100%; max-width: 400px; border-radius: var(--radius-card); background: var(--glass-fill-solid);
+  -webkit-backdrop-filter: blur(30px) saturate(180%); backdrop-filter: blur(30px) saturate(180%);
+  box-shadow: var(--glass-spec), inset 0 0 0 .5px var(--glass-rim), 0 26px 60px rgba(0,0,0,.35); color: var(--text);
+}
+.system-info-header { display: flex; align-items: center; gap: 8px; padding: 14px 16px 10px; font-weight: 650; font-size: 13.5px; }
+.system-info-body { padding: 0 16px 12px; }
+.system-info-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 0 16px 14px; }
+
+/* 对比窗口 */
+.compare-modal { display: flex; flex-direction: column; }
+.compare-modal-header { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border-light); }
+.compare-modal-header h3 { font-size: 13.5px; font-weight: 650; display: flex; align-items: center; gap: 7px; }
+.compare-toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.compare-zoom-control {
+  display: flex; align-items: center; gap: 7px; padding: 4px 9px; border-radius: 11px;
+  background: var(--glass-tint-track); box-shadow: var(--glass-inner), var(--glass-spec);
+}
+.zoom-step-btn, .zoom-reset-btn { width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; color: var(--text-secondary); background: transparent; border: none; }
+.zoom-step-btn:hover, .zoom-reset-btn:hover { color: var(--text); background: var(--bg-hover); }
+.compare-zoom-control input[type=range] { width: 96px; flex: none; }
+.compare-modal-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+.compare-slider-outer { display: flex; flex-direction: column; gap: 10px; }
+.compare-slider-container { display: grid; place-items: center; padding: 12px; border-radius: var(--radius-card); background: var(--input-bg); }
+.compare-img-wrapper {
+  position: relative; width: 100%; max-width: 420px; aspect-ratio: 3 / 2; border-radius: 11px; overflow: hidden;
+  box-shadow: inset 0 0 0 .5px var(--glass-rim), var(--shadow);
+}
+.compare-img-base, .compare-img-overlay { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.compare-img-base { z-index: 2; }
+.compare-img-overlay { z-index: 3; }
+.art { background-size: cover; background-position: center; }
+.art.comp {
+  background-image: radial-gradient(38% 48% at 26% 30%, #fff3d6, transparent 68%), linear-gradient(160deg,#6e7f9b 0%,#b98b6d 46%,#3f4d64 100%);
+  filter: saturate(.86) contrast(1.04);
+}
+.art.orig {
+  background-image: radial-gradient(38% 48% at 26% 30%, #fffaf0, transparent 68%), linear-gradient(160deg,#7c8fab 0%,#d9a077 46%,#4a5a75 100%);
+  filter: saturate(1.22) contrast(1.1);
+}
+.compare-handle { position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; z-index: 5; }
+.compare-handle-line { position: absolute; inset: 0; background: rgba(255,255,255,.9); box-shadow: 0 0 8px rgba(0,0,0,.4); }
+.compare-handle-circle {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); width: 32px; height: 32px;
+  border-radius: 50%; display: grid; place-items: center; color: var(--text); background: var(--glass-fill-solid);
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+  box-shadow: var(--glass-spec), inset 0 0 0 .5px rgba(255,255,255,.7), 0 3px 10px rgba(0,0,0,.3);
+}
+.compare-label {
+  position: absolute; top: 20px; z-index: 5; font-size: 10.5px; letter-spacing: .04em; padding: 4px 9px;
+  border-radius: 999px; color: #fff; background: rgba(0,0,0,.44);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); box-shadow: inset 0 0 0 .5px rgba(255,255,255,.24);
+}
+.label-left { left: 20px; }
+.label-right { right: 20px; }
+.compare-info { display: flex; flex-direction: column; gap: 4px; }
+.compare-info-row { display: flex; gap: 8px; }
+.compare-info-item {
+  flex: 1; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 11px;
+  background: var(--glass-tint-track); box-shadow: var(--glass-inner), var(--glass-spec);
+}
+.compare-info-label { font-size: 10.5px; color: var(--text-secondary); }
+.compare-info-value { font-size: 12.5px; font-weight: 620; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }
+.compare-info-value.original { color: var(--text-secondary); }
+.compare-info-value.compressed { color: var(--accent); }
+.compare-info-value.savings { color: var(--success); }
+.compare-recompress { border-top: 1px solid var(--border-light); padding-top: 10px; }
+.recompress-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.recompress-row label { color: var(--text-secondary); flex: none; }
+.compare-modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border-light); }
+
+/* 状态条 & 备注 */
+.variants { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.variant { font-size: 11px; color: #cfd6e4; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1); border-radius: 8px; padding: 5px 9px; }
+.variant b { color: #fff; font-weight: 600; }
+/* 图版装饰：标记"这一处不是现有 UI"，不属于产品类名 */
+.tag-new { display: inline-block; font-size: 9.5px; font-weight: 700; letter-spacing: .02em; color: #0a84ff; background: rgba(10,132,255,.14); border: 0.5px solid rgba(10,132,255,.4); border-radius: 4px; padding: 1px 4px; margin-right: 5px; vertical-align: 1px; }
+.notes { margin-top: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px 26px; }
+.note { font-size: 12.5px; line-height: 1.7; color: #a4a4b0; padding-left: 14px; position: relative; }
+.note::before { content: ''; position: absolute; left: 0; top: 9px; width: 5px; height: 5px; border-radius: 2px; background: #34c759; }
+.note.warn::before { background: #ff9500; }
+.note b { color: #eaeaf0; font-weight: 600; }
+.note code { font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-size: 11.5px; color: #cfe3ff; background: rgba(10,132,255,.1); padding: 1px 5px; border-radius: 4px; }
+
+/* 08 组件规范 */
+.legend { display: grid; grid-template-columns: repeat(3,1fr); gap: 16px; }
+.leg {
+  border-radius: var(--radius-card); padding: 18px; background: var(--glass-fill-solid);
+  box-shadow: var(--glass-spec), inset 0 0 0 .5px var(--glass-rim); color: var(--text);
+}
+.leg h5 { font-size: 12.5px; font-weight: 650; margin-bottom: 12px; letter-spacing: -0.01em; }
+.swatches { display: flex; flex-direction: column; gap: 9px; }
+.sw { display: flex; align-items: center; gap: 9px; font-size: 11.5px; }
+.sw i { width: 22px; height: 22px; border-radius: 7px; box-shadow: inset 0 0 0 .5px var(--glass-rim); flex: none; }
+.sw span { color: var(--text-secondary); font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-size: 10.5px; }
+.radii { display: flex; gap: 12px; align-items: flex-end; }
+.radii div { display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 10.5px; color: var(--text-secondary); }
+.radii b { display: block; width: 42px; height: 42px; background: var(--accent); opacity: .85; }
+.map { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.map th { text-align: left; color: var(--text-secondary); font-weight: 500; padding: 5px 6px; border-bottom: 1px solid var(--border-light); }
+.map td { padding: 5px 6px; border-bottom: 1px solid var(--border-light); font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-size: 10.5px; }
+.map tr:last-child td { border-bottom: none; }
+.map td.c { color: #7fd0ff; }
+.map td.s { color: #b06a00; font-family: inherit; }
+.dark .map td.s { color: #ffc98a; }
+
+.foot { border-top: 1px solid rgba(255,255,255,0.1); padding-top: 34px; margin-top: 24px; }
+.foot h3 { font-size: 15px; margin-bottom: 14px; color: #fff; }
+.foot ul { list-style: none; display: flex; flex-direction: column; gap: 9px; }
+.foot li { font-size: 12.5px; line-height: 1.7; color: #a4a4b0; padding-left: 22px; position: relative; }
+.foot li::before {
+  content: ''; position: absolute; left: 0; top: 6px; width: 13px; height: 13px; border-radius: 4px;
+  background: rgba(52,199,89,.18); box-shadow: inset 0 0 0 1px rgba(52,199,89,.5);
+}
+.foot code { font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-size: 11.5px; color: #cfe3ff; }
+</style>
+</head>
+<body>
+
+<!-- 真实 symbol 库：照搬 frontend/index.html 的 .icon-library，id 与 path 未改 -->
+<svg class="icon-library" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <symbol id="icon-info" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M6 3h12a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3h-5l-5 3v-3H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3Z M11 10v6h2v-6Z M11 6v2h2V6Z"/></symbol>
+    <symbol id="icon-theme-auto" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20Z M12 5v14a7 7 0 0 0 0-14Z"/></symbol>
+    <symbol id="icon-sun" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M11 1h2v4h-2Z M11 19h2v4h-2Z M1 11h4v2H1Z M19 11h4v2h-4Z M7 7h10v10H7Z M4 3l3 3-1 1-3-3Z M18 17l3 3-1 1-3-3Z M3 20l3-3 1 1-3 3Z M17 6l3-3 1 1-3 3Z"/></symbol>
+    <symbol id="icon-add-images" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M4 5h11a2 2 0 0 1 2 2v13H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z M4 17h11l-4-5-3 3-2-2Z M5 8v3h3V8Z M18 2h2v3h3v2h-3v3h-2V7h-3V5h3Z"/></symbol>
+    <symbol id="icon-folder-add" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M2 5a2 2 0 0 1 2-2h5l3 3h8a2 2 0 0 1 2 2v2H2Z M2 12h20v7a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2Z M11 13v2H8v2h3v2h2v-2h3v-2h-3v-2Z"/></symbol>
+    <symbol id="icon-folder-open" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M2 5a2 2 0 0 1 2-2h5l3 3h8v3H6l-4 9Z M8 11h15l-4 10H4Z"/></symbol>
+    <symbol id="icon-queue" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 3h4v4H3Z M10 3h11v4H10Z M3 10h4v4H3Z M10 10h9v4h-9Z M3 17h4v4H3Z M10 17h7v4h-7Z"/></symbol>
+    <symbol id="icon-compress" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 2h18v3H3Z M3 19h18v3H3Z M7 7h10l-3 3h-4Z M10 14h4l3 3H7Z M9 11h6v2H9Z"/></symbol>
+    <symbol id="icon-recompress" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 3h13a6 6 0 0 1 6 6v5h-3V9a3 3 0 0 0-3-3H8v3L2 4Z M21 21H8a6 6 0 0 1-6-6v-5h3v5a3 3 0 0 0 3 3h8v-3l6 5Z M9 10h6v4H9Z"/></symbol>
+    <symbol id="icon-sliders" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M4 3h2v18H4Z M11 3h2v18h-2Z M18 3h2v18h-2Z M2 6h6v4H2Z M9 14h6v4H9Z M16 7h6v4h-6Z"/></symbol>
+    <symbol id="icon-trash" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 4h7V2h6v3l6 2-1 3L3 7Z M5 10l15 2-2 10H7Z M9 12l1 7h2l-1-7Z M15 13l-1 6h2l1-6Z"/></symbol>
+    <symbol id="icon-restore" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M2 9l7-6v4h5a8 8 0 0 1 0 16h-4v-3h4a5 5 0 0 0 0-10H9v4Z M3 17h4v6H3Z"/></symbol>
+    <symbol id="icon-compare" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M2 5h8v14H2Z M4 15h4l-2-4Z M14 5h8v14h-8Z M16 8v8h4V8Z M11 2h2v20h-2Z"/></symbol>
+    <symbol id="icon-finder" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M2 5h7l3 3h8v3h-9v10H4a2 2 0 0 1-2-2Z M14 13h9v9h-9Z M16 15v5h5v-5Z"/></symbol>
+    <symbol id="icon-reset-view" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M2 4h6v3H5v10h3v3H2Z M16 4h6v16h-6v-3h3V7h-3Z M8 9h8v6H8Z"/></symbol>
+    <symbol id="icon-zoom-in" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 3h15v15H3Z M9 6v3H6v3h3v3h3v-3h3V9h-3V6Z M19 16l4 4-3 3-4-4Z"/></symbol>
+    <symbol id="icon-zoom-out" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 3h15v15H3Z M6 9v3h9V9Z M19 16l4 4-3 3-4-4Z"/></symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M5 3l7 7 7-7 2 2-7 7 7 7-2 2-7-7-7 7-2-2 7-7-7-7Z"/></symbol>
+    <symbol id="icon-check" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 4h10v3H6v11h12v-5h3v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z M9 10l3 3 8-9 2 2-10 11-5-5Z"/></symbol>
+    <symbol id="icon-error" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M5 2h14l3 3v14l-3 3H5l-3-3V5Z M7 9l3 3-3 3 2 2 3-3 3 3 2-2-3-3 3-3-2-2-3 3-3-3Z"/></symbol>
+    <symbol id="icon-warning" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M10 2h4l9 18-2 2H3l-2-2Z M11 7v7h2V7Z M11 17v2h2v-2Z"/></symbol>
+    <symbol id="icon-chevron-down" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M4 7h5l3 4 3-4h5l-8 10Z"/></symbol>
+    <symbol id="icon-split-grip" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M1 12l6-6v12Z M17 6l6 6-6 6Z M10 4h4v16h-4Z"/></symbol>
+    <symbol id="icon-sort-asc" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M5 3l5 6H7v12H4V9H1Z M12 4h4v3h-4Z M12 10h7v3h-7Z M12 16h10v3H12Z"/></symbol>
+    <symbol id="icon-play" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M7 4l13 8-13 8Z"/></symbol>
+    <symbol id="icon-save" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 3h7v9H7l5 5 5-5h-3V3h7v17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol>
+    <symbol id="icon-copy" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 2h12v3H6v11H3Z M8 7h12a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H8Z M11 11v2h8v-2Z M11 16v2h6v-2Z"/></symbol>
+    <symbol id="icon-minus" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M4 5h16v14H4Z M7 11v2h10v-2Z"/></symbol>
+    <symbol id="icon-history" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M12 2a10 10 0 1 1-7.6 16.5l1.6-1.5A7.5 7.5 0 1 0 12 4.5c-1.8 0-3.4.7-4.6 1.8l2.4-.5.6 2.9-6-.3 2-1.9A10 10 0 0 1 12 2Z M11 7h2v5.6l3.4 2-1 1.7L11 13.8Z"/></symbol>
+    <symbol id="icon-settings" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M10.4 2h3.2l.5 2.6 1.7.7 2.1-1.6 2.3 2.3-1.6 2.1.7 1.7 2.6.5v3.2l-2.6.5-.7 1.7 1.6 2.1-2.3 2.3-2.1-1.6-1.7.7-.5 2.6h-3.2l-.5-2.6-1.7-.7-2.1 1.6-2.3-2.3 1.6-2.1-.7-1.7L2 13.6v-3.2l2.6-.5.7-1.7L3.7 6.3 6 4l2.1 1.6 1.7-.7Z M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/></symbol>
+    <symbol id="icon-back" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M12 4l-8 8 8 8 1.8-1.8L8.6 13H20v-2H8.6l5.2-5.2Z"/></symbol>
+  </defs>
+</svg>
+
+<div class="board">
+
+  <header class="cover">
+    <div class="eyebrow">OctoShrink · v2.5.x · design board</div>
+    <h1>macOS 26 Liquid Glass<br>分模块界面设计图</h1>
+    <p class="lede">
+      每个功能模块单独一帧，共 <b>8 帧</b>。图上所有结构都是<b>仓库里真实存在的 DOM</b>：类名照抄
+      <b>frontend/index.html</b> 与 <b>frontend/compare.html</b>，颜色与圆角照抄 <b>frontend/style.css</b> 的 token 名与取值，
+      状态文案照抄 <b>frontend/app.js</b> / <b>compare_window.js</b>。Swift 原生线在每帧的 <b>impl</b> 行给出对应 SwiftUI 视图与
+      <b>Style.swift::AppMetrics</b> 落点。<br>
+      玻璃层是<b>纯样式升级</b>：不改 id、不改 DOM 层级、不新增 <code>invoke()</code> 命令，两条 Tauri 产物线与 Swift 线的功能语义不受影响。<br>
+      读板约定：同一元素在多个 mock 窗里重复出现时，第二份起写作 <code>data-id="真实id"</code>（本页自身要保持 HTML 合法，id 不能重复）；
+      <code>.dark</code> / <code>.tag-new</code> 这类只服务于图版排版的类，<b>不是</b>产品类名。
+    </p>
+
+    <div class="stack">
+      <div class="stack-col">
+        <h4>Tauri 2 线（Direct + App Store）</h4>
+        <div class="sub">frontend/*.html · style.css · 无构建步骤</div>
+        <ul>
+          <li>样式只有 <code>style.css</code> 一个文件，token 走 <code>:root</code> + <code>[data-theme="dark"]</code></li>
+          <li>图标是页内 <code>&lt;svg class="icon-library"&gt;</code> 的 <code>&lt;symbol&gt;</code>，靠 <code>&lt;use href="#icon-*"/&gt;</code> 引用</li>
+          <li>Direct 用 <code>tauri://</code>，App Store 用本地 HTTP <code>41845-41847</code>，<b>同一份 HTML/CSS 零分叉</b></li>
+          <li>对比视图是独立窗口 <code>label="compare"</code>，不进主窗口 DOM</li>
+        </ul>
+      </div>
+      <div class="stack-col">
+        <h4>Swift 原生线</h4>
+        <div class="sub">swift/Sources/OctoShrinkSwift/UI</div>
+        <ul>
+          <li>组件：<code>TitleBarView</code> <code>DropZoneView</code> <code>QueuePanelView</code> <code>FileRowView</code> <code>CompressButton</code> <code>SettingsPanelView</code> <code>HistoryPageView</code> <code>CompareView</code> <code>SystemInfoModal</code></li>
+          <li>取值集中在 <code>Style.swift::AppMetrics</code>（<code>titleBarHeight 42</code> / <code>cardRadius 8</code> / <code>sectionHPadding 14</code>）</li>
+          <li>按钮族是 <code>ButtonStyle</code>：<code>Primary</code> <code>Secondary</code> <code>Ghost</code> <code>RowAction</code> <code>TitleBarButton</code> <code>Small</code></li>
+          <li>玻璃对应物：<code>.ultraThinMaterial</code> + <code>VisualEffectBackground</code>；macOS 26 可换 <code>GlassEffect</code></li>
+        </ul>
+      </div>
+      <div class="stack-col">
+        <h4>三线共用不变量</h4>
+        <div class="sub">AGENTS.md 权威约定</div>
+        <ul>
+          <li>覆盖原文件前<b>必须先写备份</b>；备份没写成就放弃这次覆盖</li>
+          <li>历史 / 备份落在<b>各自独立的 App Support</b>，三条线互不读写对方的 <code>history.json</code></li>
+          <li>「不保留」= <code>0</code> 是真实档位：照常备份，<b>退出时</b>清理，启动不按时间过期</li>
+          <li>暂停与 CPU 上限共用<b>一个</b> <code>CompressionScheduler</code> 闸门</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="chips">
+      <span class="chip"><i style="background:#007aff"></i>--accent #007aff / #0a84ff</span>
+      <span class="chip"><i style="background:#ececed"></i>--bg #ececed / #1c1c1e</span>
+      <span class="chip"><i style="background:#fff"></i>--bg-content #fff / #2c2c2e</span>
+      <span class="chip"><i style="background:#34c759"></i>--success #34c759 / #30d158</span>
+      <span class="chip"><i style="background:#ff9500"></i>--warning #ff9500 / #ff9f0a</span>
+      <span class="chip"><i style="background:#ff3b30"></i>--danger #ff3b30 / #ff453a</span>
+      <span class="chip"><i style="background:#86868b"></i>--text-secondary #86868b / #98989d</span>
+      <span class="chip">--radius 8 · --radius-sm 6</span>
+      <span class="chip">--titlebar-height 42px</span>
+      <span class="chip new"><i style="background:linear-gradient(135deg,#fff,#7fd3ff)"></i>--glass-blur 38px · saturate 190%</span>
+      <span class="chip new">--radius-win 22 · --radius-card 15</span>
+      <span class="chip new">--titlebar-height-26 52px</span>
+    </div>
+  </header>
+
+  <!-- ══════════════ 01 导入 / 拖放区 ══════════════ -->
+  <section class="block">
+    <div class="block-head">
+      <span class="block-num">01</span>
+      <h2>导入 · 拖放区</h2>
+      <span class="cap">空态是首屏唯一视觉重心：玻璃投影盘 + 双按钮，弱化边框线、强化顶部高光。</span>
+    </div>
+    <div class="impl">
+      <span>.dropzone &gt; .dropzone-content &gt; .dropzone-icon &gt; .dropzone-icon-disc</span>
+      <span>#dropzone onclick=selectFiles()</span>
+      <span>.dropzone-buttons &gt; .btn.btn-primary / .btn.btn-secondary</span>
+      <span>#titlebarProgress</span>
+      <span class="swift">SwiftUI: DropZoneView + TitleBarView</span>
+      <span class="guard">selectFiles / selectFolder 签名不动</span>
+    </div>
+
+    <div class="stage wall-day">
+      <div class="win">
+        <div class="titlebar">
+          <div class="titlebar-drag"><span class="titlebar-icon-img">章</span><span class="titlebar-text">OctoShrink</span></div>
+          <div class="titlebar-actions">
+            <span class="tb-btn"><svg class="symbol-icon"><use href="#icon-history"/></svg></span>
+            <span class="tb-btn"><svg class="symbol-icon"><use href="#icon-settings"/></svg></span>
+            <span class="tb-btn"><svg class="symbol-icon"><use href="#icon-theme-auto"/></svg></span>
+            <span class="tb-btn"><svg class="symbol-icon"><use href="#icon-info"/></svg></span>
+          </div>
+          <div class="titlebar-progress" style="width:0%"></div>
+        </div>
+        <div class="container">
+          <div class="dropzone">
+            <div class="dropzone-content">
+              <div class="dropzone-icon"><span class="dropzone-icon-disc"><svg class="symbol-icon symbol-icon-hero"><use href="#icon-add-images"/></svg></span></div>
+              <h2>拖拽图片或文件夹到此处</h2>
+              <p>支持 PNG、JPG、GIF、WebP、BMP 格式 · 自动批量压缩</p>
+              <div class="dropzone-buttons">
+                <span class="btn btn-primary"><svg class="symbol-icon symbol-icon-small"><use href="#icon-add-images"/></svg>选择文件</span>
+                <span class="btn btn-secondary"><svg class="symbol-icon symbol-icon-small"><use href="#icon-folder-add"/></svg>选择文件夹</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="stage wall-night">
+      <div class="win dark">
+        <div class="titlebar">
+          <div class="titlebar-drag"><span class="titlebar-icon-img">章</span><span class="titlebar-text">OctoShrink</span></div>
+          <div class="titlebar-actions">
+            <span class="tb-btn"><svg class="symbol-icon"><use href="#icon-history"/></svg></span>
+            <span class="tb-btn"><svg class="symbol-icon"><use href="#icon-settings"/></svg></span>
+            <span class="tb-btn active"><svg class="symbol-icon"><use href="#icon-info"/></svg></span>
+          </div>
+        </div>
+        <div class="container">
+          <div class="dropzone dragover">
+            <div class="dropzone-content">
+              <div class="dropzone-icon"><span class="dropzone-icon-disc"><svg class="symbol-icon symbol-icon-hero"><use href="#icon-add-images"/></svg></span></div>
+              <h2>松开即加入队列</h2>
+              <p>支持 PNG、JPG、GIF、WebP、BMP 格式 · 自动批量压缩</p>
+              <div class="dropzone-buttons">
+                <span class="btn btn-primary"><svg class="symbol-icon symbol-icon-small"><use href="#icon-add-images"/></svg>选择文件</span>
+                <span class="btn btn-secondary"><svg class="symbol-icon symbol-icon-small"><use href="#icon-folder-add"/></svg>选择文件夹</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="variants">
+      <span class="variant"><b>idle</b> 虚线 --border，盘片不发光</span>
+      <span class="variant"><b>dragover</b> 虚线转 --accent + --bg-selected 底</span>
+      <span class="variant"><b>titlebar</b> 42 → 52px（--titlebar-height-26）给玻璃留折射带</span>
+      <span class="variant"><b>深色</b> 盘片渐变换成白色 14% → 5%</span>
+    </div>
+    <div class="notes">
+      <div class="note">拖放路径由 <code>onFileDropEvent</code> / Swift <code>DropZoneView</code> 给出，UI 层<b>不碰</b>书签授权逻辑。</div>
+      <div class="note warn">空态玻璃不透明度不能高于 <code>--glass-fill</code> 的 62%：再高就看不出身后的壁纸，材质白做。</div>
+    </div>
+  </section>
+
+  <!-- ══════════════ 02 文件队列 · 安全暂停 ══════════════ -->
+  <section class="block">
+    <div class="block-head">
+      <span class="block-num">02</span>
+      <h2>文件队列 · 安全暂停</h2>
+      <span class="cap">高密度列表保持原样：状态色只打行底色与右侧文案，不加图标彩边；进度仍是那一个按钮。</span>
+    </div>
+    <div class="impl">
+      <span>.queue-panel &gt; .queue-header / .queue-stats / .queue-view-controls / .file-queue-list / .queue-actions</span>
+      <span>#queueSummary #statOriginal #statCompressed #totalSavings #totalRate</span>
+      <span>.file-queue-item &gt; .queue-item-icon / -name / -size / -status / -actions + .queue-item-remove + .progress-file-bar</span>
+      <span>行状态：.waiting .compressing .done .failed .cancelled .restored</span>
+      <span>#startCompressBtn.compress-progress-btn[.compressing|.done]</span>
+      <span>#pauseCompressBtn &gt; .pause-btn-text（小号 [暂停]/[继续]）</span>
+      <span class="swift">SwiftUI: QueuePanelView + FileRowView + CompressButton</span>
+      <span class="guard">进度按钮旁只放一个小号按钮，不做大按钮</span>
+    </div>
+
+    <div class="stage wall-day">
+      <div class="win">
+        <div class="titlebar">
+          <div class="titlebar-drag"><span class="titlebar-icon-img">章</span><span class="titlebar-text">OctoShrink</span></div>
+          <div class="titlebar-actions">
+            <span class="tb-btn"><svg class="symbol-icon"><use href="#icon-history"/></svg></span>
+            <span class="tb-btn"><svg class="symbol-icon"><use href="#icon-settings"/></svg></span>
+            <span class="tb-btn"><svg class="symbol-icon"><use href="#icon-theme-auto"/></svg></span>
+          </div>
+          <div class="titlebar-progress" style="width:23%"></div>
+        </div>
+        <div class="container">
+          <div class="queue-panel">
+            <div class="queue-header">
+              <h3><svg class="symbol-icon"><use href="#icon-queue"/></svg>文件队列</h3>
+              <div class="queue-header-right">
+                <span class="queue-summary">47 / 200 已完成 · 已暂停 · CPU 4/10</span>
+                <span class="btn btn-small btn-ghost"><svg class="symbol-icon symbol-icon-small"><use href="#icon-trash"/></svg>清除全部</span>
+              </div>
+            </div>
+            <div class="queue-stats">
+              <div class="stat-item"><span class="stat-label">原始大小</span><span class="stat-value stat-original">128.4 MB</span></div>
+              <div class="stat-item"><span class="stat-label">压缩后</span><span class="stat-value">34.1 MB</span></div>
+              <div class="stat-item"><span class="stat-label">已节省</span><span class="stat-value stat-savings">94.3 MB</span></div>
+              <div class="stat-item"><span class="stat-label">压缩率</span><span class="stat-value stat-rate">73.4%</span></div>
+            </div>
+            <div class="queue-view-controls">
+              <label class="queue-failure-filter"><input type="checkbox">只显示失败</label>
+              <div class="queue-sort-controls">
+                <label>排序</label>
+                <select class="settings-select"><option>导入顺序</option><option>名称</option><option>原始大小</option><option>压缩后大小</option><option>压缩比</option><option>状态</option></select>
+                <span class="btn btn-small btn-ghost"><svg class="symbol-icon symbol-icon-small"><use href="#icon-sort-asc"/></svg>升序</span>
+              </div>
+            </div>
+            <div class="file-queue-list">
+              <!-- waiting：唯一还能点移除的行；图标 = icon-queue -->
+              <div class="file-queue-item waiting">
+                <span class="queue-item-icon"><svg class="symbol-icon symbol-icon-small"><use href="#icon-queue"/></svg></span>
+                <span class="queue-item-name">thumb-list-03.webp</span>
+                <span class="queue-item-size">812 KB</span>
+                <span class="queue-item-status">等待中</span>
+                <span class="queue-item-actions"></span>
+                <button class="queue-item-remove" title="移除"><svg class="symbol-icon symbol-icon-small"><use href="#icon-close"/></svg></button>
+                <div class="progress-file-bar"></div>
+              </div>
+              <!-- compressing：图标换成 spinner，移除按钮隐藏，动作区留空 -->
+              <div class="file-queue-item compressing">
+                <span class="queue-item-icon"><span class="progress-file-spinner"></span></span>
+                <span class="queue-item-name">hero-banner@2x.jpg</span>
+                <span class="queue-item-size">6.40 MB</span>
+                <span class="queue-item-status">压缩中…</span>
+                <span class="queue-item-actions"></span>
+                <button class="queue-item-remove" title="移除" style="display:none"><svg class="symbol-icon symbol-icon-small"><use href="#icon-close"/></svg></button>
+                <div class="progress-file-bar"></div>
+              </div>
+              <!-- done：五个动作固定顺序 另存为 / 对比查看 / 恢复原图 / 在访达中显示 / 复制日志 -->
+              <div class="file-queue-item done">
+                <span class="queue-item-icon"><svg class="symbol-icon symbol-icon-small"><use href="#icon-check"/></svg></span>
+                <span class="queue-item-name">IMG_2841.png</span>
+                <span class="queue-item-size">4.82 MB → 1.13 MB</span>
+                <span class="queue-item-status">-76.6%</span>
+                <span class="queue-item-actions">
+                  <button class="queue-action-btn" title="另存为"><svg class="symbol-icon symbol-icon-small"><use href="#icon-save"/></svg></button>
+                  <button class="queue-action-btn" title="对比查看"><svg class="symbol-icon symbol-icon-small"><use href="#icon-compare"/></svg></button>
+                  <button class="queue-action-btn" title="恢复原图"><svg class="symbol-icon symbol-icon-small"><use href="#icon-restore"/></svg></button>
+                  <button class="queue-action-btn" title="在访达中显示"><svg class="symbol-icon symbol-icon-small"><use href="#icon-finder"/></svg></button>
+                  <button class="queue-action-btn" title="复制日志"><svg class="symbol-icon symbol-icon-small"><use href="#icon-copy"/></svg></button>
+                </span>
+                <button class="queue-item-remove" title="移除" style="display:none"><svg class="symbol-icon symbol-icon-small"><use href="#icon-close"/></svg></button>
+                <div class="progress-file-bar"></div>
+              </div>
+              <!-- failed：状态文字只有「失败」，错误详情挂在 .error-info-btn 的 title 上 -->
+              <div class="file-queue-item failed">
+                <span class="queue-item-icon"><svg class="symbol-icon symbol-icon-small"><use href="#icon-error"/></svg></span>
+                <span class="queue-item-name">RAW_0093.heic</span>
+                <span class="queue-item-size">7.90 MB</span>
+                <span class="queue-item-status">失败<span class="error-info-btn" title="无法保存原图备份，已跳过覆盖"><svg class="symbol-icon symbol-icon-small"><use href="#icon-warning"/></svg></span></span>
+                <span class="queue-item-actions">
+                  <button class="queue-action-btn" title="重试"><svg class="symbol-icon symbol-icon-small"><use href="#icon-recompress"/></svg></button>
+                  <button class="queue-action-btn" title="复制日志"><svg class="symbol-icon symbol-icon-small"><use href="#icon-copy"/></svg></button>
+                </span>
+                <button class="queue-item-remove" title="移除" style="display:none"><svg class="symbol-icon symbol-icon-small"><use href="#icon-close"/></svg></button>
+                <div class="progress-file-bar"></div>
+              </div>
+              <!-- restored：状态「已恢复」，动作区只剩「重新压缩」 -->
+              <div class="file-queue-item restored">
+                <span class="queue-item-icon"><svg class="symbol-icon symbol-icon-small"><use href="#icon-restore"/></svg></span>
+                <span class="queue-item-name">loading-spin.gif</span>
+                <span class="queue-item-size">2.16 MB</span>
+                <span class="queue-item-status">已恢复</span>
+                <span class="queue-item-actions">
+                  <button class="queue-action-btn" title="重新压缩"><svg class="symbol-icon symbol-icon-small"><use href="#icon-recompress"/></svg></button>
+                </span>
+                <button class="queue-item-remove" title="移除" style="display:none"><svg class="symbol-icon symbol-icon-small"><use href="#icon-close"/></svg></button>
+                <div class="progress-file-bar"></div>
+              </div>
+              <!-- cancelled：整行降到 0.4 透明度，不涂红 -->
+              <div class="file-queue-item cancelled">
+                <span class="queue-item-icon"><svg class="symbol-icon symbol-icon-small"><use href="#icon-minus"/></svg></span>
+                <span class="queue-item-name">screenshot-2026-09-21.png</span>
+                <span class="queue-item-size">1.02 MB</span>
+                <span class="queue-item-status">已跳过</span>
+                <span class="queue-item-actions"></span>
+                <button class="queue-item-remove" title="移除" style="display:none"><svg class="symbol-icon symbol-icon-small"><use href="#icon-close"/></svg></button>
+                <div class="progress-file-bar"></div>
+              </div>
+            </div>
+            <div class="queue-actions">
+              <span class="btn btn-secondary"><svg class="symbol-icon symbol-icon-small"><use href="#icon-add-images"/></svg>追加文件</span>
+              <span class="btn btn-secondary" id="restoreAllBtn"><svg class="symbol-icon symbol-icon-small"><use href="#icon-restore"/></svg>恢复全部原图</span>
+              <span class="btn btn-primary btn-full compress-progress-btn compressing">
+                <span class="compress-btn-fill"></span>
+                <span class="compress-btn-text"><svg class="symbol-icon"><use href="#icon-compress"/></svg>暂停中…</span>
+              </span>
+              <span class="btn btn-small btn-secondary" id="pauseCompressBtn">
+                <span class="pause-btn-text"><svg class="symbol-icon symbol-icon-small"><use href="#icon-play"/></svg>继续</span>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="variants">
+      <span class="variant"><b>状态类只有六个</b> waiting / compressing / done / failed / cancelled / restored</span>
+      <span class="variant"><b>同一个 .cancelled 两种文字</b> 用户点「移除」→ <code>已移除</code>（app.js:655）；后端回报 cancelled → <code>已跳过</code>（app.js:1003）—— 图标都是 <code>#icon-minus</code>，都不再显示移除按钮</span>
+      <span class="variant"><b>配色由行状态推导</b> <code>.done .queue-item-icon</code> → success，<code>.failed .queue-item-status</code> → danger；元素上不再挂颜色类</span>
+      <span class="variant"><b>done</b> --queue-done-bg + 0.5px 同色描边（深色）+ 节省率 -76.6%</span>
+      <span class="variant"><b>compressing</b> --bg-selected，spinner 替换图标，移除按钮 display:none</span>
+      <span class="variant"><b>failed</b> 状态文字固定为「失败」，错误详情只在 <code>.error-info-btn</code> 的 title 里</span>
+      <span class="variant"><b>节省率符号</b> 变小时 <code>-76.6%</code>，变大时 <code>+3.2%</code>，失败时文字「失败」</span>
+      <span class="variant"><b>进度</b> 批次进度只在 <code>#titlebarProgress</code>；<code>.compress-btn-fill</code> 是 100% 宽的呼吸底，不是百分比条</span>
+    </div>
+    <div class="notes">
+      <div class="note">摘要串接固定：<code>47 / 200 已完成 · CPU 4/10</code>；暂停插入 <code> · 已暂停</code>；自动档换成 <code> · CPU 自动</code>。</div>
+      <div class="note warn">暂停闸门只拦「还没开始」的文件，<b>绝不 kill</b> 正在跑的 CLI 子进程 —— 「暂停中…」期间已启动任务照常跑完。</div>
+      <div class="note">备份写不成都算失败并跳过覆盖：状态仍显示「失败」，原因走 <code>.error-info-btn</code> 悬浮与「复制日志」，不占状态位。</div>
+      <div class="note">成功行动作固定五个、顺序不变：另存为 / 对比查看 / 恢复原图 / 在访达中显示 / 复制日志；失败行是重试 + 复制日志。玻璃化<b>不新增</b>第六个按钮。</div>
+      <div class="note">取消与跳过用 <code>opacity .4</code> 表达，<b>不涂红</b>：用户主动撤销不是错误。</div>
+      <div class="note">行内几何照旧：<code>min-height 40px</code>、图标 <code>24×24</code>、字号 <code>11px</code>、状态 <code>10px/600</code>；玻璃只换底材与圆角，<b>不许</b>借机加大密度或放大字号。</div>
+    </div>
+  </section>
+
+  <!-- ══════════════ 03 压缩设置双轨 ══════════════ -->
+  <section class="block">
+    <div class="block-head">
+      <span class="block-num">03</span>
+      <h2>压缩设置 · 系统转换 / 高级压缩双轨</h2>
+      <span class="cap">折叠面板 + 单开关分轨；行右侧的角标只是设计标注，实机由 data-processing-mode 控制显隐。</span>
+    </div>
+    <div class="impl">
+      <span>.settings-panel &gt; .settings-header + .settings-body &gt; .settings-row</span>
+      <span>#processingModeToggle role=switch aria-checked</span>
+      <span>[data-processing-mode="system"] 格式 / 图像大小 / 元数据</span>
+      <span>[data-processing-mode="advanced"] 压缩质量 / 智能模式</span>
+      <span>.radio-group 输出模式 → #outputSuffixRow / #outputDirRow</span>
+      <span>.modal-backdrop &gt; .system-info-modal（openSystemConversionInfo）</span>
+      <span class="swift">SwiftUI: SettingsPanelView + SystemInfoModal + SettingsRow</span>
+      <span class="guard">三线同一套控件与同一份 outputSuffix</span>
+    </div>
+
+    <div class="stage wall-dusk">
+      <div class="win dark" style="position:relative">
+        <div class="titlebar">
+          <div class="titlebar-drag"><span class="titlebar-icon-img">章</span><span class="titlebar-text">OctoShrink</span></div>
+          <div class="titlebar-actions">
+            <span class="tb-btn"><svg class="symbol-icon"><use href="#icon-history"/></svg></span>
+            <span class="tb-btn active"><svg class="symbol-icon"><use href="#icon-settings"/></svg></span>
+          </div>
+        </div>
+        <div class="container">
+          <div class="settings-panel">
+            <div class="settings-header">
+              <h3><svg class="symbol-icon"><use href="#icon-sliders"/></svg>压缩设置<span class="settings-summary" id="settingsSummary">Q75 · 原格式 · 智能 · 覆盖</span></h3>
+              <svg class="symbol-icon settings-chevron"><use href="#icon-chevron-down"/></svg>
+            </div>
+            <div class="settings-body">
+              <div class="settings-row" role="group" aria-label="处理方式">
+                <label>处理方式</label>
+                <div class="processing-mode-control">
+                  <span class="processing-mode-label">系统转换</span>
+                  <span class="processing-mode-info"><svg class="symbol-icon symbol-icon-small"><use href="#icon-info"/></svg></span>
+                  <span class="processing-mode-toggle" role="switch" aria-checked="true"><span class="processing-mode-slider"></span></span>
+                  <span class="processing-mode-label active">高级压缩</span>
+                </div>
+              </div>
+              <div class="settings-row">
+                <label>自动处理</label>
+                <div class="toggle-wrapper">
+                  <label class="toggle"><input type="checkbox" checked><span class="toggle-slider"></span></label>
+                  <span class="toggle-label">拖入或选择后自动压缩</span>
+                </div>
+              </div>
+              <div class="settings-row dim" data-processing-mode="system">
+                <label>格式</label>
+                <select class="settings-select"><option>原格式</option><option>JPEG</option><option>PNG</option><option>HEIF</option></select>
+              </div>
+              <div class="settings-row dim" data-processing-mode="system">
+                <label>图像大小</label>
+                <select class="settings-select"><option>实际大小</option><option>大（最长边 1280 px）</option><option>中（最长边 640 px）</option><option>小（最长边 320 px）</option></select>
+              </div>
+              <div class="settings-row dim" data-processing-mode="system">
+                <label>元数据</label>
+                <div class="toggle-wrapper">
+                  <label class="toggle"><input type="checkbox" checked><span class="toggle-slider"></span></label>
+                  <span class="toggle-label">保留元数据</span>
+                </div>
+              </div>
+              <div class="settings-row" data-processing-mode="advanced">
+                <label>压缩质量</label>
+                <div class="quality-control"><input type="range" min="10" max="100" value="75"><span id="qualityValue">75%</span></div>
+              </div>
+              <div class="settings-row">
+                <label>输出模式</label>
+                <div class="radio-group">
+                  <label class="radio-label"><input type="radio" name="om" checked>覆盖原文件</label>
+                  <label class="radio-label"><input type="radio" name="om">添加自定义后缀</label>
+                  <label class="radio-label"><input type="radio" name="om">输出到指定文件夹</label>
+                </div>
+              </div>
+              <div class="settings-row">
+                <label>文件名后缀</label>
+                <input type="text" class="settings-text-input" value="_compressed">
+                <span class="settings-hint">例如 _small</span>
+              </div>
+              <div class="settings-row">
+                <label>输出目录</label>
+                <div class="dir-picker">
+                  <span class="dir-display">未选择</span>
+                  <span class="btn btn-small"><svg class="symbol-icon symbol-icon-small"><use href="#icon-folder-open"/></svg>浏览</span>
+                </div>
+              </div>
+              <div class="settings-row" data-processing-mode="advanced">
+                <label>智能模式</label>
+                <div class="toggle-wrapper">
+                  <label class="toggle"><input type="checkbox" checked><span class="toggle-slider"></span></label>
+                  <span class="toggle-label">变小时自动停止，避免无谓的画质损失</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-backdrop">
+          <div class="system-info-modal">
+            <div class="system-info-header">
+              <svg class="symbol-icon"><use href="#icon-info"/></svg>系统转换说明
+              <span class="btn btn-small btn-ghost" style="margin-left:auto"><svg class="symbol-icon symbol-icon-small"><use href="#icon-close"/></svg></span>
+            </div>
+            <div class="system-info-body">
+              <p class="settings-copy">系统转换使用 macOS 自带的 ImageIO / CoreGraphics，不启动任何外部进程。适合追求稳定与格式覆盖；需要极限体积时请切回「高级压缩」。</p>
+            </div>
+            <div class="system-info-footer"><span class="btn btn-primary btn-small">知道了</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="variants">
+      <span class="variant"><b>高级压缩</b> 显示 压缩质量 / 智能模式，系统转换行 dim</span>
+      <span class="variant"><b>系统转换</b> 显示 格式 / 图像大小 / 元数据，高级压缩行 dim</span>
+      <span class="variant"><b>输出模式</b> 后缀 → #outputSuffixRow；文件夹 → #outputDirRow，互斥显隐</span>
+      <span class="variant"><b>模态</b> .modal-backdrop 自带 blur(6px) 压暗，.system-info-modal 自身 blur(30px)</span>
+    </div>
+    <div class="notes">
+      <div class="note">JXL 已从两版输出格式下拉移除，<b>设计图不得再出现 JXL 选项</b>；GIF 两版都有压缩，仅质量差异。</div>
+      <div class="note">后缀默认 <code>_compressed</code>，三线共用同一个 <code>outputSuffix</code>，并对路径分隔符做清理。</div>
+      <div class="note warn">双轨只靠<b>一个</b> <code>.processing-mode-toggle</code> 切换，不许拆成两个下拉或第二个开关行。</div>
+      <div class="note">玻璃化不动 <code>role="switch" aria-checked</code>：切换语义与可访问性状态保持原样。</div>
+    </div>
+  </section>
+
+  <!-- ══════════════ 04 历史记录 ══════════════ -->
+  <section class="block">
+    <div class="block-head">
+      <span class="block-num">04</span>
+      <h2>压缩历史 · 原图恢复</h2>
+      <span class="cap">历史页是主窗口内部视图，不是新窗口；一行一条记录，状态文字承担全部语义。</span>
+    </div>
+    <div class="impl">
+      <span>.view-header &gt; .view-title + .view-header-right &gt; .view-meta</span>
+      <span>.history-list &gt; .history-item，唯一的修饰类只有 <b>.restored</b></span>
+      <span>五种状态只靠文字：historyStatusText() → 已压缩 / 原图未覆盖 / 原文件位置不存在 / 原图备份已清理 / 已恢复 · 时间</span>
+      <span>.history-icon / .history-main(&gt;.history-name+.history-sub) / .history-metrics / .history-when / .history-actions</span>
+      <span>restore_history_entry / restore_all（只传 historyId）</span>
+      <span class="swift">SwiftUI: HistoryPageView + HistoryRowView</span>
+      <span class="guard">前端不拼路径；恢复只走一个服务</span>
+    </div>
+
+    <div class="stage wall-day">
+      <div class="win">
+        <div class="titlebar">
+          <div class="titlebar-drag"><span class="titlebar-icon-img">章</span><span class="titlebar-text">OctoShrink</span></div>
+          <div class="titlebar-actions">
+            <span class="tb-btn active"><svg class="symbol-icon"><use href="#icon-history"/></svg></span>
+            <span class="tb-btn"><svg class="symbol-icon"><use href="#icon-settings"/></svg></span>
+          </div>
+        </div>
+        <div class="container">
+          <!-- 真实结构：.container#historyView &gt; .view-header + .history-list#historyList + .history-empty#historyEmpty -->
+          <div class="view-header">
+            <span class="btn btn-small btn-ghost" title="返回"><svg class="symbol-icon symbol-icon-small"><use href="#icon-back"/></svg>返回</span>
+            <h3 class="view-title"><svg class="symbol-icon"><use href="#icon-history"/></svg>历史记录</h3>
+            <div class="view-header-right">
+              <span class="view-meta" id="historyMeta">128 条</span>
+              <span class="btn btn-small btn-ghost" title="清空历史记录"><svg class="symbol-icon symbol-icon-small"><use href="#icon-trash"/></svg>清空历史</span>
+            </div>
+          </div>
+          <div class="history-list" id="historyList">
+            <!-- 已压缩、replace、备份还在 → 才有「恢复原图」 -->
+            <div class="history-item">
+              <span class="history-icon"><svg class="symbol-icon symbol-icon-small"><use href="#icon-check"/></svg></span>
+              <span class="history-main">
+                <span class="history-name" title="/Users/guofeng/Pictures/2026/IMG_2841.png">IMG_2841.png</span>
+                <span class="history-sub">~/Pictures/2026 · 已压缩</span>
+              </span>
+              <span class="history-metrics"><span>4.82 MB → 1.13 MB</span><span>节省 76.6%</span></span>
+              <span class="history-when"><span>今天 14:02</span><span>pngquant+oxipng</span></span>
+              <span class="history-actions">
+                <span class="btn btn-small"><svg class="symbol-icon symbol-icon-small"><use href="#icon-restore"/></svg> 恢复原图</span>
+                <span class="queue-action-btn" title="在访达中显示"><svg class="symbol-icon symbol-icon-small"><use href="#icon-finder"/></svg></span>
+              </span>
+            </div>
+            <!-- 后缀模式：没有备份，状态是「原图未覆盖」 -->
+            <div class="history-item">
+              <span class="history-icon"><svg class="symbol-icon symbol-icon-small"><use href="#icon-check"/></svg></span>
+              <span class="history-main">
+                <span class="history-name" title="/Users/guofeng/Desktop/hero-banner@2x.jpg">hero-banner@2x.jpg</span>
+                <span class="history-sub">~/Desktop · 原图未覆盖</span>
+              </span>
+              <span class="history-metrics"><span>6.40 MB → 2.28 MB</span><span>节省 64.4%</span></span>
+              <span class="history-when"><span>今天 13:47</span><span>mozjpeg</span></span>
+              <span class="history-actions"><span class="queue-action-btn" title="在访达中显示"><svg class="symbol-icon symbol-icon-small"><use href="#icon-finder"/></svg></span></span>
+            </div>
+            <!-- 已恢复：整行 .62 透明度，图标换 restore，指标列转灰 -->
+            <div class="history-item restored">
+              <span class="history-icon"><svg class="symbol-icon symbol-icon-small"><use href="#icon-restore"/></svg></span>
+              <span class="history-main">
+                <span class="history-name" title="/Users/guofeng/Downloads/loading-spin.gif">loading-spin.gif</span>
+                <span class="history-sub">~/Downloads · 已恢复 · 今天 11:20</span>
+              </span>
+              <span class="history-metrics"><span>2.16 MB → 1.71 MB</span><span>节省 20.8%</span></span>
+              <span class="history-when"><span>昨天 22:14</span><span>gifsicle</span></span>
+              <span class="history-actions"><span class="queue-action-btn" title="在访达中显示"><svg class="symbol-icon symbol-icon-small"><use href="#icon-finder"/></svg></span></span>
+            </div>
+            <!-- 「不保留」退出清理后的样子：记录留着、状态「原图备份已清理」，没有恢复按钮 -->
+            <div class="history-item">
+              <span class="history-icon"><svg class="symbol-icon symbol-icon-small"><use href="#icon-check"/></svg></span>
+              <span class="history-main">
+                <span class="history-name" title="/Users/guofeng/Pictures/Screenshots/screenshot-2026-09-18.png">screenshot-2026-09-18.png</span>
+                <span class="history-sub">~/Pictures/Screenshots · 原图备份已清理</span>
+              </span>
+              <span class="history-metrics"><span>1.02 MB → 268 KB</span><span>节省 73.8%</span></span>
+              <span class="history-when"><span>2026-09-18 09:31</span><span>imagequant</span></span>
+              <span class="history-actions"><span class="queue-action-btn" title="在访达中显示"><svg class="symbol-icon symbol-icon-small"><use href="#icon-finder"/></svg></span></span>
+            </div>
+            <!-- 源文件被用户移走：状态「原文件位置不存在」 -->
+            <div class="history-item">
+              <span class="history-icon"><svg class="symbol-icon symbol-icon-small"><use href="#icon-check"/></svg></span>
+              <span class="history-main">
+                <span class="history-name" title="/Users/guofeng/Movies/Frames/shot-0001.png">shot-0001.png</span>
+                <span class="history-sub">~/Movies/Frames · 原文件位置不存在</span>
+              </span>
+              <span class="history-metrics"><span>3.24 MB → 902 KB</span><span>节省 72.8%</span></span>
+              <span class="history-when"><span>2026-09-17 18:05</span><span>oxipng</span></span>
+              <span class="history-actions"><span class="queue-action-btn" title="在访达中显示"><svg class="symbol-icon symbol-icon-small"><use href="#icon-finder"/></svg></span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="variants">
+      <span class="variant"><b>状态文字只有五种</b> 已压缩 / 原图未覆盖 / 原文件位置不存在 / 原图备份已清理 / 已恢复 · 时间</span>
+      <span class="variant"><b>可恢复</b> 仅当 status=compressed 且 outputMode=replace 且 backupExists 且 sourceExists</span>
+      <span class="variant"><b>restored</b> 是行上唯一的类（opacity .62），不是新状态标签；记录不删</span>
+      <span class="variant"><b>副行固定</b> dirname(sourcePath) · historyStatusText(entry) —— 目录在前，状态在后</span>
+      <span class="variant"><b>度量列</b> 132px 两行：<code>4.82 MB → 1.13 MB</code> / <code>节省 76.6%</code>；时间列 104px 两行：时间 / 算法</span>
+      <span class="variant"><b>时间</b> 今天 HH:MM / 昨天 HH:MM / YYYY-MM-DD HH:MM</span>
+    </div>
+    <div class="notes">
+      <div class="note">「恢复原图」可见性等式固定：<code>status==='compressed' &amp;&amp; outputMode==='replace' &amp;&amp; backupExists &amp;&amp; sourceExists</code>。</div>
+      <div class="note">恢复顺序：备份 → 同目录临时文件 → rename 覆盖源 → 才删本次压缩输出与备份目录；<code>conflict=true</code> 时前端二次确认后带 force 重试。</div>
+      <div class="note warn">「原图备份已清理」<b>不是错误</b>：用 <code>--text-tertiary</code>，不许涂红，也不许伪装成「原文件位置不存在」。</div>
+      <div class="note">非 replace 模式没有备份，其撤销只删本次压缩输出并移除条目 —— 所以那几行只有 Finder 按钮，样式是 <code>.queue-action-btn</code> 而非第二个主按钮。</div>
+      <div class="note">历史页头部只有 <code>返回</code> + 标题 + <code>#historyMeta</code>（「128 条」）+ <code>清空历史</code>；「恢复全部原图」留在队列页的 <code>#restoreAllBtn</code>，<b>不在这</b>出现。</div>
+      <div class="note">空态由 <code>.history-empty#historyEmpty</code> 承担，文案「还没有压缩记录」，不要拿列表壳装样子。</div>
+    </div>
+  </section>
+
+  <!-- ══════════════ 05 原图保留时间（含「不保留」默认档）══════════════ -->
+  <section class="block">
+    <div class="block-head">
+      <span class="block-num">05</span>
+      <h2>原图保留时间 · 「不保留」为默认档</h2>
+      <span class="cap">本次新增功能：0 是一个真实档位，不是"没设置"。备份照写，退出时才清理。</span>
+    </div>
+    <div class="impl">
+      <span>#originalRetentionDays（与 cpuThreadLimit 同一份 settings.json）</span>
+      <span>Rust app_settings.rs::Retention · Swift HistoryStore.swift Retention.noRetain</span>
+      <span>退出清理：commands.rs::purge_backups_if_not_retained · HistoryStore.purgeBackupsOnExit()</span>
+      <span>.settings-copy 文案随档位切换</span>
+      <span class="swift">SwiftUI: AppSettingsPageView + SettingsRow</span>
+      <span class="guard">ensure_backup 的写入逻辑一行都不改</span>
+    </div>
+
+    <div class="stage duo wall-night">
+      <div class="win dark">
+        <div class="container">
+          <!-- 真实结构：.settings-panel > .settings-header.view-section-header > h3 + .settings-body > .settings-row + p.settings-copy -->
+          <div class="settings-panel">
+            <div class="settings-header view-section-header">
+              <h3>历史记录与原图</h3>
+            </div>
+            <div class="settings-body">
+              <div class="settings-row">
+                <label for="retentionDays">原图备份保留时间</label>
+                <div class="select-wrapper">
+                  <select id="retentionDays" class="settings-select">
+                    <option value="0">不保留</option><option value="1">1 天</option><option value="3" selected>3 天</option><option value="7">7 天</option><option value="14">14 天</option><option value="30">30 天</option>
+                  </select>
+                </div>
+              </div>
+              <p class="settings-copy">
+                覆盖原文件时，OctoShrink 会先保存一份原图备份。<br>
+                <span id="retentionCopy">过期的历史记录和原图备份将在下次启动应用时自动清理。</span>
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="win dark">
+        <div class="container">
+          <div class="settings-panel">
+            <div class="settings-header view-section-header">
+              <h3>历史记录与原图</h3>
+            </div>
+            <div class="settings-body">
+              <div class="settings-row">
+                <label for="retentionDays">原图备份保留时间</label>
+                <div class="select-wrapper">
+                  <select data-id="retentionDays" class="settings-select" style="box-shadow:inset 0 0 0 1px var(--accent), var(--glass-spec)">
+                    <option value="0" selected>不保留</option><option value="1">1 天</option><option value="3">3 天</option><option value="7">7 天</option><option value="14">14 天</option><option value="30">30 天</option>
+                  </select>
+                </div>
+              </div>
+              <p class="settings-copy">
+                覆盖原文件时，OctoShrink 会先保存一份原图备份。<br>
+                <span data-id="retentionCopy">原图备份只在这次运行期间保留，关闭应用时清理；期间可以随时恢复原图。</span>
+              </p>
+              <!-- 本板唯一的新增控件：只在 0 档出现的状态徽标，纯展示、不加命令 -->
+              <div class="settings-row">
+                <label>&nbsp;</label>
+                <span class="settings-hint"><span class="tag-new">本板新增</span> 本次退出时清理 <b>3</b> 份备份 · 12.4 MB</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="variants">
+      <span class="variant"><b>默认</b> <code>Retention.defaultDays = noRetain</code>，下拉第一项就是「不保留」，老用户一律回落到该档</span>
+      <span class="variant"><b>档位文案两条线不同</b> Tauri <code>&lt;option&gt;</code> 是「1 天 / 3 天」，Swift <code>Retention.label()</code> 是「保留 1 天 / 保留 3 天」，0 档两边都只写「不保留」</span>
+      <span class="variant"><b>0 ≠ nil</b> 禁止 <code>if (days)</code> / <code>parseInt(v,10) || 3</code> / <code>clamp(1,30)</code></span>
+      <span class="variant"><b>启动</b> 不按时间过期，只扫无人引用的孤儿备份</span>
+      <span class="variant"><b>退出</b> 清备份、留记录、把 backupPath 置空</span>
+      <span class="variant"><b>恢复</b> 备份已清时返回「原图备份已清理，无法恢复」，不假装成功</span>
+    </div>
+    <div class="notes">
+      <div class="note">文案两条线逐字一致（<code>app.js applyRetentionSetting()</code> ↔ <code>SettingsView.retentionCopyText</code>）：0 档「原图备份只在这次运行期间保留，关闭应用时清理；期间可以随时恢复原图。」其余档「过期的历史记录和原图备份将在下次启动应用时自动清理。」</div>
+      <div class="note">切换档位的 toast 也固定：<code>原图备份改为不保留，关闭应用时清理</code> / <code>原图备份保留 N 天，下次启动时清理过期项</code>。</div>
+      <div class="note warn">崩溃 / 强杀不会走退出清理，那份备份可能是<b>唯一还活着的原图</b> —— 所以启动时绝不按时间删。<b>永远不许</b>写「原图将在 3 天后删除」「恢复原图仅限当前会话」。</div>
+      <div class="note">设置与 CPU 上限共用同一份 <code>settings.json</code>：写任一项都必须读-改-写，不得顺手抹掉对方字段（已修过的回归 bug）。</div>
+      <div class="note">Swift 自检已断言 <code>Retention.options.first == Retention.noRetain</code>，两条线下拉顺序一致。</div>
+      <div class="note">唯一非现有元素是那颗 <code>.tag-new</code> 徽标（图版装饰，不是产品类名）：备份份数/体积只作提示，如需常驻要先补一条统计命令，本板不动 IPC。</div>
+    </div>
+  </section>
+
+  <!-- ══════════════ 06 性能 · CPU 使用上限 ══════════════ -->
+  <section class="block">
+    <div class="block-head">
+      <span class="block-num">06</span>
+      <h2>性能 · CPU 使用上限</h2>
+      <span class="cap">控制的是并行预算的份数，不是 affinity。设备行只报事实，绝不承诺「使用 N 个性能核」。</span>
+    </div>
+    <div class="impl">
+      <span>get_cpu_info · get_cpu_resource_settings · set_cpu_thread_limit</span>
+      <span>Rust system_info.rs + effective_cpu_limit ↔ Swift SystemInfo.swift + CPULimit</span>
+      <span>L1 CompressionScheduler（暂停与并行同一个闸门）· L2 per_task_threads = 1</span>
+      <span>settings.json 的 cpu_thread_limit / cpuThreadLimit，null = 自动</span>
+      <span class="swift">SwiftUI: AppSettingsPageView + SettingsRow + CPUStatusText</span>
+      <span class="guard">不绑核 · 不指定 P/E 核 · 不硬编码 M1…M5 核数表</span>
+    </div>
+
+    <div class="stage wall-day">
+      <div class="win">
+        <div class="titlebar">
+          <div class="titlebar-drag"><span class="titlebar-icon-img">章</span><span class="titlebar-text">OctoShrink</span></div>
+          <div class="titlebar-actions">
+            <span class="tb-btn"><svg class="symbol-icon"><use href="#icon-history"/></svg></span>
+            <span class="tb-btn active"><svg class="symbol-icon"><use href="#icon-settings"/></svg></span>
+          </div>
+        </div>
+        <div class="container">
+          <!-- 真实结构：.settings-panel > .settings-header.view-section-header > h3「性能」 + 两行 + p.settings-copy -->
+          <div class="settings-panel">
+            <div class="settings-header view-section-header">
+              <h3>性能</h3>
+            </div>
+            <div class="settings-body">
+              <div class="settings-row cpu-device-row">
+                <label>当前设备</label>
+                <div class="cpu-device-col">
+                  <span class="cpu-device" id="cpuDevice">Apple M5 · ARM64</span>
+                  <span class="cpu-cores" id="cpuCoreInfo">10 核 CPU（4 性能核 + 6 能效核）</span>
+                </div>
+              </div>
+              <div class="settings-row">
+                <label for="cpuLimitSlider">CPU 使用上限</label>
+                <div class="cpu-control-col">
+                  <div class="quality-control cpu-control">
+                    <input type="range" id="cpuLimitSlider" min="1" max="10" step="1" value="4"
+                      aria-label="OctoShrink 最多使用的 CPU 并行份数">
+                    <span class="cpu-limit-value" id="cpuLimitValue">4 / 10</span>
+                    <button class="btn btn-small cpu-auto-btn" type="button" id="cpuLimitAuto"
+                      title="不指定，按机器性能自动决定">自动</button>
+                  </div>
+                  <div class="cpu-scale"><span>低占用</span><span>高性能</span></div>
+                </div>
+              </div>
+              <p class="settings-copy">
+                限制 OctoShrink 同时使用的 CPU 并行能力。<br>
+                较低的数值会降低压缩速度，但可为其他应用保留更多性能。
+                <span id="cpuSchedulingNote"><br>系统会自动在性能核与能效核之间调度任务。</span>
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="stage duo wall-day">
+      <!-- 自动档：同一个面板的另一种状态，摘要串只在队列页头部，不在设置页 -->
+      <div class="win">
+        <div class="container">
+          <div class="settings-panel">
+            <div class="settings-header view-section-header">
+              <h3>性能</h3>
+            </div>
+            <div class="settings-body">
+              <div class="settings-row cpu-device-row">
+                <label>当前设备</label>
+                <div class="cpu-device-col">
+                  <span class="cpu-device" data-id="cpuDevice">Intel Core i7-9750H · x86_64</span>
+                  <span class="cpu-cores" data-id="cpuCoreInfo">6 个物理核心 · 12 个逻辑处理器</span>
+                </div>
+              </div>
+              <div class="settings-row">
+                <label for="cpuLimitSlider">CPU 使用上限</label>
+                <div class="cpu-control-col">
+                  <div class="quality-control cpu-control">
+                    <input type="range" data-id="cpuLimitSlider" min="1" max="12" step="1" value="3"
+                      aria-label="OctoShrink 最多使用的 CPU 并行份数">
+                    <span class="cpu-limit-value" data-id="cpuLimitValue">自动（3）</span>
+                    <button class="btn btn-small cpu-auto-btn active" type="button" data-id="cpuLimitAuto" disabled
+                      title="不指定，按机器性能自动决定">自动</button>
+                  </div>
+                  <div class="cpu-scale"><span>低占用</span><span>高性能</span></div>
+                </div>
+              </div>
+              <p class="settings-copy">
+                限制 OctoShrink 同时使用的 CPU 并行能力。<br>
+                较低的数值会降低压缩速度，但可为其他应用保留更多性能。
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="win">
+        <div class="titlebar">
+          <div class="titlebar-drag"><span class="titlebar-icon-img">章</span><span class="titlebar-text">OctoShrink</span></div>
+          <div class="titlebar-actions">
+            <span class="tb-btn"><svg class="symbol-icon"><use href="#icon-history"/></svg></span>
+            <span class="tb-btn"><svg class="symbol-icon"><use href="#icon-settings"/></svg></span>
+          </div>
+        </div>
+        <div class="container">
+          <!-- 摘要不常驻设置页：它在主视图的 .queue-header-right 里，随 CPU 档变化 -->
+          <div class="queue-panel">
+            <div class="queue-header">
+              <h3><svg class="symbol-icon"><use href="#icon-queue"/></svg>文件队列</h3>
+              <div class="queue-header-right">
+                <span class="queue-summary" id="queueSummary">47 / 200 已完成 · CPU 4/10</span>
+                <span class="progress-summary" id="progressSummary"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="variants">
+      <span class="variant"><b>自动</b> = min(3, detected)，摘要只写「CPU 自动」，不假装知道具体数字</span>
+      <span class="variant"><b>手动</b> 标签 <code>4 / 10</code>，吃满时 <code>10 / 10（全部）</code></span>
+      <span class="variant"><b>换机器</b> 设过 12、机器只有 8 核 → 静默收敛 8，不弹窗不报错</span>
+      <span class="variant"><b>Intel</b> 设备行改报「6 个物理核心 · 12 个逻辑处理器」，不提性能核</span>
+    </div>
+    <div class="notes">
+      <div class="note">预算基准只取 <code>available_parallelism()</code>（Swift 取 <code>activeProcessorCount</code>）；sysctl 系列<b>只用于展示</b>。</div>
+      <div class="note warn"><code>aarch64 ≠ Apple Silicon</code>：只有 <code>machdep.cpu.brand_string</code> 以 <code>Apple </code> 开头才算，前端<b>不许</b>从 architecture 猜。</div>
+      <div class="note">运行中 8 → 2 <b>不抢占</b>已在跑的任务，只是不再启动新任务；2 → 8 立刻唤醒等待者，不靠 250 ms 兜底。</div>
+      <div class="note">L2 曾被漏掉两次（<code>cwebp -mt</code>、<code>avifenc --jobs 4</code>、rayon 后端）：新增压缩函数一律走 <code>make_command()</code> / <code>CLIRunner.run</code>，开关集中在 <code>cpu_flags()</code> 一张表。</div>
+    </div>
+  </section>
+
+  <!-- ══════════════ 07 原图对比独立窗口 ══════════════ -->
+  <section class="block">
+    <div class="block-head">
+      <span class="block-num">07</span>
+      <h2>原图对比 · 独立原生窗口</h2>
+      <span class="cap">label="compare"，自带红绿灯、可大于主窗口；载荷经 pending_compare 首屏取回，事件双向同步。</span>
+    </div>
+    <div class="impl">
+      <span>compare.html 全量：.compare-modal &gt; .compare-modal-header / -modal-body / -modal-footer</span>
+      <span>.compare-slider-outer &gt; .compare-slider-container &gt; .compare-img-wrapper &gt; .compare-img-base + .compare-img-overlay + .compare-handle</span>
+      <span>.zoom-step-btn / .zoom-slider / .zoom-value / .zoom-reset-btn / .compare-slider-bar</span>
+      <span>.compare-info-item(-label / -value.original|.compressed|.savings) · .compare-recompress &gt; .recompress-row</span>
+      <span>open_compare_window · take_compare_window_payload · compare-open · compare-results-changed</span>
+      <span class="swift">SwiftUI: CompareView + VisualEffectBackground</span>
+      <span class="guard">capabilities.windows 必须同时含 "main" 与 "compare"</span>
+    </div>
+
+    <div class="stage wall-dusk">
+      <div class="win dark" style="max-width:580px;margin:0 auto">
+        <div class="compare-modal">
+          <div class="compare-modal-header">
+            <h3><svg class="symbol-icon"><use href="#icon-compare"/></svg>原图对比</h3>
+            <div class="compare-toolbar-right">
+              <span class="zoom-step-btn"><svg class="symbol-icon symbol-icon-small"><use href="#icon-chevron-down"/></svg></span>
+              <div class="compare-zoom-control">
+                <span class="zoom-step-btn"><svg class="symbol-icon symbol-icon-small"><use href="#icon-zoom-out"/></svg></span>
+                <input type="range" class="zoom-slider" min="0.02" max="8" step="0.01" value="1">
+                <span class="zoom-step-btn"><svg class="symbol-icon symbol-icon-small"><use href="#icon-zoom-in"/></svg></span>
+                <span class="zoom-value">100%</span>
+                <span class="zoom-reset-btn"><svg class="symbol-icon symbol-icon-small"><use href="#icon-reset-view"/></svg></span>
+              </div>
+              <span class="btn btn-icon-close"><svg class="symbol-icon"><use href="#icon-close"/></svg></span>
+            </div>
+          </div>
+          <div class="compare-modal-body">
+            <div class="compare-slider-outer">
+              <div class="compare-slider-container">
+                <div class="compare-img-wrapper">
+                  <div class="compare-img-base art comp"></div>
+                  <div class="compare-img-overlay art orig" style="clip-path: inset(0 50% 0 0)"></div>
+                  <div class="compare-handle">
+                    <div class="compare-handle-line"></div>
+                    <div class="compare-handle-circle"><svg class="symbol-icon"><use href="#icon-split-grip"/></svg></div>
+                  </div>
+                  <div class="compare-label label-left">原图</div>
+                  <div class="compare-label label-right">压缩后</div>
+                </div>
+              </div>
+              <input type="range" class="compare-slider-bar" min="0" max="100" value="50">
+            </div>
+            <div class="compare-info">
+              <div class="compare-info-item" style="width:100%;margin-bottom:4px">
+                <span class="compare-info-label">文件名</span><span class="compare-info-value">IMG_2841.png</span>
+              </div>
+              <div class="compare-info-row">
+                <div class="compare-info-item"><span class="compare-info-label">原图大小</span><span class="compare-info-value original">4.82 MB</span></div>
+                <div class="compare-info-item"><span class="compare-info-label">压缩后大小</span><span class="compare-info-value compressed">1.13 MB</span></div>
+                <div class="compare-info-item"><span class="compare-info-label">节省</span><span class="compare-info-value savings">-76.6%</span></div>
+                <div class="compare-info-item"><span class="compare-info-label">算法</span><span class="compare-info-value">pngquant + oxipng</span></div>
+              </div>
+            </div>
+            <div class="compare-recompress">
+              <div class="recompress-row">
+                <label>重新压缩质量</label>
+                <input type="range" min="10" max="100" value="75">
+                <span id="recompressQualityValue">75%</span>
+                <span class="btn btn-primary"><svg class="symbol-icon symbol-icon-small"><use href="#icon-recompress"/></svg>重新压缩</span>
+              </div>
+            </div>
+          </div>
+          <div class="compare-modal-footer">
+            <span class="btn btn-secondary"><svg class="symbol-icon"><use href="#icon-restore"/></svg>恢复原图</span>
+            <span class="btn btn-primary">关闭</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="variants">
+      <span class="variant"><b>fit</b> 首屏与 resize 都按「适合窗口」适配：先 showPanel 再测视口（隐藏态测得 0 会回退 100%，大图只剩局部）</span>
+      <span class="variant"><b>缩放</b> 下限 0.02，重置按钮 = 重新适配，用户手动缩放后 resize 不再打断</span>
+      <span class="variant"><b>导航</b> ← / → 或 ⌘+滚轮切条目，<code>compare-results-changed</code> 双向同步</span>
+      <span class="variant"><b>玻璃</b> 工具条与指标卡浮起（--glass-tint-track + 高光内描边），画布本身保持不透明</span>
+    </div>
+    <div class="notes">
+      <div class="note">画布用 CSS 渐变占位；实机图来自 <code>read_image_dataurl</code> / <code>convertFileSrc</code>：Direct 走 <code>tauri://</code> 内嵌页，App Store 走 <code>http://localhost:&lt;port&gt;/compare.html</code>。</div>
+      <div class="note warn">只有 <code>label=="main"</code> 关闭才 <code>exit(0)</code>；关闭对比窗口不能带崩 app。</div>
+      <div class="note">沙盒阻止 <code>tauri://</code>，所以 App Store 线用 External URL —— 两版窗口行为一致，仅 URL 按 feature 分叉。</div>
+      <div class="note">对比窗口里的「恢复原图」也走同一个 <code>restore_history_entry</code>，前端不拼路径。</div>
+    </div>
+  </section>
+
+  <!-- ══════════════ 08 玻璃组件规范 ══════════════ -->
+  <section class="block">
+    <div class="block-head">
+      <span class="block-num">08</span>
+      <h2>玻璃组件规范 · 两栈映射表</h2>
+      <span class="cap">同一套视觉在两个技术栈的落地取值。改结论只改这一处，不散落进各模块样式。</span>
+    </div>
+    <div class="impl">
+      <span>frontend/style.css :root / [data-theme="dark"]</span>
+      <span>swift/Sources/OctoShrinkSwift/UI/Style.swift::AppMetrics</span>
+      <span>swift/Sources/OctoShrinkSwift/UI/VisualEffectBackground.swift</span>
+      <span class="guard">新增 token 不得改变旧 token 含义</span>
+    </div>
+
+    <div class="stage wall-night">
+      <div class="legend">
+        <div class="leg">
+          <h5>色彩 token（浅 / 深，与 style.css 一致）</h5>
+          <div class="swatches">
+            <div class="sw"><i style="background:#007aff"></i><span>--accent #007aff / #0a84ff</span></div>
+            <div class="sw"><i style="background:#ececed"></i><span>--bg #ececed / #1c1c1e</span></div>
+            <div class="sw"><i style="background:#ffffff"></i><span>--bg-content #fff / #2c2c2e</span></div>
+            <div class="sw"><i style="background:#1d1d1f"></i><span>--text #1d1d1f / #f5f5f7</span></div>
+            <div class="sw"><i style="background:#86868b"></i><span>--text-secondary #86868b / #98989d</span></div>
+            <div class="sw"><i style="background:#34c759"></i><span>--success #34c759 / #30d158</span></div>
+            <div class="sw"><i style="background:#ff9500"></i><span>--warning #ff9500 / #ff9f0a</span></div>
+            <div class="sw"><i style="background:#ff3b30"></i><span>--danger #ff3b30 / #ff453a</span></div>
+          </div>
+        </div>
+
+        <div class="leg">
+          <h5>玻璃配方（新增层）</h5>
+          <div class="swatches">
+            <div class="sw"><i style="background:rgba(255,255,255,.62)"></i><span>--glass-fill 62% / dark 58%</span></div>
+            <div class="sw"><i style="background:linear-gradient(135deg,#fff,#cfe3ff)"></i><span>--glass-spec inset 0 1px 0 .72</span></div>
+            <div class="sw"><i style="background:transparent;box-shadow:inset 0 0 0 1px rgba(255,255,255,.55)"></i><span>--glass-inner 0.5px rim</span></div>
+            <div class="sw"><i style="background:rgba(255,255,255,.42)"></i><span>--glass-tint-track 控件底</span></div>
+          </div>
+          <div class="radii" style="margin-top:14px">
+            <div><b style="border-radius:var(--radius-sm)"></b>6 --radius-sm</div>
+            <div><b style="border-radius:var(--radius)"></b>8 --radius</div>
+            <div><b style="border-radius:var(--radius-card)"></b>15 card</div>
+            <div><b style="border-radius:var(--radius-win)"></b>22 win</div>
+          </div>
+          <p class="settings-copy" style="margin-top:12px">滤镜固定 <code>blur(38px) saturate(190%)</code>；边缘一律用 <b>inset 描边</b>而不是 border，否则玻璃边会跳出硬切线。</p>
+        </div>
+
+        <div class="leg">
+          <h5>类名 ↔ SwiftUI 映射</h5>
+          <table class="map">
+            <tr><th>frontend CSS</th><th>SwiftUI 落点</th></tr>
+            <tr><td class="c">.btn-primary</td><td class="s">PrimaryButtonStyle</td></tr>
+            <tr><td class="c">.btn-secondary</td><td class="s">SecondaryButtonStyle</td></tr>
+            <tr><td class="c">.btn-ghost</td><td class="s">GhostButtonStyle</td></tr>
+            <tr><td class="c">.btn-small</td><td class="s">SmallButtonStyle</td></tr>
+            <tr><td class="c">.queue-action-btn</td><td class="s">RowActionButtonStyle</td></tr>
+            <tr><td class="c">.tb-btn</td><td class="s">TitleBarButtonStyle</td></tr>
+            <tr><td class="c">.queue-panel / .settings-panel</td><td class="s">CardBackground + AppMetrics</td></tr>
+            <tr><td class="c">--border-light 分隔</td><td class="s">HairlineDivider</td></tr>
+            <tr><td class="c">.settings-row</td><td class="s">SettingsRow</td></tr>
+            <tr><td class="c">.view-header</td><td class="s">ViewHeaderView</td></tr>
+            <tr><td class="c">.file-queue-item</td><td class="s">FileRowView</td></tr>
+            <tr><td class="c">.compare-modal</td><td class="s">CompareView</td></tr>
+            <tr><td class="c">--glass-fill + backdrop-filter</td><td class="s">.ultraThinMaterial / GlassEffect</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="note">AppMetrics 只需新增两项：<code>windowRadius: CGFloat = 22</code>、<code>cardRadiusGlass: CGFloat = 15</code>；<code>titleBarHeight 42</code> / <code>sectionHPadding 14</code> / <code>queueListMaxHeight 260</code> 全部保持不变。</div>
+      <div class="note">Direct 与 App Store 两线共用同一份 <code>style.css</code>，玻璃渲染一致 —— 材质只是 CSS，不引入新 IPC 面。</div>
+      <div class="note warn">Swift 线已在用 <code>NSVisualEffectView</code>，macOS 26 上它自带液态折射，<b>不要</b>再叠一层高斯 <code>.blur()</code>，否则内容对比度会被糊掉。</div>
+      <div class="note">深色下玻璃要提到 58% 并把高光压到 .16，否则壁纸会穿透列表文字影响可读性 —— 已在 03 / 05 帧的深色版本核对。</div>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <h3>这套视觉落地时，以下 AGENTS.md 约束必须逐条继续成立</h3>
+    <ul>
+      <li>默认构建 <code>cargo tauri build</code>（不传 --features）必须始终产出可用 DMG；新能力不得依赖 <code>--features appstore</code>。</li>
+      <li>不删 <code>cli-backends</code> 实现、不把 default 改成 <code>inproc-backends</code>、不删 <code>resources/bin</code> 与 <code>resources/lib</code>。</li>
+      <li>新增引擎函数必须同时给出 cli-backends 与 inproc-backends 两个同名同签名实现；<code>CompressOptions</code> / <code>EngineResult</code> 跨 feature 保持一致。</li>
+      <li>新增命令三处同改：<code>commands.rs</code> handler、<code>lib.rs::invoke_handler!</code>、<code>permissions/commands.toml</code> + <code>capabilities/default.json</code> 的 kebab-case 权限名。</li>
+      <li>新增窗口 label 必须进 <code>capabilities/default.json</code> 的 <code>windows</code> 数组（对比窗口 <code>"compare"</code> 就是这条），否则该窗口内 invoke 静默失效。</li>
+      <li>白屏与 IPC 是耦合项：本地 HTTP 固定端口段 <code>41845-41847</code> 与 <code>remote.urls</code> 的带端口 origin 精确匹配必须同时满足，改一个要确认另一个。</li>
+      <li>备份与历史始终落在<b>各自独立</b>的 App Support（Direct / App Store / <code>com.misswell.octoshrink.swift</code>），三条线互不读写对方的 <code>history.json</code>；绝不放进 temp / Caches。</li>
+      <li>启动清理的白名单是闭集：只删过期条目与只被其引用的备份目录，<b>绝不</b>删用户的 <code>sourcePath</code> / <code>outputPath</code> / 输出目录内容。</li>
+      <li>改完用 <code>bash scripts/build_all.sh</code> 同时出两版，并跑 <code>cargo test</code> / <code>cargo test --features inproc-backends --no-default-features</code> / <code>npm run test:frontend</code> / <code>bash scripts/test_swift_history.sh</code> 四套验证；验证要用签名+沙盒 .app，<code>cargo tauri dev</code> 不复现沙盒问题。</li>
+      <li>文件访问差异、entitlements 对照、CLI↔crate 映射若被改变，必须同步更新 AGENTS.md 对应小节。</li>
+    </ul>
+  </footer>
+
+</div>
+</body>
+</html>
