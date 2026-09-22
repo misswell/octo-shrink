@@ -717,6 +717,10 @@ do {
     writeData(store.historyFile, Array("[{\"id\":\"x\",\"sourcePa".utf8))
 
     let reopened = HistoryStore(root: root)
+    // 生产代码的顺序：先取启动报告（落日志），再跑启动清理。
+    let startup = reopened.takeStartupReport()
+    check(startup?.recoveredEntries == 1, "启动报告统计到重建条目")
+    check(reopened.takeStartupReport() == nil, "启动报告只报一次")
     let report = reopened.cleanupExpired(retentionDays: 3)
     check(report.removedEntries == 0 && report.removedBackups == 0,
           "损坏现场一次备份都不许删（removedBackups \(report.removedBackups)）")
@@ -725,7 +729,8 @@ do {
     check(reopened.cleanupIsLocked(), "本次启动锁死备份清理")
     check(report.warnings.contains { $0.contains("已损坏") },
           "报告说清是损坏：\(report.warnings.joined(separator: " / "))")
-    check(fm.contentsOfDirectory(atPath: root).contains { $0.hasPrefix("history.corrupt-") },
+    check(((try? fm.contentsOfDirectory(atPath: root)) ?? [])
+            .contains { $0.hasPrefix("history.corrupt-") },
           "损坏现场被改名留档，而不是被 [] 覆盖")
 
     // 来历记录是 v1（只有 sourcePath/createdAt）也必须认：老用户的历史就靠它重建。
@@ -735,10 +740,6 @@ do {
     check(rebuilt.first?.algorithm == HistoryStore.recoveryAlgorithm, "算法位标明不是真实压缩")
     check(rebuilt.first?.backupPath == backup, "重建条目带着备份位置")
     check(rebuilt.first?.sourcePath == source, "重建条目认得原图属于谁")
-
-    let startup = reopened.takeStartupReport()
-    check(startup?.recoveredEntries == 1, "启动报告统计到重建条目")
-    check(startup == nil, "启动报告只报一次")
 
     // 锁定期内连退出清理也不许动手：历史不可信时备份可能是原图唯一的副本。
     let quit = reopened.purgeBackupsOnExit()
@@ -773,8 +774,9 @@ do {
     let backupFile = dir + "/original.png"
     writeData(backupFile, [1, 2, 3])               // 备份里是真正的原图
 
-    try? journal.prepare(transaction("t-missing", source: source,
-                                     output: source, backup: backupFile))
+    check(journal.prepare(transaction("t-missing", source: source,
+                                      output: source, backup: backupFile)) == nil,
+          "覆盖前的记账凭证写得成")
     check(journal.hasPending(), "覆盖前登记的记账凭证还在")
     let report = journal.recover(store)
     check(report.rolledBack == 1 && report.warnings.isEmpty,
@@ -788,7 +790,6 @@ do {
     store.add(HistoryEntry.record(withId: "t-committed", source: source,
                                   result: result(file: source, size: 3), output: source,
                                   backup: backupFile, retentionDays: 3))
-    try? { _ in }(() as Void)
     _ = journal.prepare(transaction("t-committed", source: source,
                                     output: source, backup: backupFile))
     let committed = journal.recover(store)
@@ -813,6 +814,7 @@ do {
     let brokenJournal = OutputTransactionStore(root: brokenDir)
     let kept = canonicalPath(brokenDir + "/kept.png")
     makeFile(kept, [9, 9])
+    try? fm.createDirectory(atPath: brokenJournal.root, withIntermediateDirectories: true)
     writeData(brokenJournal.root + "/broken.json", Array("{ half".utf8))
     let unparsed = brokenJournal.recover(brokenStore)
     check(unparsed.rolledBack == 0, "读不懂的日志不做回滚")
@@ -820,22 +822,35 @@ do {
     check(fm.fileExists(atPath: brokenJournal.root + "/broken.unparsed"), "现场改名留档")
 }
 
-// ─── 22. 备份的来历记录写不成 = 没有备份 ────────────────────────────────────
+// ─── 22. 备份必须"文件 + 来历记录"双全，缺一半就不算备份 ────────────────────
 print("[22] 备份必须文件与来历记录双全")
 do {
     let root = freshRoot("22")
     let source = canonicalPath(NSTemporaryDirectory() + "octoshrink-check-22/m.png")
     makeFile(source, [1, 2, 3])
     let store = HistoryStore(root: root)
-    // 把 meta 的位置做成目录：备份文件写得成，来历记录一定写不成。
     let key = HistoryStore.backupKey(forPath: source)
-    try? fm.createDirectory(atPath: root + "/backups/\(key)", withIntermediateDirectories: true)
-    try? fm.createDirectory(
-        atPath: root + "/backups/\(key)/\(HistoryStore.metaFileName)",
-        withIntermediateDirectories: true)
-    check(store.ensureBackup(for: source) == nil, "来历记录写不成时返回 nil（调用方据此放弃覆盖）")
-    let leftovers = (try? fm.contentsOfDirectory(atPath: root + "/backups")) ?? []
-    check(!leftovers.contains(key), "半成品目录被清掉，不会留下认不出的备份")
+
+    // 只有压缩结果、没有来历记录的目录：认不出是谁的原图，绝不能当成备份复用。
+    // `history.json` 损坏后就靠 backup-meta.json 重建恢复入口，缺一半等于无从恢复。
+    let unlabeled = root + "/backups/\(key)"
+    try? fm.createDirectory(atPath: unlabeled, withIntermediateDirectories: true)
+    writeData(unlabeled + "/original.png", [9, 9, 9])
+    let backup = store.ensureBackup(for: source)
+    check(backup != nil, "来历记录缺失时另找槽位重写，而不是返回一个认不出的备份")
+    check(backup != unlabeled + "/original.png", "绝不复用没有来历记录的那份")
+    check(readBytes(backup!) == [1, 2, 3], "新槽位里是真正原图，不是那张认不出的残骸")
+    check(readBytes(unlabeled + "/original.png") == [9, 9, 9],
+          "残骸留在原地交给清理流程，不悄悄改写别的东西")
+
+    let metaFile = (backup! as NSString).deletingLastPathComponent
+        + "/\(HistoryStore.metaFileName)"
+    check(fm.fileExists(atPath: metaFile), "备份写成时来历记录必须一起落盘")
+    // JSON 会把路径里的 / 转义成 \/，不还原回来永远比不中。
+    let metaRaw = ((String(data: fm.contents(atPath: metaFile) ?? Data(), encoding: .utf8) ?? "")
+        .replacingOccurrences(of: "\\/", with: "/"))
+    check(metaRaw.contains("\"version\""), "来历记录带版本号：v1 与 v2 要能分开认")
+    check(metaRaw.contains(source), "来历记录认得这份原图属于谁")
     check(readBytes(source) == [1, 2, 3], "用户的源文件不受影响")
 }
 
@@ -853,11 +868,13 @@ do {
     )
     store.add(entry)
     writeData(source, [9, 9, 9])   // 模拟已被压缩结果覆盖
-    // 让 history.json 的落盘必然失败：目标位置做成目录。
-    try? fm.removeItem(atPath: store.historyFile)
-    try? fm.createDirectory(atPath: store.historyFile, withIntermediateDirectories: true)
+    let recorded = store.list()[0]
+    // 让 history.json 的落盘必然失败，但**读得到**：根目录设成只读。
+    // 若把 history.json 本身做成目录，读也一起坏了，测的就是另一件事（见 [20]）。
+    chmod(root, 0o555)
 
-    let outcome = store.restoreOutcome(entry: store.list()[0], force: true)
+    let outcome = store.restoreOutcome(entry: recorded, force: true)
+    chmod(root, 0o755)
     check(!outcome.success, "历史没落盘就不能报\"恢复成功\"")
     check(outcome.error?.contains("文件已恢复") == true,
           "说清文件已回到原图：\(outcome.error ?? "")")
@@ -874,9 +891,12 @@ do {
     let source = canonicalPath(realDir + "/o.png")
     makeFile(source, [1, 2, 3])
     let backup = store.ensureBackup(for: source)!
-    // /var/… 与 /private/var/… 指的是同一个文件，字面却不等。
-    let alias = source.replacingOccurrences(of: "/private/var/", with: "/var/")
-    check(alias != source, "构造出同文件不同字面的路径对")
+    // 规范路径是 /var/…（resolvingSymlinksInPath 会去掉 /private 前缀），
+    // 而 /private/var/… 是同一个文件的另一种写法 —— 字面不等，历史里的
+    // outputPath 记录的恰恰是当时那个原始字符串。
+    let alias = "/private" + source
+    check(alias != source && canonicalPath(alias) == source,
+          "构造出同文件不同字面的路径对")
     let entry = HistoryEntry.record(
         source: source, result: result(file: source, size: 3), output: alias,
         backup: backup, retentionDays: 3
@@ -904,7 +924,7 @@ do {
         if permit != nil { meter.begin(); meter.end() }
         group.leave()
     }
-    group.wait(timeout: .now() + 2)
+    _ = group.wait(timeout: .now() + 2)
     check(meter.peak == 0, "取消的任务不占 CPU 名额")
     check(scheduler.isPaused, "取消不把暂停一起解除")
 
@@ -914,12 +934,11 @@ do {
     let running = DispatchGroup()
     running.enter()
     DispatchQueue.global().async {
-        let permit = scheduler.acquire(cancelled: { false })
-        permit.release()
+        scheduler.acquire(cancelled: { false })?.release()
         running.leave()
     }
     Thread.sleep(forTimeInterval: 0.1)
-    check(!running.wait(timeout: .now()), "暂停中等待者仍被拦住")
+    check(running.wait(timeout: .now()) == .timedOut, "暂停中等待者仍被拦住")
     scheduler.resume()
     running.wait()
     check(!scheduler.isPaused, "resume 后闸门开")

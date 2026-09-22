@@ -33,6 +33,7 @@ xcrun swiftc \
   "$SRC_DIR/Models/CompressOptions.swift" \
   "$SRC_DIR/Models/CompressResult.swift" \
   "$SRC_DIR/Services/HistoryStore.swift" \
+  "$SRC_DIR/Services/OutputTransactionStore.swift" \
   "$SRC_DIR/Services/SystemInfo.swift" \
   "$SRC_DIR/Services/CompressionScheduler.swift" \
   "$SRC_DIR/Engine/CLIRunner.swift" \

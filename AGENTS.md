@@ -142,9 +142,9 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - ✅ 对比视图已改为独立原生窗口（未发版）：`compare.html` + `compare_window.js`，label="compare"，由 `open_compare_window` 命令创建（Direct 用 tauri:// 内嵌页，App Store 用本地 HTTP 页），自由缩放可大于主窗口、自带红绿灯；载荷经 `pending_compare` 状态 + `take_compare_window_payload` 首屏取回，`compare-open` / `compare-results-changed` 事件双向同步；`on_window_event` 仅在 label=="main" 关闭时 exit(0)；首屏与 resize 均按"适合窗口"fit 适配（先 showPanel 再测量视口，隐藏态测量会得到 0 而回退 100%，大图只显示局部），缩放下限 0.02，重置按钮=重新适配，用户手动缩放后 resize 不再打断
 - ✅ 安全暂停已接入（三线一致）：压缩中可暂停/继续，只拦「还没开始」的文件，绝不 kill 正在跑的 CLI 子进程；进度按钮文案变「暂停中…」，旁边一个小号 [暂停]/[继续]。**取消一个文件只 `wake_waiters()`、绝不 `resume()`**（详见「安全暂停」），整批取消走一次 `cancel_batch`
 - ✅ 压缩历史 + 原图保留/恢复已接入（三线一致）：`history.rs::HistoryStore` / Swift `Services/HistoryStore.swift` 落 App Support（**不再是临时目录**），历史页/设置页为主窗口内部视图，恢复统一走一个服务（`restore_original` / `restore_history_entry` / `restore_all` 共用 `HistoryStore::restore`），保留档位为「不保留」（默认，退出时清理）或 1/3/7/14/30 天（启动时按天清理，详见下一节）
-- ✅ 覆盖事务与崩溃安全已接入（Rust 两线，Swift 线待补）：`output_transaction.rs::TransactionStore` 在覆盖前记账、`history.add` 落盘后才销账，启动时 `recover()` 补记或自动回滚上次中断的覆盖；`history.json` 严格读取（损坏→隔离 + 按 `backup-meta.json` 重建 `recoveryAvailable` + 本次启动锁死备份 sweep）；`write_output_file` 全链路 `Result`（任一步失败必须把 `CompressResult.success` 翻成 false）；备份 key 从 `DefaultHasher` 迁到 FNV-1a 64（老 key 只读复用/续认，含书签）；`MAX_HISTORY_ENTRIES = 10_000`
+- ✅ 覆盖事务与崩溃安全已接入（**三条线一致**）：`output_transaction.rs::TransactionStore` ↔ Swift `OutputTransactionStore.swift` 在覆盖前记账、`history.add` 落盘后才销账，启动时 `recover()` 补记或自动回滚上次中断的覆盖；`history.json` 严格读取（损坏→隔离 + 按 `backup-meta.json` 重建 `recoveryAvailable` + 本次启动锁死备份 sweep）；`write_output_file` 全链路 `Result`（任一步失败必须把 `CompressResult.success` 翻成 false）；备份 key 从 `DefaultHasher` 迁到 FNV-1a 64（老 key 只读复用/续认，含书签）；`MAX_HISTORY_ENTRIES = 10_000`
 - ✅ CPU 使用上限已接入（三条线一致）：设置页「性能」小节 + `CompressionScheduler`（暂停与并行预算同一套闸门）+两层预算（并发文件数 × 单编码器内部线程），检测见 `system_info.rs` / `SystemInfo.swift`，详见「CPU 使用上限（三条线共用不变量）」
-- ✅ Swift 原生线（`swift/`）与两条 Tauri 线功能对齐，历史/备份/暂停语义一致，但存储根目录独立（`~/Library/Application Support/com.misswell.octoshrink.swift`），三条线互不读写对方的 history.json
+- ✅ Swift 原生线（`swift/`）与两条 Tauri 线功能对齐，历史/备份/覆盖事务/暂停语义一致，但存储根目录独立且少一层 `history/`（`~/Library/Application Support/com.misswell.octoshrink.swift`），三条线互不读写对方的 history.json
 - 🟡 App Store 审核待提交：2.2.9 已上传 ASC，需补全元数据 + 回复 network.server 解释（路径B）后提交审核
 - ⬜ 引擎迁移后续：JXL（未来接入 jpegxl-sys 后可恢复 UI 选项）；GIF 减色优化（未来可用 imagequant 逐帧量化，当前有帧间闪烁风险暂不做）
 
@@ -220,7 +220,9 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 |---|---|---|---|---|
 | Direct | `app.path().app_data_dir()`（identifier `com.misswell.octoshrink`） | `<root>/history/history.json` | `<root>/history/backups/<key>/original.<ext>` | `<root>/history/transactions/<id>.json` |
 | App Store | 同上，identifier `com.misswell.octoshrink.appstore` → 自动落沙盒容器 | 同上 | 同上 | 同上 |
-| Swift | `~/Library/Application Support/com.misswell.octoshrink.swift` | 同上 | 同上 | 同上 |
+| Swift | `~/Library/Application Support/com.misswell.octoshrink.swift` | `<root>/history.json` | `<root>/backups/<key>/original.<ext>` | `<root>/transactions/<id>.json` |
+
+- ⚠️ Swift 线的布局**少一层 `history/`**（`<root>/history.json` 而不是 `<root>/history/history.json`），表里的"同上"对这三列并不成立。三条线的根目录与 key 哈希都不同，本来就不共用文件，但改任何一条线时别照着另一条线拼路径。
 
 - 三条线的存储根**互不相同**，备份 key 的哈希算法也不同（Rust 与 Swift 各自实现 FNV-1a 64 位）。这是刻意设计：任何两条线都不能读写同一份 `history.json`。
 - ❌ 不要把备份放进 `temp_dir` / `NSTemporaryDirectory` / `Caches` —— 系统会随手清理，用户原图就没了。历史功能上线前的老版本确实在 temp 里放过，那份残骸（`<tmp>/octoshrink-backups`）只在启动时清目录本身。
@@ -236,7 +238,8 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - `rollback()` **永不删备份**：回滚失败时它是唯一的原图副本，必须留给下一次。
 - 启动时 `transactions.recover(history)` 先跑，再跑 `cleanup_expired`；`setup` 的 `CleanupReport` 会把中断事务的处置结果带出去（补记 or 已自动回滚）。
 - 只要还有 pending 凭证，`clear_history` 必须拒绝（「仍有文件事务正在处理，暂时无法清空历史记录」）。
-- **清空历史同样受批次闸门约束**：`clear_history` 在压缩进行中直接返回错误（「压缩进行中，无法清空历史记录」），因为历史是"备份还有人认领"的账本 —— 一边在写备份一边销账，正在处理的那几张图就会变成无人引用的孤儿并被扫掉。前端配套：`renderHistory` 在 `isCompressing` 时禁用 `historyClearBtn` 并给 title，`clearHistory()` 自己也要早退 + toast（只靠按钮 disabled 挡不住键盘触发）。这条在 `tests/history-view.cjs` 有回归断言。
+- **Swift 线必须全进程只用 `HistoryStore.shared`**：损坏锁死（`cleanupLocked`）与启动报告是**这一次运行**的状态，`AppState` 与 `AppDelegate.applicationWillTerminate` 各 `new` 一个实例，就会出现"启动时刚把损坏现场留档、退出清理看不见那把锁，转身把备份 sweep 掉"。`OutputTransactionStore` 同理只有一份（`AppState.transactions`）。
+- **清空历史同样受批次闸门约束**：`clear_history` 在压缩进行中直接返回错误（「压缩进行中，无法清空历史记录」），因为历史是"备份还有人认领"的账本 —— 一边在写备份一边销账，正在处理的那几张图就会变成无人引用的孤儿并被扫掉。前端配套：`renderHistory` 在 `isCompressing` 时禁用 `historyClearBtn` 并给 title，`clearHistory()` 自己也要早退 + toast（只靠按钮 disabled 挡不住键盘触发）。Swift 侧判据是 `CompressionScheduler.isBatchActive` + `transactions.hasPending()`，后端 `AppState.clearHistory()` 自己早退 + toast，`HistoryPageView` 的按钮同样 disable。这条在 `tests/history-view.cjs` 有回归断言。
 
 ### 备份：一次写成，永不覆盖
 
@@ -261,7 +264,7 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - 前端**不拼路径**：只传 `historyId`，源图路径、输出路径、备份路径全部从存储读取。
 - 原子顺序（replace 模式）：① 取目录授权 ② 备份 → 同目录 `.octoshrink-restore-<nanos>.tmp` → flush + fsync → rename 覆盖源文件 ③ `mark_restored` 把状态落盘 ④ 才删本次生成的压缩输出 ⑤ 才删备份目录。中途失败不留半个文件，也不许提前删备份。
 - ③ 落盘失败时**必须保留备份并直接报错**（「文件已恢复，但历史记录状态保存失败（…），原图备份已保留」）：文件已经回到用户手上，此时删备份就是把唯一的原图副本押在一条没写成的记录上。用户重试即可收敛（第二次 `force` 或不 force 都能正常走完）。
-- ④ 删压缩输出前必须判**同一性**：`same_file(output_path, source_path)`（Rust）/ Swift 侧等价判断。记录里的 `source_path` 是规范路径、`output_path` 是当时那个原始字符串，macOS 上 `/var/…` 与 `/private/var/…`、任何软链目录都会让两者**字面不等**；判成"另一个文件"就会把刚写回的原图当成压缩产物删掉（这是真实修过的丢文件 bug，不是洁癖）。
+- ④ 删压缩输出前必须判**同一性**：`same_file(output_path, source_path)`（Rust）/ `sameFile(output, entry.sourcePath)`（Swift）。记录里的 `source_path` 是规范路径、`output_path` 是当时那个原始字符串，macOS 上 `/var/…` 与 `/private/var/…`、任何软链目录都会让两者**字面不等**（Swift 的 `canonicalPath` 走 `resolvingSymlinksInPath()`，它还会把 `/private/var` 折回 `/var`，所以两种写法都可能出现）；判成"另一个文件"就会把刚写回的原图当成压缩产物删掉（这是真实修过的丢文件 bug，不是洁癖）。
 - 冲突保护：仅 replace 模式比对记录时的文件大小 / mtime（容差 2000 ms），任一不符即返回 `conflict=true`；前端弹「这个文件在压缩后又被修改过。恢复原图会覆盖当前版本。」→ 用户确认后带 `force=true` 重试。
 - 恢复后**历史记录不删**，只标 `restored` 并删备份；共享同一备份的兄弟条目一起标记。非 replace 模式没有备份，其"撤销"只删本次压缩输出并移除条目。
 
@@ -272,7 +275,7 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
   - ❌ 不许 `if (days)` / `parseInt(v,10) || 3` 这类真值判断 —— 会把「不保留」静默吞成 3 天（前端已修过两处，`tests/history-view.cjs` 有回归断言）。
   - ❌ 不许把 clamp 写成 `days.clamp(1, 30)` —— 会把 0 变成"保留 1 天"。clamp 只夹越界值，0 原样通过（`clamp_retention` / `Retention.clamp`）。
   - ❌ 不许显示成「保留 0 天」（`Retention.label(0) == "不保留"`）。
-- **`0` 不按时间过期**：它的清理挂在**正常退出**上（Tauri `RunEvent::Exit` → `commands::purge_backups_if_not_retained`；Swift `AppDelegate.applicationWillTerminate` → `HistoryStore.purgeBackupsOnExit()`）。启动时这一档**只扫无人引用的孤儿备份**，不动还有人引用的（`cleanup_expired(0)` / `cleanupExpired(retentionDays: 0)` 里 `expires_by_time = days > 0` 为假）。
+- **`0` 不按时间过期**：它的清理挂在**正常退出**上（Tauri `RunEvent::Exit` → `commands::purge_backups_if_not_retained`；Swift `AppDelegate.applicationWillTerminate` → `HistoryStore.shared.purgeBackupsOnExit()`）。启动时这一档**只扫无人引用的孤儿备份**，不动还有人引用的（`cleanup_expired(0)` / `cleanupExpired(retentionDays: 0)` 里 `expires_by_time = days > 0` 为假）。
   **为什么**：崩溃 / 强杀之后，那次留下的备份可能就是用户原图**唯一还活着的副本**（压缩结果已覆盖了源文件）。这笔欠账留给下一次正常退出收，绝不能在下一次启动时先删。
 - ⚠️ 「不保留」**不改变备份的写入**：`ensure_backup` 照旧在覆盖原文件前写备份，本次会话内随时可恢复。这一档只决定备份的**寿命**（到本次退出为止），不决定"要不要备份"。备份写不成仍然必须放弃覆盖。
 - 退出清理只抹 `backup_path` 并删备份目录，**历史条目本身保留** —— 那是用户的压缩记录，不是原图。前端/历史页读到 `backupExists == false` 就显示「原图备份已清理」并收起恢复按钮；此时 `restore` 必须返回 `BackupGone` / 抛 `RestoreError.backupGone`（「原图备份已清理，无法恢复」），❌ 不许伪装成 `NotRestorable`（"原图未被覆盖，无需恢复"）骗用户。
@@ -307,7 +310,9 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 
 ### 2. L2 的三个强制写法
 
-- **命令行开关集中在一张表**：`engine.rs::cpu_flags(tool, threads)` ↔ Swift `CPUResourcePolicy.flags(for:)`，一一对应：`avifenc → --jobs N`、`oxipng → --threads N`、`cjxl → --num_threads=N`（⚠️ 它的默认 `0` = 按硬件线程数全开，不钉住就是"上限 3 个文件 × 每个用满全部核心"；且 cjxl 的参数是 `--num_threads=` **等号**形式，不是空格分隔）、`cwebp → 只在 N > 1 时给 -mt`（`-mt` 只能开关、不能指定线程数，单 worker 预算下传它就是超发），其余工具（pngquant / gifsicle / cjpeg）不加参数。**新增压缩函数不许自己写 `-mt` / `--jobs` / `--num_threads`**，一律走 `make_command()` / `CLIRunner.run(…) / runToFile(…)`，否则 `tests/cpu-limit.cjs` 与 `engine.rs` 的 `cpu_flags` 单表就会和真实调用分叉。
+- **命令行开关集中在一张表**：`engine.rs::cpu_flags(tool, threads)` ↔ Swift `CPUResourcePolicy.flags(for:)`，逐工具对应：`avifenc → --jobs N`、`oxipng → --threads N`、`cjxl → --num_threads=N`（⚠️ 它的默认 `0` = 按硬件线程数全开，不钉住就是"上限 3 个文件 × 每个用满全部核心"；且 cjxl 的参数是 `--num_threads=` **等号**形式，不是空格分隔）、`cwebp → 只在 N > 1 时给 -mt`（`-mt` 只能开关、不能指定线程数，单 worker 预算下传它就是超发），其余工具（pngquant / gifsicle / cjpeg）不加参数。
+  ⚠️ **cjxl 那行只属于 Direct 线**：Swift 线既不打包 cjxl、`OutputFormat` 里也没有 JXL 档位，所以 `flags(for:)` 只认 avifenc / oxipng / cwebp。这不是漏配 —— 给一条线没有的工具补分支就是死代码；但**新增该线真正会调用的工具时必须两边都补**，别只改一张表。
+  **新增压缩函数不许自己写 `-mt` / `--jobs` / `--num_threads`**，一律走 `make_command()` / `CLIRunner.run(…) / runToFile(…)`，否则 `tests/cpu-limit.cjs` 与 `engine.rs` 的 `cpu_flags` 单表就会和真实调用分叉。
 - **线程类环境变量无条件注入**：`OMP_NUM_THREADS` / `RAYON_NUM_THREADS`（Rust `cpu_env()`，Swift `CLIRunner.environment()`）。Swift 侧这两个变量必须在 `DYLD_FALLBACK_LIBRARY_PATH` 那个 `if let lib` 分支**之外**设置，否则资源目录缺失时预算静默失效。
 - **进程内 crate 走编译期裁剪，不走运行时调线程数**：`oxipng` 的并行度由 `parallel` feature（rayon）决定、其 `Options` 没有 threads 字段；`imagequant` 的 `threads` feature 同理；rayon 全局池一旦初始化就调不动。所以这三个 crate 在 `Cargo.toml` 里一律 `default-features = false`，`ravif` 单独 `with_num_threads(Some(per_task_threads()))`。❌ 不要为"动态调线程"给它们重开 feature，❌ 不要 `rayon::ThreadPoolBuilder::build_global()`。
 
@@ -345,9 +350,10 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - src-tauri/permissions/commands.toml — app 命令 ACL 权限定义
 - src-tauri/src/history.rs + src-tauri/src/app_settings.rs — 历史记录、原图备份、保留期（两条 Tauri 线共用）
 - src-tauri/src/output_transaction.rs — 覆盖事务凭证（`TransactionStore` / `ReplaceTransaction` / `rollback`），启动时 `recover()`
-- swift/Sources/OctoShrinkSwift/Services/HistoryStore.swift — 同上的 Swift 原生线实现（含 `PauseGate`）
+- swift/Sources/OctoShrinkSwift/Services/HistoryStore.swift — 同上的 Swift 原生线实现（`HistoryStore.shared` 全进程唯一）
+- swift/Sources/OctoShrinkSwift/Services/OutputTransactionStore.swift — Swift 线的覆盖事务凭证 + `OutputWriteError` / `StagedWrite`
 - tests/history-view.cjs（`npm run test:frontend`）— 前端历史页/恢复/暂停纯逻辑自检
-- scripts/test_swift_history.sh — Swift 线历史·备份·恢复·PauseGate 自检（真跑文件系统）
+- scripts/test_swift_history.sh — Swift 线历史·备份·覆盖事务·恢复·取消与暂停·CPU 上限自检（真跑文件系统，25 组）
 
 ## App Store 提交完整流程与注意事项
 

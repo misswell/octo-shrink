@@ -66,20 +66,20 @@
 - 🖤 **暗黑模式**：自动 / 亮色 / 暗黑三档
 - 🔓 **完全免费**：MIT 开源协议，无需购买激活码
 
-> 📌 上面「恢复原图 / 压缩历史 / 备份保留期 / 崩溃安全 / 安全暂停 / CPU 使用上限」已合入主干，将随 **v2.5.34** 发布；已发布的 GitHub v2.5.33 与 App Store 2.4.3 尚不包含。
+> 📌 上面「恢复原图 / 压缩历史 / 备份保留期 / 崩溃安全 / 安全暂停 / CPU 使用上限」自 **v2.5.34** 起随 GitHub Releases 发布；App Store 2.4.3 尚不包含。
 
 ## 📦 下载与安装
 
 | 渠道 | 最新版本 | 适合谁 | 获取方式 |
 |------|---------|--------|---------|
-| [GitHub Releases](https://github.com/misswell/octo-shrink/releases) | v2.5.33 | 想要最新版、Windows / Linux 用户 | 下载 DMG / 安装包，直发版支持在线更新 |
+| [GitHub Releases](https://github.com/misswell/octo-shrink/releases) | v2.5.34 | 想要最新版、Windows / Linux 用户 | 下载 DMG / 安装包，直发版支持在线更新 |
 | [Mac App Store](https://apps.apple.com/cn/app/octoshrink-%E5%9B%BE%E7%89%87%E5%8E%8B%E7%BC%A9/id6792604654?mt=12) | 2.4.3 | 只想省心安装与自动更新的 Mac 用户 | 搜索「OctoShrink 图片压缩」，免费 |
 
 > 两条分发线的版本号各自独立递增，因此会出现 App Store 版号低于 GitHub 版的情况；功能差异见下方「三条产物线」。
 
 GitHub Releases 提供：macOS Universal 2 / Apple Silicon / Intel 三种 DMG（均已 Developer ID 签名 + 公证 + 装订），Windows `.exe` / `.msi`，Linux `.deb` / `.AppImage`。
 
-### 当前主干（v2.5.34，待发布）
+### 本次发布（v2.5.34）
 
 压缩历史与原图长期备份、统一恢复服务、覆盖事务与崩溃回滚、历史文件损坏自保、按保留天数自动清理、安全暂停、三线共用的 CPU 使用上限（同时限制并发文件数与单个编码器内部线程数）、沙盒版跨启动文件访问授权、Swift 原生线补齐到与 Tauri 版功能对齐，以及官网改版。
 
