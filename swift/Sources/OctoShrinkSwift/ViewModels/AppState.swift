@@ -209,6 +209,82 @@ final class AppState: ObservableObject {
         restore(entry: entry)
     }
 
+    /// 另存为：历史里的压缩结果就是磁盘上的一个文件，复制一份到用户挑的位置。
+    func saveHistoryOutput(_ entry: HistoryEntry) {
+        guard let outPath = entry.outputPath, fileExists(at: outPath) else {
+            showToast("压缩结果已不存在")
+            refreshHistory()
+            return
+        }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = (outPath as NSString).lastPathComponent
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        showToast(Self.copyOverwriting(from: outPath, to: dest.path)
+            ? "已保存到: \(dest.lastPathComponent)"
+            : "保存失败，请重试")
+    }
+
+    /// 对比查看：备份还在就比备份（覆盖模式的真正原图），否则比源文件本身。
+    func compareHistoryEntry(_ entry: HistoryEntry) {
+        guard let outPath = entry.outputPath, fileExists(at: outPath) else {
+            showToast("压缩结果已不存在")
+            refreshHistory()
+            return
+        }
+        let result = CompressResult(historyEntry: entry)
+        let original = (entry.backupPath.flatMap { fileExists(at: $0) ? $0 : nil }) ?? entry.sourcePath
+        CompareWindowController.show(
+            appState: self,
+            originalPath: original,
+            result: result,
+            allResults: [result]
+        )
+    }
+
+    /// 后缀 / 目录模式的对等「反悔」= 删掉这次生成的压缩结果。
+    /// 删的是用户目录里的真实文件，所以必须二次确认；原图从头到尾没动过。
+    func deleteHistoryOutput(_ entry: HistoryEntry) {
+        guard let output = entry.outputPath else { return }
+        let alert = NSAlert()
+        alert.messageText = "删除这次压缩结果？"
+        alert.informativeText = "将删除 \(output) 并移除这条历史记录。原图未被覆盖，不受影响。"
+        alert.addButton(withTitle: "删除")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        restore(entry: entry)
+    }
+
+    /// 历史行的复制日志：记录里没有本批次的压缩参数快照，只报历史上记下来的那些事实。
+    func copyHistoryLog(_ entry: HistoryEntry) {
+        var lines: [String] = []
+        lines.append("版本: Swift")
+        lines.append("=== OctoShrink 压缩历史 ===")
+        lines.append("")
+        lines.append("文件: \(entry.sourcePath)")
+        lines.append("时间: \(historyTimeText(entry.createdAt))")
+        lines.append("状态: \(historyStatusText(entry))")
+        lines.append("")
+        lines.append("--- 压缩结果 ---")
+        lines.append("输出: \(entry.outputPath ?? entry.sourcePath)")
+        lines.append("输出方式: \(entry.outputMode)")
+        if entry.status == .recoveryAvailable {
+            lines.append("明细: 已丢失（这条记录是按原图备份重建出来的）")
+        } else {
+            lines.append("原始大小: \(CompressResult.formatBytesJS(entry.originalSize)) (\(entry.originalSize) bytes)")
+            lines.append("压缩后大小: \(CompressResult.formatBytesJS(entry.compressedSize)) (\(entry.compressedSize) bytes)")
+            lines.append("压缩率: \(entry.savings >= 0 ? "-" : "+")\(String(format: "%.1f", abs(entry.savings)))%")
+            lines.append("输出格式: \(entry.outType.isEmpty ? "(未知)" : entry.outType)")
+            lines.append("算法: \(entry.algorithm.isEmpty ? "(未知)" : entry.algorithm)")
+        }
+        lines.append("")
+        lines.append("--- 原图备份 ---")
+        lines.append(entry.backupPath ?? "(无)")
+        let text = lines.joined(separator: "\n")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        showToast("压缩日志已复制到剪贴板")
+    }
+
     /// 清空历史 = 连原图备份一起删，是全 App 破坏性最大的操作：判据必须在后端，
     /// 不能指望前端把按钮禁用住。
     func clearHistory() {
@@ -225,7 +301,12 @@ final class AppState: ObservableObject {
         }
         let alert = NSAlert()
         alert.messageText = "确定要清空 \(historyEntries.count) 条历史记录吗？"
-        alert.informativeText = "只清理 OctoShrink 保存的原图备份，不会删除你的图片。"
+        // 清空就是手动到期：备份立刻删掉，不用等保留期。说清楚删的是 OctoShrink 的副本，
+        // 以及这一次到底会带走几份 —— 「不会删除你的图片」必须是真的。
+        let pendingBackups = historyEntries.filter { $0.backupExists }.count
+        alert.informativeText = pendingBackups > 0
+            ? "同时立即删除 OctoShrink 保存的 \(pendingBackups) 份原图备份，不必等保留期到期。不会删除你的任何图片文件。"
+            : "OctoShrink 目前没有保存原图备份，这次只清记录。不会删除你的任何图片文件。"
         alert.addButton(withTitle: "清空")
         alert.addButton(withTitle: "取消")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -907,7 +988,11 @@ final class AppState: ObservableObject {
         }
         markItemsRestored(forSource: entry.sourcePath)
         refreshHistory()
-        showToast("已恢复原图: \(entry.fileName)")
+        // 非 replace 模式的原图从没被盖过，后端做的是"删掉这次的压缩产物" ——
+        // 报「已恢复原图」等于把一件没发生过的事说给用户听。
+        showToast(entry.outputMode == "replace"
+            ? "已恢复原图: \(entry.fileName)"
+            : "已删除这次压缩结果: \(entry.fileName)")
         return true
     }
 

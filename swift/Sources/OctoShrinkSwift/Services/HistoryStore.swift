@@ -129,6 +129,9 @@ struct HistoryEntry: Codable, Identifiable {
     /// 派生字段：读取时刷新。
     var sourceExists: Bool
     var backupExists: Bool
+    /// 压缩结果此刻还在不在：历史页的「另存为 / 对比 / 删除这次压缩结果」都靠它决定，
+    /// 用户手动删过产物之后这些按钮就不该出现。
+    var outputExists: Bool
 
     init(
         id: String,
@@ -148,7 +151,8 @@ struct HistoryEntry: Codable, Identifiable {
         restoredAt: Int64?,
         outputModifiedAt: Int64?,
         sourceExists: Bool,
-        backupExists: Bool
+        backupExists: Bool,
+        outputExists: Bool = false
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -168,12 +172,13 @@ struct HistoryEntry: Codable, Identifiable {
         self.outputModifiedAt = outputModifiedAt
         self.sourceExists = sourceExists
         self.backupExists = backupExists
+        self.outputExists = outputExists
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, createdAt, expiresAt, sourcePath, outputPath, fileName, outputMode
         case originalSize, compressedSize, savings, outType, algorithm, backupPath
-        case status, restoredAt, outputModifiedAt, sourceExists, backupExists
+        case status, restoredAt, outputModifiedAt, sourceExists, backupExists, outputExists
     }
 
     init(from decoder: Decoder) throws {
@@ -196,6 +201,7 @@ struct HistoryEntry: Codable, Identifiable {
         outputModifiedAt = try box.decodeIfPresent(Int64.self, forKey: .outputModifiedAt)
         sourceExists = try box.decodeIfPresent(Bool.self, forKey: .sourceExists) ?? true
         backupExists = try box.decodeIfPresent(Bool.self, forKey: .backupExists) ?? false
+        outputExists = try box.decodeIfPresent(Bool.self, forKey: .outputExists) ?? false
     }
 
     /// 备份 key = 备份目录名；目录名 = backups/<key>/original.<ext>
@@ -494,6 +500,7 @@ final class HistoryStore: @unchecked Sendable {
             var item = entry
             item.sourceExists = fileExists(at: entry.sourcePath)
             item.backupExists = entry.backupPath.map { fileExists(at: $0) } ?? false
+            item.outputExists = entry.outputPath.map { fileExists(at: $0) } ?? false
             if !item.sourceExists && item.status == .compressed { item.status = .missing }
             return item
         }
@@ -941,6 +948,78 @@ private struct BackupMeta: Codable {
     var originalSize: Int64 = 0
     var originalModifiedAt: Int64? = nil
     var originalExtension: String = ""
+}
+
+// MARK: - 历史页每一行能做什么
+
+/// 只有真正被覆盖过、且备份还在的记录才谈得上「恢复原图」。
+/// 放在服务层而不是视图层：前端 `canRestoreHistory` 与这条判据必须逐字一致，
+/// 两边都有自检钉住（`scripts/test_swift_history.sh` / `tests/history-view.cjs`）。
+func historyCanRestore(_ entry: HistoryEntry) -> Bool {
+    if entry.status == .recoveryAvailable {
+        return entry.backupExists && entry.sourceExists
+    }
+    return entry.status == .compressed
+        && entry.outputMode == "replace"
+        && entry.backupExists
+        && entry.sourceExists
+}
+
+enum HistoryRowAction: Hashable {
+    case saveAs        // 另存为：压缩结果还在手上
+    case compare       // 对比查看：原图与压缩结果两边都在
+    case restore       // 恢复原图：覆盖模式且备份还在
+    case deleteOutput  // 删除这次压缩结果：后缀 / 目录模式的对等撤销
+    case finder        // 在访达中显示
+    case copyLog       // 复制日志
+
+    var title: String {
+        switch self {
+        case .saveAs: return "另存为"
+        case .compare: return "对比查看"
+        case .restore: return "恢复原图"
+        case .deleteOutput: return "删除这次压缩结果"
+        case .finder: return "在访达中显示"
+        case .copyLog: return "复制日志"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .saveAs: return "square.and.arrow.down"
+        case .compare: return "rectangle.split.2x1"
+        case .restore: return "arrow.uturn.backward"
+        case .deleteOutput: return "trash"
+        case .finder: return "folder"
+        case .copyLog: return "doc.on.doc"
+        }
+    }
+}
+
+/// 历史行的按钮，与「压缩完成」那一行同一套动作。
+///
+/// 判据只用 `decorate` 现算出来的三个 exists 标志：按下去却不成立的按钮一律不出现 ——
+/// 后缀模式的原图从没被覆盖过，给它「恢复原图」只会让人以为能撤销，而真正对等的动作是
+/// 删掉这次生成的产物；备份已经清掉的记录则连一个反悔按钮都不该有。
+func historyRowActions(_ entry: HistoryEntry) -> [HistoryRowAction] {
+    var actions: [HistoryRowAction] = []
+    // 「原图还摸得着吗」按模式判：覆盖模式只有备份算数（源位置此刻躺着的是压缩结果），
+    // 后缀 / 目录模式的源文件本身就没被动过。
+    let originalAvailable = entry.outputMode == "replace"
+        ? entry.backupExists
+        : entry.sourceExists
+    if entry.outputExists { actions.append(.saveAs) }
+    // 两边都是真实存在、且不是同一个文件才比得出差别 —— 备份没了还挂一个「对比」，
+    // 比的是那张压缩图和它自己。
+    if entry.outputExists && originalAvailable { actions.append(.compare) }
+    if historyCanRestore(entry) {
+        actions.append(.restore)
+    } else if entry.status == .compressed && entry.outputMode != "replace" && entry.outputExists {
+        actions.append(.deleteOutput)
+    }
+    actions.append(.finder)
+    actions.append(.copyLog)
+    return actions
 }
 
 // MARK: - App 级设置（保留天数）

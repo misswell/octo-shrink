@@ -70,6 +70,7 @@ const context = vm.createContext({
   },
   iconMarkup: name => '<svg>' + name + '</svg>',
   showToast: message => toasts.push(message),
+  copyTextToClipboard: () => true,
   updateQueueSummary() {}, emitCompareResultsChanged() {}, showResults() {},
   renderRestoredActions() {},
   applyQueueView() {}, updateBulkActionButtons() {}, setPauseButtonVisible() {},
@@ -88,7 +89,8 @@ const context = vm.createContext({
       // 后端只在没被 force 时报冲突，否则就是死循环了。
       return restoreReply.conflict && !args.force
         ? restoreReply
-        : { success: true, conflict: false, filePath: '/Pictures/a.png', historyIds: ['e1'] };
+        : { success: true, conflict: false, filePath: '/Pictures/a.png',
+            historyIds: ['e1'], outputMode: 'replace' };
     }
     return null;
   },
@@ -98,6 +100,7 @@ vm.runInContext(slice('function basename(', 'function imageFileSrc('), context);
 vm.runInContext(slice('function formatBytes(', '// ─── 页面导航'), context);
 vm.runInContext(slice('var VIEWS = ', '// ─── 暂停 / 继续'), context);
 vm.runInContext(slice('var RESTORE_CONFLICT_TEXT', 'async function exportAll('), context);
+vm.runInContext(slice('function renderQueueResultActions(', 'function copyCompressLog('), context);
 vm.runInContext(slice('var historyEntries = [];', '// ─── 设置页'), context);
 vm.runInContext(
   slice('// ─── 设置页：原图备份保留时间', '// ─── 设置页：CPU 使用上限'), context);
@@ -109,10 +112,12 @@ const entry = extra => Object.assign({
   outputMode: 'replace', originalSize: 2048576, compressedSize: 204800, savings: 90,
   outType: 'webp', algorithm: 'webp-mozquant', backupPath: '/app/backup/a.png',
   status: 'compressed', restoredAt: null, outputModifiedAt: 0,
-  sourceExists: true, backupExists: true,
+  sourceExists: true, backupExists: true, outputExists: true,
 }, extra);
 const text = node => (node.children.length ? node.children.map(text).join(' ') : node.textContent);
 const last = name => [...invoked].reverse().find(call => call[0] === name);
+/// 一行的按钮身份：dataset.historyAction 就是它要做的事，比数个数更能说明问题。
+const actionsOf = row => row.children[4].children.map(btn => btn.dataset.historyAction);
 
 (async () => {
   historyReply = [entry({}), entry({ id: 'e2', fileName: 'b.png', sourcePath: '/Pictures/b.png' })];
@@ -129,17 +134,69 @@ const last = name => [...invoked].reverse().find(call => call[0] === name);
   assert.match(text(row), /webp-mozquant/);
   assert.match(text(row), /已压缩/);
 
-  // 只有覆盖原文件、且备份与原位置都在，才给恢复入口。
-  assert.equal(row.children[4].children.length, 2, '恢复原图 + 访达');
-  const suffix = entry({ id: 'e3', outputMode: 'suffix', status: 'compressed' });
+  // 一行的按钮 = 这条记录此刻真能做到的事；只有覆盖过且备份、原位置都在才谈得上恢复。
+  assert.deepEqual(actionsOf(row), ['save', 'compare', 'restore', 'finder', 'log'],
+    '覆盖模式：与压缩完成那一行同一套动作');
+
+  const suffix = entry({ id: 'e3', outputMode: 'suffix', status: 'compressed',
+    outputPath: '/Pictures/a_compressed.png' });
   ids.historyList.children = [];
   context.historyEntries = [suffix];
   context.renderHistory();
-  assert.ok(text(ids.historyList.children[0]).includes('原图未覆盖'));
-  assert.equal(ids.historyList.children[0].children[4].children.length, 1, '后缀模式没有恢复按钮');
+  const suffixRow = ids.historyList.children[0];
+  assert.ok(text(suffixRow).includes('原图未覆盖'));
+  // 后缀模式的原图从没被盖过：给它「恢复原图」是假的，对等的反悔是删掉这次产物。
+  assert.deepEqual(actionsOf(suffixRow), ['save', 'compare', 'deleteOutput', 'finder', 'log']);
+  assert.ok(!actionsOf(suffixRow).includes('restore'), '后缀模式绝不许出现恢复原图');
+
+  // 删除这次压缩结果 = 同一个后端服务、同样只交 historyId，前端不碰文件路径。
+  invoked.length = 0;
+  toasts.length = 0;
+  suffixRow.children[4].children[2].handlers.click();
+  await flush();
+  // 跨 vm 上下文的对象比不了引用，逐字段来。
+  assert.equal(last('restore_history_entry')[1].historyId, 'e3');
+  assert.equal(last('restore_history_entry')[1].force, false,
+    '非覆盖模式没有"原图被改过"这回事，不该偷偷 force 什么');
+  assert.match(toasts[toasts.length - 1], /已删除这次压缩结果/, '不许把删产物报成恢复原图');
+  assert.doesNotMatch(toasts[toasts.length - 1], /已恢复原图/);
+
+  // 用户自己把压缩产物删了：指向它的那几个按钮一起收起。
+  assert.deepEqual(
+    actionsOf(context.historyRow(entry({ id: 'e4', outputMode: 'suffix',
+      outputPath: '/Pictures/a_compressed.png', outputExists: false }))),
+    ['finder', 'log'],
+    '后缀模式下产物没了，这一行就不配再有反悔按钮');
+  // 但覆盖模式不一样：产物被删了，原图备份还在 → 恢复必须照给，那才是这条记录的意义。
+  assert.ok(actionsOf(context.historyRow(entry({ outputExists: false }))).includes('restore'),
+    '压缩结果被删不影响"换回原图"');
+  // 备份被清掉：恢复不许继续挂在页面上骗人，也不能退化成删源文件。
+  assert.deepEqual(
+    actionsOf(context.historyRow(entry({ backupExists: false }))),
+    ['save', 'finder', 'log'],
+    '原图备份已清理 → 恢复和对比一起收起');
+  // 已恢复的记录：反悔已经用掉了。
+  assert.ok(!actionsOf(context.historyRow(entry({ status: 'restored', restoredAt: entry().createdAt })))
+    .some(name => name === 'restore' || name === 'deleteOutput'),
+    '已恢复的行不再提供反悔按钮');
   assert.ok(text(context.historyRow(entry({ status: 'restored', restoredAt: entry().createdAt }))).includes('已恢复 · 今天'));
   assert.ok(text(context.historyRow(entry({ sourceExists: false }))).includes('原文件位置不存在'));
   assert.ok(text(context.historyRow(entry({ backupExists: false }))).includes('原图备份已清理'));
+
+  // 主队列那一行的反悔按钮同样跟着输出方式走文案：后缀模式删的是产物，不是"恢复原图"。
+  vm.runInContext(slice('function renderQueueResultActions(', 'function copyCompressLog('), context);
+  const queueTitles = mode => {
+    const queueRow = makeEl('div');
+    context.renderQueueResultActions(queueRow, {
+      file: '/Pictures/a.png', success: true, outputMode: mode,
+      outputPath: '/Pictures/a.png',
+    });
+    return queueRow.querySelector('.queue-item-actions').children.map(b => b.title);
+  };
+  assert.ok(queueTitles('replace').includes('恢复原图'), '覆盖模式仍然叫恢复原图');
+  const suffixTitles = queueTitles('suffix');
+  assert.ok(!suffixTitles.includes('恢复原图'), '后缀模式的队列行不许写恢复原图');
+  assert.ok(suffixTitles.includes('删除这次压缩结果'));
 
   // ── history.json 损坏后按备份重建出来的条目：明细丢了，但原图还能一键恢复 ──
   const recovery = context.historyRow(
@@ -148,11 +205,12 @@ const last = name => [...invoked].reverse().find(call => call[0] === name);
   assert.match(recoveryText, /检测到可恢复的原图备份/);
   assert.doesNotMatch(recoveryText, /节省/, '没有真实明细就不许报一个算出来的 0.0%');
   assert.match(recoveryText, /按备份重建/);
-  assert.equal(recovery.children[4].children.length, 2, '重建条目必须给出恢复按钮');
-  assert.equal(
-    context.historyRow(entry({ id: 'r2', status: 'recoveryAvailable', backupExists: false }))
-      .children[4].children.length,
-      1, '备份已被清掉的重建条目不该再挂恢复按钮');
+  assert.ok(actionsOf(recovery).includes('restore'), '重建条目必须给出恢复按钮');
+  assert.deepEqual(
+    actionsOf(context.historyRow(
+      entry({ id: 'r2', status: 'recoveryAvailable', backupExists: false }))),
+    ['save', 'finder', 'log'],
+    '备份已被清掉的重建条目不该再挂恢复按钮');
 
   // 冲突：先确认，再带 force 重来；取消则一发都不发。
   restoreReply = { success: false, conflict: true, filePath: '/Pictures/a.png', error: '这个文件在压缩后又被修改过', historyIds: [] };
@@ -259,8 +317,15 @@ const last = name => [...invoked].reverse().find(call => call[0] === name);
   context.renderHistory();
   assert.equal(ids.historyClearBtn.disabled, false, '批次结束后必须恢复可用');
   invoked.length = 0;
+  // 清空确认框要数得清这一次带走几份原图备份 —— 「手动清理，不用等过期」是这一键的全部含义。
+  let question = '';
+  context.confirm = message => { question = message; return true; };
+  context.historyEntries = [entry({}), entry({ id: 'e9', backupExists: false })];
   await context.clearHistory();
+  context.confirm = () => confirmAnswer;
+  assert.match(question, /立即删除 OctoShrink 保存的 1 份原图备份/);
+  assert.match(question, /不会删除你的任何图片文件/);
   assert.ok(invoked.some(call => call[0] === 'clear_history'), '空闲时清空照常走后端');
 
-  console.log('PASS: dense history rows, per-state copy, 重建条目可恢复, restore without paths, conflict force retry, queue restore shares the service, 不保留档位, 压缩中拒绝清空');
+  console.log('PASS: dense history rows, 每行按钮=这条记录真能做的事, 重建条目可恢复, restore without paths, conflict force retry, queue restore shares the service, 不保留档位, 压缩中拒绝清空');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -946,6 +946,90 @@ do {
     check(scheduler.state == "idle", "批次收尾回到 idle")
 }
 
+// ─── 26. 历史页每一行的按钮 = 这条记录此刻真能做到的事 ──────────────────────
+print("[26] historyRowActions 与压缩完成行对齐")
+do {
+    let store = tempStore("26")
+    let dir = NSTemporaryDirectory() + "octoshrink-check-26"
+    let tail: [HistoryRowAction] = [.finder, .copyLog]
+
+    // ① replace + 备份还在 → 有「恢复原图」，没有「删除这次压缩结果」
+    let covered = canonicalPath(dir + "/a.png")
+    makeFile(covered, [1, 2, 3])
+    var replaceMode = result(file: covered, size: 3)
+    replaceMode.outputMode = "replace"
+    let replaceEntry = HistoryEntry.record(
+        source: covered, result: replaceMode, output: covered,
+        backup: store.ensureBackup(for: covered), retentionDays: 3)
+    store.add(replaceEntry)
+    check(historyRowActions(store.find(replaceEntry.id)!) == [.saveAs, .compare, .restore] + tail,
+          "覆盖模式：另存为 + 对比 + 恢复原图，而不是删产物")
+
+    // ② 后缀模式：原图从没被盖过，对等的反悔是删掉产物，而不是"恢复"
+    let kept = canonicalPath(dir + "/b.png")
+    let keptOut = ((kept as NSString).deletingPathExtension) + "_compressed.png"
+    makeFile(kept, [7])
+    makeFile(keptOut, [8, 8])
+    var suffixMode = result(file: kept, size: 2)
+    suffixMode.outputMode = "suffix"
+    let suffixEntry = HistoryEntry.record(
+        source: kept, result: suffixMode, output: keptOut,
+        backup: nil, retentionDays: 3)
+    store.add(suffixEntry)
+    check(historyRowActions(store.find(suffixEntry.id)!) == [.saveAs, .compare, .deleteOutput] + tail,
+          "后缀模式：给「删除这次压缩结果」，绝不给「恢复原图」")
+
+    // ③ 用户自己把压缩产物删了：指向它的三个按钮一起收起
+    try? fm.removeItem(atPath: keptOut)
+    check(historyRowActions(store.find(suffixEntry.id)!) == tail,
+          "压缩结果已不在了，这一行就不配再有反悔按钮")
+
+    // ④ 备份被清掉：恢复不能继续挂在页面上骗人
+    let orphan = canonicalPath(dir + "/c.png")
+    makeFile(orphan, [4, 5, 6])
+    var backupGone = result(file: orphan, size: 3)
+    backupGone.outputMode = "replace"
+    let goneEntry = HistoryEntry.record(
+        source: orphan, result: backupGone, output: orphan,
+        backup: store.ensureBackup(for: orphan), retentionDays: 3)
+    store.add(goneEntry)
+    check(historyRowActions(store.find(goneEntry.id)!).contains(.restore),
+          "备份在时先给恢复")
+    try? fm.removeItem(atPath: store.find(goneEntry.id)!.backupPath!)
+    check(historyRowActions(store.find(goneEntry.id)!) == [.saveAs] + tail,
+          "原图备份已清理 → 恢复和对比一起收起")
+
+    // ⑤ 已恢复的记录：反悔已经用掉了，不再给第二次
+    let undone = canonicalPath(dir + "/d.png")
+    makeFile(undone, [9])
+    var again = result(file: undone, size: 1)
+    again.outputMode = "replace"
+    let restoredEntry = HistoryEntry.record(
+        source: undone, result: again, output: undone,
+        backup: store.ensureBackup(for: undone), retentionDays: 3)
+    store.add(restoredEntry)
+    _ = try? store.restore(entry: store.find(restoredEntry.id)!, force: false)
+    let doneActions = historyRowActions(store.find(restoredEntry.id)!)
+    check(!doneActions.contains(.restore) && !doneActions.contains(.deleteOutput),
+          "已恢复的行不再提供反悔按钮")
+
+    // ⑥ history.json 损坏后按备份重建的条目：明细丢了，恢复仍然必须在
+    let rebuiltSource = canonicalPath(dir + "/e.png")
+    makeFile(rebuiltSource, [1])
+    let rebuiltBackup = canonicalPath(dir + "/e-backup.png")
+    makeFile(rebuiltBackup, [2])
+    let rebuilt = HistoryEntry(
+        id: "recovery-row", createdAt: OctoClock.nowMillis, expiresAt: OctoClock.nowMillis,
+        sourcePath: rebuiltSource, outputPath: rebuiltSource,
+        fileName: "e.png", outputMode: "replace",
+        originalSize: 1, compressedSize: 1, savings: 0, outType: "png", algorithm: "",
+        backupPath: rebuiltBackup, status: .recoveryAvailable,
+        restoredAt: nil, outputModifiedAt: nil,
+        sourceExists: true, backupExists: true, outputExists: true)
+    check(historyRowActions(rebuilt) == [.saveAs, .compare, .restore] + tail,
+          "重建条目照样给恢复按钮 —— 它存在的意义就是这个")
+}
+
 print(failures == 0
       ? "\n✓ Swift 历史 / 备份 / 暂停 / CPU 上限自检全部通过"
       : "\n✗ Swift 自检失败 \(failures) 项")

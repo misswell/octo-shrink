@@ -672,10 +672,15 @@ function renderQueueResultActions(row, result) {
 
   var actionDefs = [];
   if (result.success) {
+    // 后缀 / 目录模式的原图从没被覆盖过：那一行按下去删的是这次生成的产物，
+    // 按钮就不能写着「恢复原图」。历史页同一套判据（historyRowActionDefs）。
+    var undo = result.outputMode === 'replace'
+      ? { action: 'restore', title: '恢复原图', icon: iconMarkup('restore', true) }
+      : { action: 'restore', title: '删除这次压缩结果', icon: iconMarkup('trash', true), danger: true };
     actionDefs = [
       { action: 'save', title: '另存为', icon: iconMarkup('save', true) },
       { action: 'compare', title: '对比查看', icon: iconMarkup('compare', true) },
-      { action: 'restore', title: '恢复原图', icon: iconMarkup('restore', true) },
+      undo,
       { action: 'finder', title: '在访达中显示', icon: iconMarkup('finder', true) },
     ];
   } else {
@@ -687,7 +692,7 @@ function renderQueueResultActions(row, result) {
 
   actionDefs.forEach(function(def) {
     var btn = document.createElement('button');
-    btn.className = 'queue-action-btn';
+    btn.className = 'queue-action-btn' + (def.danger ? ' danger' : '');
     btn.type = 'button';
     btn.title = def.title;
     btn.innerHTML = def.icon;
@@ -736,7 +741,13 @@ function copyCompressLog(result) {
   lines.push('');
   lines.push('--- \u9519\u8bef\u4fe1\u606f ---');
   lines.push(result.error ? result.error : '(\u65e0)');
-  var text = lines.join('\n');
+  var ok = copyTextToClipboard(lines.join('\n'));
+  showToast(ok ? '\u538b\u7f29\u65e5\u5fd7\u5df2\u590d\u5236\u5230\u526a\u8d34\u677f' : '\u590d\u5236\u5931\u8d25\uff0c\u8bf7\u624b\u52a8\u9009\u4e2d\u65e5\u5fd7\u6587\u672c');
+}
+
+/// \u590d\u5236\u6587\u672c\u5230\u526a\u8d34\u677f\u3002execCommand \u662f\u6c99\u76d2 WebKit \u91cc\u552f\u4e00\u7a33\u7684\u8def\u5f84\uff1a
+/// navigator.clipboard \u8981\u7528\u6237\u624b\u52bf + \u6743\u9650\uff0cApp Store \u7248\u62ff\u4e0d\u5230\u3002\u8fd4\u56de\u662f\u5426\u6210\u529f\uff0c\u6587\u6848\u7531\u8c03\u7528\u65b9\u51b3\u5b9a\u3002
+function copyTextToClipboard(text) {
   var ta = document.createElement('textarea');
   ta.value = text;
   ta.style.position = 'fixed';
@@ -749,7 +760,7 @@ function copyCompressLog(result) {
   var ok = false;
   try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
   document.body.removeChild(ta);
-  showToast(ok ? '\u538b\u7f29\u65e5\u5fd7\u5df2\u590d\u5236\u5230\u526a\u8d34\u677f' : '\u590d\u5236\u5931\u8d25\uff0c\u8bf7\u624b\u52a8\u9009\u4e2d\u65e5\u5fd7\u6587\u672c');
+  return ok;
 }
 
 function renderRestoredActions(row, filePath) {
@@ -1161,7 +1172,12 @@ async function restoreOriginal(filePath, force) {
     showToast(outcome.error || '恢复失败');
     return;
   }
-  showToast('已恢复原图: ' + basename(filePath));
+  // 「这条记录到底是什么模式」以后端说的为准：缓存里的 result 可能已经不是这一批的了。
+  var mode = outcome.outputMode
+    || (results.find(function(r) { return r.file === filePath; }) || {}).outputMode;
+  showToast(mode === 'replace'
+    ? '已恢复原图: ' + basename(filePath)
+    : '已删除这次压缩结果: ' + basename(filePath));
   afterRestore(outcome.filePath || filePath);
 }
 
@@ -1349,6 +1365,114 @@ function historyStatusText(entry) {
   return '已压缩';
 }
 
+/// 历史行的按钮，与队列「压缩完成」那一行同一套动作 —— 判据必须和 Swift 的
+/// `historyRowActions` 逐条一致：按下去不成立的按钮一个都不许出现。
+/// 后缀模式的原图从没被覆盖过，给它「恢复原图」是假的；对等的反悔是删掉产物。
+function historyRowActionDefs(entry) {
+  var isReplace = entry.outputMode === 'replace';
+  // 「原图还摸得着吗」按模式判：覆盖模式只有备份算数（源位置此刻躺着的是压缩结果），
+  // 后缀 / 目录模式的源文件本身就没被动过。
+  var originalAvailable = isReplace ? !!entry.backupExists : !!entry.sourceExists;
+  var defs = [];
+  if (entry.outputExists) {
+    defs.push({ action: 'save', title: '另存为', icon: 'save' });
+  }
+  // 两边都真实存在才比得出差别 —— 备份没了还挂一个「对比」，比的是那张压缩图和它自己。
+  if (entry.outputExists && originalAvailable) {
+    defs.push({ action: 'compare', title: '对比查看', icon: 'compare' });
+  }
+  if (canRestoreHistory(entry)) {
+    defs.push({ action: 'restore', title: '恢复原图', icon: 'restore' });
+  } else if (entry.status === 'compressed' && !isReplace && entry.outputExists) {
+    defs.push({ action: 'deleteOutput', title: '删除这次压缩结果', icon: 'trash' });
+  }
+  defs.push({ action: 'finder', title: '在访达中显示', icon: 'finder' });
+  defs.push({ action: 'log', title: '复制日志', icon: 'copy' });
+  return defs;
+}
+
+/// 历史条目 → 对比窗口的载荷。字段名必须对齐 Rust 的 `CompressResult`
+/// （`type` 而不是 `outType`，尺寸还要给已经格式化好的字符串），
+/// 且只有备份真在的时候才填 `backupPath` —— 否则 compare_window.js 会把
+/// "已被压缩结果占着的源文件"当成原图来比。
+function historyCompareResult(entry) {
+  return {
+    file: entry.sourcePath,
+    success: true,
+    originalSize: entry.originalSize,
+    compressedSize: entry.compressedSize,
+    originalSizeFormatted: formatBytes(entry.originalSize),
+    compressedSizeFormatted: formatBytes(entry.compressedSize),
+    savings: entry.savings,
+    type: entry.outType,
+    algorithm: entry.algorithm,
+    outputMode: entry.outputMode,
+    outputPath: entry.outputPath || entry.sourcePath,
+    backupPath: entry.backupExists ? entry.backupPath : null,
+  };
+}
+
+function openCompareFromHistory(entry) {
+  if (!entry.outputExists) {
+    showToast('压缩结果已不存在');
+    refreshHistory();
+    return;
+  }
+  invoke('open_compare_window', {
+    payload: { results: [historyCompareResult(entry)], index: 0 },
+  }).catch(function(err) {
+    showToast('打开对比窗口失败: ' + (err.message || err));
+  });
+}
+
+async function saveHistoryOutput(entry) {
+  if (!entry.outputExists || !entry.outputPath) {
+    showToast('压缩结果已不存在');
+    refreshHistory();
+    return;
+  }
+  const savedPath = await invoke('save_file', { sourcePath: entry.outputPath });
+  if (savedPath) showToast('已保存到: ' + basename(savedPath));
+}
+
+/// 后缀 / 目录模式的对等「反悔」= 删掉这次生成的压缩结果。
+/// 删的是用户目录里的真实文件，所以必须二次确认；原图从头到尾没动过。
+async function deleteHistoryOutput(entry) {
+  if (!confirm('删除这次压缩结果？\n将删除 ' + entry.outputPath
+    + '，并移除这条历史记录。原图未被覆盖，不受影响。')) return;
+  // 后缀 / 目录模式没有"原图被改过"这回事，force 在这儿没有意义，照默认走同一个服务。
+  await restoreFromHistory(entry);
+}
+
+/// 历史行的复制日志：记录里没有本批次的压缩参数快照，只报历史上记下来的那些事实。
+function copyHistoryLog(entry) {
+  var lines = [];
+  lines.push('版本: ' + BUILD_VARIANT);
+  lines.push('=== OctoShrink 压缩历史 ===');
+  lines.push('');
+  lines.push('文件: ' + entry.sourcePath);
+  lines.push('时间: ' + historyTime(entry.createdAt));
+  lines.push('状态: ' + historyStatusText(entry));
+  lines.push('');
+  lines.push('--- 压缩结果 ---');
+  lines.push('输出: ' + (entry.outputPath || entry.sourcePath));
+  lines.push('输出方式: ' + entry.outputMode);
+  if (entry.status === 'recoveryAvailable') {
+    lines.push('明细: 已丢失（这条记录是按原图备份重建出来的）');
+  } else {
+    lines.push('原始大小: ' + formatBytes(entry.originalSize) + ' (' + entry.originalSize + ' bytes)');
+    lines.push('压缩后大小: ' + formatBytes(entry.compressedSize) + ' (' + entry.compressedSize + ' bytes)');
+    lines.push('压缩率: ' + (entry.savings >= 0 ? '-' : '+') + Math.abs(entry.savings).toFixed(1) + '%');
+    lines.push('输出格式: ' + (entry.outType || '(未知)'));
+    lines.push('算法: ' + (entry.algorithm || '(未知)'));
+  }
+  lines.push('');
+  lines.push('--- 原图备份 ---');
+  lines.push(entry.backupPath || '(无)');
+  copyTextToClipboard(lines.join('\n'));
+  showToast('压缩日志已复制到剪贴板');
+}
+
 function historyRow(entry) {
   var row = document.createElement('div');
   var isRecovery = entry.status === 'recoveryAvailable';
@@ -1394,26 +1518,16 @@ function historyRow(entry) {
 
   var actions = document.createElement('span');
   actions.className = 'history-actions';
-  if (canRestoreHistory(entry)) {
-    var restoreBtn = document.createElement('button');
-    restoreBtn.className = 'btn btn-small';
-    restoreBtn.type = 'button';
-    restoreBtn.innerHTML = iconMarkup('restore', true) + ' 恢复原图';
-    restoreBtn.addEventListener('click', function() { restoreFromHistory(entry); });
-    actions.appendChild(restoreBtn);
-  }
-  var finderBtn = document.createElement('button');
-  finderBtn.className = 'queue-action-btn';
-  finderBtn.type = 'button';
-  finderBtn.title = '在访达中显示';
-  finderBtn.innerHTML = iconMarkup('finder', true);
-  finderBtn.addEventListener('click', function() {
-    var target = entry.outputPath && entry.outputPath !== entry.sourcePath && entry.sourceExists
-      ? entry.outputPath
-      : entry.sourcePath;
-    invoke('open_in_finder', { filePath: target }).catch(function() {});
+  historyRowActionDefs(entry).forEach(function(def) {
+    var btn = document.createElement('button');
+    btn.className = 'queue-action-btn';
+    btn.type = 'button';
+    btn.title = def.title;
+    btn.dataset.historyAction = def.action;
+    btn.innerHTML = iconMarkup(def.icon, true);
+    btn.addEventListener('click', function() { runHistoryAction(entry, def.action); });
+    actions.appendChild(btn);
   });
-  actions.appendChild(finderBtn);
 
   row.appendChild(icon);
   row.appendChild(main);
@@ -1421,6 +1535,18 @@ function historyRow(entry) {
   row.appendChild(when);
   row.appendChild(actions);
   return row;
+}
+
+/// 历史页那一行按下去要做的事。恢复和「删除这次压缩结果」共用 restore_history_entry
+/// 这一个服务：后端按 outputMode 决定是写回原图还是删掉产物，前端不自己判断文件该怎么动。
+function runHistoryAction(entry, action) {
+  if (action === 'save') { saveHistoryOutput(entry); return; }
+  if (action === 'compare') { openCompareFromHistory(entry); return; }
+  if (action === 'restore') { restoreFromHistory(entry); return; }
+  if (action === 'deleteOutput') { deleteHistoryOutput(entry); return; }
+  if (action === 'log') { copyHistoryLog(entry); return; }
+  var target = entry.outputExists ? (entry.outputPath || entry.sourcePath) : entry.sourcePath;
+  invoke('open_in_finder', { filePath: target }).catch(function() {});
 }
 
 function renderHistory() {
@@ -1472,7 +1598,11 @@ async function restoreFromHistory(entry, force) {
     showToast(outcome.error || '恢复失败');
     return;
   }
-  showToast('已恢复原图: ' + basename(entry.fileName));
+  // 非 replace 模式的原图从没被盖过，后端做的是"删掉这次的压缩产物" ——
+  // 报「已恢复原图」等于把一件没发生过的事说给用户听。
+  showToast(entry.outputMode === 'replace'
+    ? '已恢复原图: ' + basename(entry.fileName)
+    : '已删除这次压缩结果: ' + basename(entry.fileName));
   afterRestore(outcome.filePath || entry.sourcePath);
 }
 
@@ -1483,7 +1613,14 @@ async function clearHistory() {
     showToast('压缩进行中，这一批结束后才能清空历史');
     return;
   }
-  if (!confirm('确定要清空 ' + historyEntries.length + ' 条历史记录吗？\n只清理 OctoShrink 保存的原图备份，不会删除你的图片。')) return;
+  // 清空就是手动到期：备份立刻删掉、不必等保留期。要数清楚这一次带走几份，
+  // 也要说清楚"不会删除你的任何图片文件"——那是事实，不是安抚。
+  var pendingBackups = historyEntries.filter(function(e) { return e.backupExists; }).length;
+  var question = '确定要清空 ' + historyEntries.length + ' 条历史记录吗？\n';
+  question += pendingBackups > 0
+    ? '同时立即删除 OctoShrink 保存的 ' + pendingBackups + ' 份原图备份，不必等保留期到期。不会删除你的任何图片文件。'
+    : 'OctoShrink 目前没有保存原图备份，这次只清记录。不会删除你的任何图片文件。';
+  if (!confirm(question)) return;
   try {
     var removed = await invoke('clear_history');
     showToast('已清空 ' + removed + ' 条历史记录');

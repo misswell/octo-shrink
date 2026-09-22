@@ -27,19 +27,6 @@ func historyTimeText(_ millis: Int64) -> String {
     )
 }
 
-/// 只有真正被覆盖过、且备份还在的记录才谈得上「恢复原图」。
-func historyCanRestore(_ entry: HistoryEntry) -> Bool {
-    // recoveryAvailable = history.json 损坏后从备份目录重建出来的条目：
-    // 压缩明细已经无从得知，但备份确实还在，原图仍然可以一键恢复。
-    if entry.status == .recoveryAvailable {
-        return entry.backupExists && entry.sourceExists
-    }
-    return entry.status == .compressed
-        && entry.outputMode == "replace"
-        && entry.backupExists
-        && entry.sourceExists
-}
-
 func historyStatusText(_ entry: HistoryEntry) -> String {
     if entry.status == .restored {
         guard let restoredAt = entry.restoredAt else { return "已恢复" }
@@ -163,30 +150,34 @@ struct HistoryRowView: View {
             }
             .frame(width: 104, alignment: .trailing)
 
-            HStack(spacing: 4) {
-                if historyCanRestore(entry) {
-                    Button {
-                        appState.restoreHistoryEntry(id: entry.id)
-                    } label: {
-                        Label("恢复原图", systemImage: "arrow.uturn.backward")
-                            .labelIconToTextSpacing(3)
+            HStack(spacing: 2) {
+                // 与队列「压缩完成」那一行同一套按钮，按这条记录真实能做到的事给。
+                // 判据在服务层（historyRowActions），视图只负责摆 —— 前端 app.js 是同一份顺序。
+                ForEach(historyRowActions(entry), id: \.self) { action in
+                    Button { perform(action) } label: {
+                        Image(systemName: action.symbol)
                     }
-                    .buttonStyle(SmallButtonStyle())
-                    .help("用 OctoShrink 保存的备份换回原图")
+                    .buttonStyle(RowActionButtonStyle())
+                    .help(action.title)
                 }
-                Button {
-                    appState.openInFinder(path: finderTarget(entry))
-                } label: {
-                    Image(systemName: "folder")
-                }
-                .buttonStyle(RowActionButtonStyle())
-                .help("在访达中显示")
             }
+            .fixedSize()
         }
         .padding(.horizontal, AppMetrics.sectionHPadding)
         .padding(.vertical, 6)
         .frame(minHeight: 40)
         .opacity(entry.status == .restored || isRecovery ? 0.55 : 1)
+    }
+
+    private func perform(_ action: HistoryRowAction) {
+        switch action {
+        case .saveAs: appState.saveHistoryOutput(entry)
+        case .compare: appState.compareHistoryEntry(entry)
+        case .restore: appState.restoreHistoryEntry(id: entry.id)
+        case .deleteOutput: appState.deleteHistoryOutput(entry)
+        case .finder: appState.openInFinder(path: finderTarget(entry))
+        case .copyLog: appState.copyHistoryLog(entry)
+        }
     }
 
     /// 重建条目用警告图标而不是对勾：它不是一次成功的压缩，是一次数据抢救。

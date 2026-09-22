@@ -1266,6 +1266,9 @@ pub struct RestoreOutcome {
     error: Option<String>,
     /// 一起被标记为「已恢复」的历史记录：同一张图重压多次会共享那份真正原图。
     history_ids: Vec<String>,
+    /// 这条记录当时是哪种输出方式。后缀 / 目录模式下后端做的是"删掉这次的压缩产物"，
+    /// 前端要据此措辞 —— 统一服务被三个入口共用，只有后端知道刚刚真正发生了什么。
+    output_mode: String,
 }
 
 impl RestoreOutcome {
@@ -1280,6 +1283,7 @@ impl RestoreOutcome {
             file_path: entry.map(|e| e.source_path.clone()).unwrap_or_default(),
             error: Some(detail),
             history_ids: Vec::new(),
+            output_mode: entry.map(|e| e.output_mode.clone()).unwrap_or_default(),
         }
     }
 }
@@ -1318,6 +1322,7 @@ fn restore_entry(app: &AppHandle, state: &AppState, entry: &HistoryEntry, force:
             file_path: entry.source_path.clone(),
             error: None,
             history_ids: ids,
+            output_mode: entry.output_mode.clone(),
         },
         Err(error) => RestoreOutcome::failure(Some(entry), error),
     }

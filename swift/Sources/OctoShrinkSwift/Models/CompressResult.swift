@@ -48,22 +48,38 @@ struct CompressResult: Identifiable {
     }
 
     init(engine: EngineResult, file: String, originalSize: Int64, options: CompressOptions? = nil) {
-        let compressedSize = Int64(engine.compressed.count)
         self.success = engine.success
         self.file = file
         self.originalSize = originalSize
-        self.compressedSize = compressedSize
-        let raw: Double
-        if originalSize > 0 {
-            raw = (Double(originalSize) - Double(min(compressedSize, originalSize))) / Double(originalSize) * 100.0
-        } else {
-            raw = 0
-        }
-        self.savings = (raw * 10).rounded() / 10
+        self.compressedSize = Int64(engine.compressed.count)
+        self.savings = Self.savings(originalSize: originalSize, compressedSize: self.compressedSize)
         self.outType = engine.outType
         self.algorithm = engine.algorithm
         self.error = engine.error
         self.options = options
+    }
+
+    /// 历史页要复用对比窗口/复制日志那一套，但记录里只有大小、没有字节本身。
+    init(historyEntry entry: HistoryEntry) {
+        self.success = true
+        self.file = entry.sourcePath
+        self.originalSize = entry.originalSize
+        self.compressedSize = entry.compressedSize
+        self.savings = entry.savings
+        self.outType = entry.outType
+        self.algorithm = entry.algorithm
+        self.error = nil
+        self.outputPath = entry.outputPath
+        self.backupPath = entry.backupPath
+        self.outputMode = entry.outputMode
+        self.options = nil
+    }
+
+    static func savings(originalSize: Int64, compressedSize: Int64) -> Double {
+        guard originalSize > 0 else { return 0 }
+        let raw = (Double(originalSize) - Double(min(compressedSize, originalSize)))
+            / Double(originalSize) * 100.0
+        return (raw * 10).rounded() / 10
     }
 }
 

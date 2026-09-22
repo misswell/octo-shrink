@@ -129,6 +129,10 @@ pub struct HistoryEntry {
     pub source_exists: bool,
     #[serde(default)]
     pub backup_exists: bool,
+    /// 压缩结果此刻还在不在：历史页的「另存为 / 对比 / 删除这次压缩结果」都靠它决定，
+    /// 用户手动删过产物后这些按钮就不该出现。
+    #[serde(default)]
+    pub output_exists: bool,
 }
 
 static ENTRY_SEQUENCE: AtomicU32 = AtomicU32::new(0);
@@ -204,6 +208,7 @@ impl HistoryEntry {
             output_modified_at: file_mtime_millis(output),
             source_exists: true,
             backup_exists: backup.is_some(),
+            output_exists: output.exists(),
         }
     }
 }
@@ -415,6 +420,11 @@ impl HistoryStore {
             entry.source_exists = Path::new(&entry.source_path).exists();
             entry.backup_exists = entry
                 .backup_path
+                .as_ref()
+                .map(|p| Path::new(p).exists())
+                .unwrap_or(false);
+            entry.output_exists = entry
+                .output_path
                 .as_ref()
                 .map(|p| Path::new(p).exists())
                 .unwrap_or(false);
@@ -762,6 +772,8 @@ impl HistoryStore {
                 output_modified_at: file_mtime_millis(source).or(meta.original_modified_at),
                 source_exists: true,
                 backup_exists: true,
+                // 重建条目的"输出"就是源文件本身，它刚被 stat 过。
+                output_exists: true,
             });
         }
         rebuilt
@@ -1117,6 +1129,7 @@ pub(crate) fn sample_entry(source: &Path, backup: &Path, id: &str) -> HistoryEnt
         output_modified_at: file_mtime_millis(source),
         source_exists: true,
         backup_exists: true,
+        output_exists: true,
     }
 }
 
@@ -1163,6 +1176,7 @@ mod tests {
             output_modified_at: file_mtime_millis(source),
             source_exists: true,
             backup_exists: true,
+            output_exists: true,
         }
     }
 

@@ -142,6 +142,7 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - ✅ 对比视图已改为独立原生窗口（未发版）：`compare.html` + `compare_window.js`，label="compare"，由 `open_compare_window` 命令创建（Direct 用 tauri:// 内嵌页，App Store 用本地 HTTP 页），自由缩放可大于主窗口、自带红绿灯；载荷经 `pending_compare` 状态 + `take_compare_window_payload` 首屏取回，`compare-open` / `compare-results-changed` 事件双向同步；`on_window_event` 仅在 label=="main" 关闭时 exit(0)；首屏与 resize 均按"适合窗口"fit 适配（先 showPanel 再测量视口，隐藏态测量会得到 0 而回退 100%，大图只显示局部），缩放下限 0.02，重置按钮=重新适配，用户手动缩放后 resize 不再打断
 - ✅ 安全暂停已接入（三线一致）：压缩中可暂停/继续，只拦「还没开始」的文件，绝不 kill 正在跑的 CLI 子进程；进度按钮文案变「暂停中…」，旁边一个小号 [暂停]/[继续]。**取消一个文件只 `wake_waiters()`、绝不 `resume()`**（详见「安全暂停」），整批取消走一次 `cancel_batch`
 - ✅ 压缩历史 + 原图保留/恢复已接入（三线一致）：`history.rs::HistoryStore` / Swift `Services/HistoryStore.swift` 落 App Support（**不再是临时目录**），历史页/设置页为主窗口内部视图，恢复统一走一个服务（`restore_original` / `restore_history_entry` / `restore_all` 共用 `HistoryStore::restore`），保留档位为「不保留」（默认，退出时清理）或 1/3/7/14/30 天（启动时按天清理，详见下一节）
+- ✅ 历史页每一行都有与「压缩完成」那一行对等的按钮（三线一致）：另存为 / 对比查看 / 恢复原图 / 删除这次压缩结果 / 访达 / 复制日志，全部由 `sourceExists`·`backupExists`·`outputExists` 三个读取时现算的派生字段决定，按钮不成立就不画；后缀模式给「删除这次压缩结果」而不是「恢复原图」，清空历史的确认框数得清带走几份原图备份（详见「历史页每一行的按钮」）
 - ✅ 覆盖事务与崩溃安全已接入（**三条线一致**）：`output_transaction.rs::TransactionStore` ↔ Swift `OutputTransactionStore.swift` 在覆盖前记账、`history.add` 落盘后才销账，启动时 `recover()` 补记或自动回滚上次中断的覆盖；`history.json` 严格读取（损坏→隔离 + 按 `backup-meta.json` 重建 `recoveryAvailable` + 本次启动锁死备份 sweep）；`write_output_file` 全链路 `Result`（任一步失败必须把 `CompressResult.success` 翻成 false）；备份 key 从 `DefaultHasher` 迁到 FNV-1a 64（老 key 只读复用/续认，含书签）；`MAX_HISTORY_ENTRIES = 10_000`
 - ✅ CPU 使用上限已接入（三条线一致）：设置页「性能」小节 + `CompressionScheduler`（暂停与并行预算同一套闸门）+两层预算（并发文件数 × 单编码器内部线程），检测见 `system_info.rs` / `SystemInfo.swift`，详见「CPU 使用上限（三条线共用不变量）」
 - ✅ Swift 原生线（`swift/`）与两条 Tauri 线功能对齐，历史/备份/覆盖事务/暂停语义一致，但存储根目录独立且少一层 `history/`（`~/Library/Application Support/com.misswell.octoshrink.swift`），三条线互不读写对方的 history.json
@@ -167,8 +168,8 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 | walk_dir 递归 | fs::read_dir 任意路径；稳定排序并按规范路径去重，前端批次使用已展开文件快照 | 同上 + 仅在已书签根内递归 | 沙盒只认授权范围；队列不能因重复目录或处理期间新增文件而改变 |
 | 队列批次文件清单 | 导入完成后展开并去重，开始处理时只提交该批次快照；目录根通过 `sourceRoots` 保留相对输出路径 | 同上，书签授权范围内执行 | 避免处理中追加、异步扫描乱序和清空后旧事件回流 |
 | write_output_file | ①`ensure_backup`（写不成就不碰用户文件）②写 `history/transactions/<id>.json` 记账 ③同目录 `.octoshrink-write-<millis>.tmp` ④flush + fsync ⑤rename 覆盖目标 ⑥`history.add`（失败=回滚：备份写回源文件、删生成结果、销账）⑦ 删账。系统跨格式覆盖时改扩展名并避让同名目标；后缀模式使用自定义 `outputSuffix`（默认 `_compressed`） | 系统转换开始前强制经文件夹选择器授权，随后写入已授权目录；后缀模式使用同一自定义 `outputSuffix` | 沙盒不能依赖单文件授权写入旁路新文件；两版需保持输出命名一致。**落盘任一步失败都必须把 `CompressResult.success` 翻成 false**，UI 绝不许显示「压缩完成」 |
-| restore_original / restore_history_entry / restore_all | 三条命令共用同一个恢复服务 `HistoryStore::restore`：backup → `.octoshrink-restore-<nanos>.tmp` → rename 覆盖源文件 → 再删本次生成的压缩输出与备份目录；命中冲突（大小或 mtime 变化 >2 s，仅 replace 模式）时返回 `conflict=true`，前端确认后带 `force=true` 重试 | 同上，源图/输出/备份路径均经 bookmark 授权；路径一律由 historyId 从存储读取，前端不拼路径 | 沙盒；两版恢复语义一致，**不允许复制三套恢复逻辑** |
-| restore_original / restore_history_entry / restore_all | 三条命令共用同一个恢复服务 `HistoryStore::restore`：备份 → `.octoshrink-restore-<nanos>.tmp` → fsync → rename 覆盖源文件 → **历史状态落盘成功之后**才删本次生成的压缩输出与备份目录；命中冲突（大小或 mtime 变化 >2 s，仅 replace 模式）时返回 `conflict=true`，前端确认后带 `force=true` 重试 | 同上，源图/输出/备份路径均经 bookmark 授权；路径一律由 historyId 从存储读取，前端不拼路径 | 沙盒；两版恢复语义一致，**不允许复制三套恢复逻辑**。顺序反了会出现"历史说已恢复、备份已删、原图没写回" |
+| restore_original / restore_history_entry / restore_all | 三条命令共用同一个恢复服务 `HistoryStore::restore`：备份 → `.octoshrink-restore-<nanos>.tmp` → fsync → rename 覆盖源文件 → **历史状态落盘成功之后**才删本次生成的压缩输出与备份目录；命中冲突（大小或 mtime 变化 >2 s，仅 replace 模式）时返回 `conflict=true`，前端确认后带 `force=true` 重试。`RestoreOutcome` 额外回报 `output_mode`，前端据此决定说「已恢复原图」还是「已删除这次压缩结果」 | 同上，源图/输出/备份路径均经 bookmark 授权；路径一律由 historyId 从存储读取，前端不拼路径 | 沙盒；两版恢复语义一致，**不允许复制三套恢复逻辑**。顺序反了会出现"历史说已恢复、备份已删、原图没写回" |
+| 历史页每一行的按钮 | `historyRowActionDefs(entry)`（前端）↔ `historyRowActions(_:)`（Swift 服务层）按 `sourceExists` / `backupExists` / `outputExists` 三个**读取时现算**的派生字段决定：另存为 → 对比 → 反悔（恢复原图 或 删除这次压缩结果，二选一）→ 访达 → 复制日志 | 同上，同一份前端代码、同一套判据 | 见「历史页每一行的按钮 = 这条记录此刻真能做到的事」。后缀模式永不给「恢复原图」，replace 永不给「删除这次压缩结果」；按钮不成立就不画 |
 | 历史记录与原图备份 | `HistoryStore` 落 `<appdata>/history/history.json` + `<appdata>/history/backups/<key>/`（App Support，跨启动长期保留）；备份 key = **FNV-1a 64 位**（`stable_hash`，跨 rustc 版本稳定），老 `DefaultHasher` key 仍被识别用于续用已有备份与书签 | 同上（沙盒容器内的 App Support）| 备份绝不放 temp_dir/Caches，否则系统清理会丢掉原图；Swift 线用独立根 `~/Library/Application Support/com.misswell.octoshrink.swift`。**标准库从不承诺 `DefaultHasher` 的跨版本稳定性**，一次升级就能让所有备份看起来"无人引用" |
 | 启动清理 | `setup` 里先 `transactions.recover(history)`（补记或自动回滚上次中断的覆盖），再跑一次 `cleanup_expired(retention_days)`：只删过期 `HistoryEntry` 和只被该条目引用的备份目录；`retention_days == 0`（「不保留」，默认档）时**只扫无人引用的孤儿备份** | 同上 | 不留常驻计时器；「不保留」档的备份**只在正常退出时清**（`RunEvent::Exit` / `applicationWillTerminate`），因为崩溃现场那份可能是唯一的原图；**绝不删用户的 sourcePath / outputPath / 输出目录里的文件**（历史过期 ≠ 用户文件过期） |
 | history.json 读不出来 | **严格读**：文件不存在=空历史（正常）；存在但解析失败=损坏 → 隔离为 `history.corrupt-<millis>.json`（现场绝不许被 `[]` 覆盖）→ 按 `backups/<key>/backup-meta.json` 重建 `status: "recoveryAvailable"` 条目 → 本次启动**禁止一切备份 sweep**（`cleanup_is_locked()`） | 同上 | 老实现 `unwrap_or_default()` 把半个文件当空历史，下一次启动清理就"合法地"删光所有原图备份。重建出的条目没有压缩明细，但保证**原图仍可一键恢复** |
@@ -267,6 +268,26 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - ④ 删压缩输出前必须判**同一性**：`same_file(output_path, source_path)`（Rust）/ `sameFile(output, entry.sourcePath)`（Swift）。记录里的 `source_path` 是规范路径、`output_path` 是当时那个原始字符串，macOS 上 `/var/…` 与 `/private/var/…`、任何软链目录都会让两者**字面不等**（Swift 的 `canonicalPath` 走 `resolvingSymlinksInPath()`，它还会把 `/private/var` 折回 `/var`，所以两种写法都可能出现）；判成"另一个文件"就会把刚写回的原图当成压缩产物删掉（这是真实修过的丢文件 bug，不是洁癖）。
 - 冲突保护：仅 replace 模式比对记录时的文件大小 / mtime（容差 2000 ms），任一不符即返回 `conflict=true`；前端弹「这个文件在压缩后又被修改过。恢复原图会覆盖当前版本。」→ 用户确认后带 `force=true` 重试。
 - 恢复后**历史记录不删**，只标 `restored` 并删备份；共享同一备份的兄弟条目一起标记。非 replace 模式没有备份，其"撤销"只删本次压缩输出并移除条目。
+- **完成文案跟着 `outputMode` 走，不许一律「已恢复原图」**：非 replace 模式后端做的是"删掉这次的压缩产物"，报「已恢复原图」等于把一件没发生过的事说给用户听。三线同一句：replace → 「已恢复原图: <name>」，否则 → 「已删除这次压缩结果: <name>」。前端拿不到模式时以**后端回报**为准（Rust `RestoreOutcome.output_mode` → `outputMode`），不要只信本地缓存的 result 快照。
+
+### 历史页每一行的按钮 = 这条记录此刻真能做到的事
+
+> 用户的原话：**「有原图的，你就给他找到对应的恢复按钮。没有原图的，你就不展示。」**
+> 历史行与队列「压缩完成」那一行是同一套动作，按输出方式给对等的反悔按钮。三线判据逐字一致：
+> Rust `history.rs` 的派生字段 + `frontend/app.js::historyRowActionDefs` ↔ Swift `Services/HistoryStore.swift::historyRowActions`。
+
+- 判据只用 `decorate` / 读取时**现算**的三个 exists 标志（`sourceExists` / `backupExists` / **`outputExists`**），❌ 不许落库当真值用：用户随时能在访达里删掉产物或备份。`outputExists` 是这一节新加的派生字段，三线同名。
+- 按钮集合与顺序（**固定顺序**，两边自检各自钉住）：
+  1. `另存为` —— `outputExists`。压缩产物已经不存在了，就不许挂一个点开只会报错的按钮。
+  2. `对比查看` —— `outputExists && 原图还摸得着`。**"原图还在"按模式判**：replace 只看 `backupExists`（源位置此刻躺着的是压缩结果，拿它当"原图"比的是同一张文件，比了个寂寞）；后缀 / 目录模式源文件从没被盖过，看 `sourceExists`。
+  3. 反悔按钮，**二选一**：`historyCanRestore(entry)` 为真 → `恢复原图`；否则若 `status == compressed && outputMode != replace && outputExists` → `删除这次压缩结果`（图标 trash）。❌ 后缀模式永远不许出现「恢复原图」——那是把"这份产物可以撤销"说成"你的原图能换回来"。❌ replace 模式也永远不许退化成「删除这次压缩结果」——那等于让按钮去删用户的源文件。
+  4. `在访达中显示`、`复制日志` —— 永远在。
+- **什么按钮都不成立的行仍然留在历史里**（用户 2026-09-22 明确选了"全类型都留，按模式给对等的按钮"，而不是"只显示能恢复的"）：`history.json` 是用户的压缩记录本，产物被删 / 备份过期都不改变"这张图在什么时候被压过"这个事实。❌ 不要为了让页面"看着干净"去过滤行 —— 那是在删用户的记录。
+- 一个都不给的情况是真的存在：后缀模式 + 产物已被用户删掉 = 只剩访达和复制日志两个不承诺任何反悔的按钮。
+- `recoveryAvailable`（历史损坏后按备份重建）那一行照常给 `恢复原图`：它存在的唯一意义就是让用户换回原图。
+- 「删除这次压缩结果」删的是**用户目录里的真实文件**，所以前端/ Swift 都必须先二次确认（`frontend/app.js::deleteHistoryOutput` / `AppState.deleteHistoryOutput`）；确认之后照旧走同一个恢复服务、只交 `historyId`，❌ 不许前端自己 `removeFile`。
+- 「清空历史」就是**手动到期**：不用等保留期，确认框要数清楚这一次带走几份原图备份（`historyEntries.filter(e => e.backupExists).length`）。文案固定：「同时立即删除 OctoShrink 保存的 N 份原图备份，不必等保留期到期。不会删除你的任何图片文件。」一份都没有时说「这次只清记录」，❌ 不许在没有备份的时候还写"会清理备份"。
+- 回归：`tests/history-view.cjs`（前端逐模式的按钮数组）+ `swift/Tests/HistoryStoreCheck/main.swift` 第 [26] 组（同一批用例）。改判据必须两边同改、两边都要过。
 
 ### 保留期与退出/启动清理
 
@@ -352,8 +373,8 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - src-tauri/src/output_transaction.rs — 覆盖事务凭证（`TransactionStore` / `ReplaceTransaction` / `rollback`），启动时 `recover()`
 - swift/Sources/OctoShrinkSwift/Services/HistoryStore.swift — 同上的 Swift 原生线实现（`HistoryStore.shared` 全进程唯一）
 - swift/Sources/OctoShrinkSwift/Services/OutputTransactionStore.swift — Swift 线的覆盖事务凭证 + `OutputWriteError` / `StagedWrite`
-- tests/history-view.cjs（`npm run test:frontend`）— 前端历史页/恢复/暂停纯逻辑自检
-- scripts/test_swift_history.sh — Swift 线历史·备份·覆盖事务·恢复·取消与暂停·CPU 上限自检（真跑文件系统，25 组）
+- tests/history-view.cjs（`npm run test:frontend`）— 前端历史页（每行按钮集合 / 重建条目 / 恢复只交 historyId / 冲突 force 重试 / 不保留档位 / 压缩中拒绝清空）、暂停与 CPU 上限纯逻辑自检
+- scripts/test_swift_history.sh — Swift 线历史·备份·覆盖事务·恢复·取消与暂停·CPU 上限·历史行按钮自检（真跑文件系统，26 组）
 
 ## App Store 提交完整流程与注意事项
 
