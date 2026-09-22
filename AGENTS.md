@@ -563,7 +563,7 @@ xcrun altool --upload-app \
 
 | 凭据 | 存储位置 | 使用方式 | 是否需要用户输入 |
 |------|---------|---------|:---:|
-| Apple 公证凭据 | 钥匙串 profile `octoshrink-notary` | `xcrun notarytool ... --keychain-profile octoshrink-notary` | ❌ 已保存 |
+| Apple 公证凭据 | 钥匙串 profile `octoshrink-notary` —— ⚠️ **2026-09-23 实测本机已不存在**（`notarytool history --keychain-profile octoshrink-notary` 报 No Keychain password item found） | `xcrun notarytool ... --keychain-profile octoshrink-notary`（本机需先重建） | ✅ 本机需要；CI 不需要 |
 | Developer ID 签名身份 | 钥匙串（自动检测） | `security find-identity -v -p codesigning` 自动取 `Developer ID Application: Guofeng Liu (U8U443D7ZL)` | ❌ 自动检测 |
 | Apple Distribution 证书 | 钥匙串 | App Store 版签名，`scripts/build_appstore.sh` 自动引用 | ❌ 自动检测 |
 | 3rd Party Mac Developer Installer | 钥匙串 | `productbuild` 打 PKG，`scripts/build_appstore.sh` 自动引用 | ❌ 自动检测 |
@@ -597,16 +597,16 @@ gh run watch --exit-status
 
 也可在 GitHub Actions 手动运行 `Release` workflow：输入 `vX.Y.Z` 作为产物版本标签；`publish=false`（默认）只完整验证构建、签名与公证，`publish=true` 才正式发布。CI 签名公证实现位于 `scripts/sign_notarize_macos_ci.sh`；本地不再需要下载、重签或覆盖 Release 资产。
 
-**如果钥匙串 profile 过期或丢失**（极少发生）：
+**钥匙串 profile 已丢失（2026-09-23 实测）**：本机 `octoshrink-notary` 已不在钥匙串里，`bash scripts/notarize.sh` 会在公证前的自检处停下并打印下面这条命令（脚本第 146 行的探测是好的，不会让它变成莫名其妙的失败）。发布走 GitHub Actions 不受影响 —— CI 用的是 `APPLE_ID` / `APPLE_TEAM_ID` / `APPLE_APP_SPECIFIC_PASSWORD` 三个 Secrets，与本机钥匙串无关。
 用户需要在终端执行一次 `xcrun notarytool store-credentials octoshrink-notary --apple-id misswell@foxmail.com --team-id U8U443D7ZL`，输入 App 专用密码。这是唯一可能需要用户输入的情况。
 
-**Direct 版一键签名公证**（仅 ARM，日常开发用）：
+**Direct 版一键签名公证**（仅 ARM，日常开发用；需先重建上面的 profile）：
 ```bash
-bash scripts/notarize.sh    # 自动构建->签名->公证->装订->DMG，全程无密码
+bash scripts/notarize.sh    # 自动构建->签名->公证->装订->DMG
 
 ## Migrated local state and reusable release rules
 
-- The project-specific reusable release scripts are `/Users/guofeng/Code/solo/octo-shrink/scripts/notarize.sh` and `/Users/guofeng/Code/solo/octo-shrink/scripts/sign_notarize_macos_ci.sh`; inspect and reuse them before designing another macOS notarization flow.
+- The project-specific reusable release scripts are `scripts/notarize.sh` and `scripts/sign_notarize_macos_ci.sh` in this checkout (`/Users/guofeng/Code/solo/octor-shrink`, note the directory is `octor-shrink`); inspect and reuse them before designing another macOS notarization flow.
 - Do not treat the historical `octoshrink-notary` Keychain profile as currently usable solely because it appears in older notes. Verify it with `xcrun notarytool history` in the current session; if it fails, report the exact missing credential rather than guessing.
 - The historical cleanup removed about 19G from `/Users/guofeng/Code/solo/octo-shrink/src-tauri/target`; this generated cache can be moved to the Trash and rebuilt, but release artifacts and worktrees with uncommitted changes must be preserved.
 ```
