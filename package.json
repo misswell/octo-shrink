@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "cargo tauri dev",
     "build": "cargo tauri build",
-    "test:frontend": "node tests/queue-progress.cjs && node tests/queue-view.cjs && node tests/pause-resume.cjs && node tests/history-view.cjs && node tests/cpu-limit.cjs"
+    "test:frontend": "node tests/queue-progress.cjs && node tests/queue-view.cjs && node tests/pause-resume.cjs && node tests/history-view.cjs && node tests/cpu-limit.cjs && node tests/icon-sprite.cjs"
   },
   "license": "MIT"
 }

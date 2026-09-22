@@ -79,7 +79,7 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Original solid workbench glyphs; inherit semantic colors in both themes. */
+/* 统一线条图标：描边由这里下发，glyph 内的实心点缀自带 fill 属性。 */
 .icon-library {
   position: absolute;
   width: 0;
@@ -92,8 +92,9 @@ body {
   height: 16px;
   display: block;
   flex: 0 0 auto;
-  fill: currentColor;
-  stroke: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
   stroke-linecap: round;
   stroke-linejoin: round;
   overflow: visible;
@@ -553,9 +554,10 @@ body {
   outline: none;
   appearance: none;
   -webkit-appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M4 7h5l3 4 3-4h5l-8 10Z' fill='%23888'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg width='24' height='24' viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M6.2 9.4 12 15.2 17.8 9.4' fill='none' stroke='%236b6b70' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
-  background-position: right 8px center;
+  background-position: right 7px center;
+  background-size: 11px 11px;
   min-width: 100px;
   transition: border-color 0.12s;
 }
@@ -1556,7 +1558,10 @@ body.compare-page .compare-recompress { flex-shrink: 0; }
 .error-info-btn:hover { transform: scale(1.15); }
 
 /* ─── Dark Mode Overrides ──────────────────────────────────── */
-[data-theme="dark"] .settings-select { background-color: var(--input-bg); }
+[data-theme="dark"] .settings-select {
+  background-color: var(--input-bg);
+  background-image: url("data:image/svg+xml,%3Csvg width='24' height='24' viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M6.2 9.4 12 15.2 17.8 9.4' fill='none' stroke='%23a1a1a6' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
 [data-theme="dark"] .settings-select option { background: #2c2c2e; color: var(--text); }
 [data-theme="dark"] .toast { background: rgba(44,44,46,0.95); color: var(--text); border: 0.5px solid var(--border); }
 [data-theme="dark"] .file-queue-item.done { border-color: rgba(48,209,88,0.15); }

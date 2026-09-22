@@ -28,19 +28,19 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body class="compare-page">
-  <!-- Original image-workbench glyphs: solid silhouettes and negative-space cuts. -->
+  <!-- 统一线条图标系统：24 网格 / 20 可视区 / 1.8 描边 / 圆头圆角；实心点缀自带 fill。 -->
   <svg class="icon-library" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
     <defs>
-      <symbol id="icon-recompress" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 3h13a6 6 0 0 1 6 6v5h-3V9a3 3 0 0 0-3-3H8v3L2 4Z M21 21H8a6 6 0 0 1-6-6v-5h3v5a3 3 0 0 0 3 3h8v-3l6 5Z M9 10h6v4H9Z"/></symbol>
-      <symbol id="icon-restore" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M2 9l7-6v4h5a8 8 0 0 1 0 16h-4v-3h4a5 5 0 0 0 0-10H9v4Z M3 17h4v6H3Z"/></symbol>
-      <symbol id="icon-compare" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M2 5h8v14H2Z M4 15h4l-2-4Z M14 5h8v14h-8Z M16 8v8h4V8Z M11 2h2v20h-2Z"/></symbol>
-      <symbol id="icon-reset-view" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M2 4h6v3H5v10h3v3H2Z M16 4h6v16h-6v-3h3V7h-3Z M8 9h8v6H8Z"/></symbol>
-      <symbol id="icon-zoom-in" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 3h15v15H3Z M9 6v3H6v3h3v3h3v-3h3V9h-3V6Z M19 16l4 4-3 3-4-4Z"/></symbol>
-      <symbol id="icon-zoom-out" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M3 3h15v15H3Z M6 9v3h9V9Z M19 16l4 4-3 3-4-4Z"/></symbol>
-      <symbol id="icon-close" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M5 3l7 7 7-7 2 2-7 7 7 7-2 2-7-7-7 7-2-2 7-7-7-7Z"/></symbol>
-      <symbol id="icon-split-grip" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M1 12l6-6v12Z M17 6l6 6-6 6Z M10 4h4v16h-4Z"/></symbol>
-      <symbol id="icon-chevron-left" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M15 3l2 2-7 7 7 7-2 2-9-9Z"/></symbol>
-      <symbol id="icon-chevron-right" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M9 3L7 5l7 7-7 7 2 2 9-9Z"/></symbol>
+      <symbol id="icon-recompress" viewBox="0 0 24 24"><path d="M20.6 12a8.6 8.6 0 1 1-8.6-8.6 8.6 8.6 0 0 1 6.1 2.5l2.5 2.5"/><path d="M20.6 3.4v5h-5"/></symbol>
+      <symbol id="icon-restore" viewBox="0 0 24 24"><path d="M8.6 4.6 4.6 8.6l4 4"/><path d="M4.6 8.6h10.9a5.4 5.4 0 0 1 0 10.8H9.4"/></symbol>
+      <symbol id="icon-compare" viewBox="0 0 24 24"><rect x="2.6" y="4.6" width="18.8" height="14.8" rx="2.6"/><path d="M12 4.6v14.8"/></symbol>
+      <symbol id="icon-reset-view" viewBox="0 0 24 24"><path d="M3.6 8.6V6a2.4 2.4 0 0 1 2.4-2.4h2.6"/><path d="M15.4 3.6H18a2.4 2.4 0 0 1 2.4 2.4v2.6"/><path d="M20.4 15.4V18a2.4 2.4 0 0 1-2.4 2.4h-2.6"/><path d="M8.6 20.4H6a2.4 2.4 0 0 1-2.4-2.4v-2.6"/><rect x="8.4" y="9" width="7.2" height="6" rx="1.4"/></symbol>
+      <symbol id="icon-zoom-in" viewBox="0 0 24 24"><circle cx="10.6" cy="10.6" r="7"/><path d="M15.7 15.7 20.8 20.8"/><path d="M10.6 7.6v6 M7.6 10.6h6"/></symbol>
+      <symbol id="icon-zoom-out" viewBox="0 0 24 24"><circle cx="10.6" cy="10.6" r="7"/><path d="M15.7 15.7 20.8 20.8"/><path d="M7.6 10.6h6"/></symbol>
+      <symbol id="icon-close" viewBox="0 0 24 24"><path d="M5.6 5.6 18.4 18.4 M18.4 5.6 5.6 18.4"/></symbol>
+      <symbol id="icon-split-grip" viewBox="0 0 24 24"><path d="M12 4v16 M9.8 8.6 7.2 12l2.6 3.4 M14.2 8.6 16.8 12l-2.6 3.4"/></symbol>
+      <symbol id="icon-chevron-left" viewBox="0 0 24 24"><path d="M14.6 5.4 8 12l6.6 6.6"/></symbol>
+      <symbol id="icon-chevron-right" viewBox="0 0 24 24"><path d="M9.4 5.4 16 12l-6.6 6.6"/></symbol>
     </defs>
   </svg>
 
