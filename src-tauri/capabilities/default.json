@@ -17,6 +17,7 @@
     "allow-compress-smart",
     "allow-compress-single",
     "allow-cancel-file",
+    "allow-cancel-batch",
     "allow-clear-cancel-queue",
     "allow-save-file",
     "allow-open-in-finder",

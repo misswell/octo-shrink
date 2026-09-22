@@ -2,6 +2,7 @@ mod app_settings;
 mod commands;
 pub mod engine;
 mod history;
+mod output_transaction;
 mod sandbox_access;
 mod system_info;
 #[cfg(target_os = "macos")]
@@ -488,6 +489,7 @@ pub fn run() {
             commands::pause_compression,
             commands::resume_compression,
             commands::get_compression_state,
+            commands::cancel_batch,
             commands::list_history,
             commands::clear_history,
             commands::get_app_settings,
@@ -513,6 +515,36 @@ pub fn run() {
             let settings_store =
                 std::sync::Arc::new(app_settings::SettingsStore::new(&data_root));
             let settings = settings_store.load();
+            let transactions = std::sync::Arc::new(output_transaction::TransactionStore::new(
+                history_root.join(output_transaction::TRANSACTIONS_DIR),
+            ));
+
+            // 第一步先结清上次没走完的覆盖事务，**必须早于任何清理**：
+            // 回滚要用的那份备份，如果被启动清理当成孤儿扫掉，原图就真没了。
+            let recovered = transactions.recover(&history_store);
+            if recovered.committed > 0 || recovered.rolled_back > 0 {
+                log::info!(
+                    "启动恢复: 补记事务 {} 次，自动恢复原图 {} 个文件",
+                    recovered.committed,
+                    recovered.rolled_back
+                );
+            }
+            for warning in recovered.warnings {
+                log::warn!("启动恢复未完成: {warning}");
+            }
+
+            // `history.json` 损坏时：改名留档 + 按备份重建恢复入口 + 本次禁止清理。
+            if let Some(report) = history_store.take_startup_report() {
+                if let Some(path) = report.quarantined_to {
+                    log::warn!("历史记录文件已损坏，现场留档在 {path}");
+                }
+                if report.recovered_entries > 0 {
+                    log::info!(
+                        "从原图备份重建了 {} 条可恢复记录",
+                        report.recovered_entries
+                    );
+                }
+            }
 
             // 启动阶段清一次过期历史 + 无人引用的备份；单项失败只 warn，
             // 绝不让 App 因为删不掉文件而起不来。
@@ -539,6 +571,7 @@ pub fn run() {
                 pending_compare: Mutex::new(None),
                 compression: std::sync::Arc::new(commands::CompressionScheduler::new(cpu_limit)),
                 history_store,
+                transactions,
                 settings_store,
                 access: sandbox_access::build_access(history_root.join("bookmarks")),
                 cpu_info,

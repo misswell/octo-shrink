@@ -9,6 +9,7 @@ permissions = [
   "allow-compress-smart",
   "allow-compress-single",
   "allow-cancel-file",
+  "allow-cancel-batch",
   "allow-clear-cancel-queue",
   "allow-save-file",
   "allow-open-in-finder",
@@ -72,6 +73,11 @@ commands.allow = ["compress_single"]
 identifier = "allow-cancel-file"
 description = "Cancel compression for a specific file"
 commands.allow = ["cancel_file"]
+
+[[permission]]
+identifier = "allow-cancel-batch"
+description = "Cancel a whole set of queued files in one request"
+commands.allow = ["cancel_batch"]
 
 [[permission]]
 identifier = "allow-clear-cancel-queue"

@@ -44,6 +44,7 @@ const ids = {
   mainView: makeEl('div'), historyView: makeEl('div'), settingsView: makeEl('div'),
   historyViewBtn: makeEl('button'), settingsViewBtn: makeEl('button'),
   historyList: makeEl('div'), historyEmpty: makeEl('div'), historyMeta: makeEl('span'),
+  historyClearBtn: makeEl('button'),
   compressBtnText: makeEl('span'), pauseCompressBtn: makeEl('button'), pauseBtnText: makeEl('span'),
   queueSummary: makeEl('span'), restoreAllBtn: makeEl('button'), retentionDays: makeEl('select'),
   retentionCopy: makeEl('span'),
@@ -140,6 +141,19 @@ const last = name => [...invoked].reverse().find(call => call[0] === name);
   assert.ok(text(context.historyRow(entry({ sourceExists: false }))).includes('原文件位置不存在'));
   assert.ok(text(context.historyRow(entry({ backupExists: false }))).includes('原图备份已清理'));
 
+  // ── history.json 损坏后按备份重建出来的条目：明细丢了，但原图还能一键恢复 ──
+  const recovery = context.historyRow(
+    entry({ id: 'recovery-k1', status: 'recoveryAvailable', savings: 0, algorithm: 'recovery' }));
+  const recoveryText = text(recovery);
+  assert.match(recoveryText, /检测到可恢复的原图备份/);
+  assert.doesNotMatch(recoveryText, /节省/, '没有真实明细就不许报一个算出来的 0.0%');
+  assert.match(recoveryText, /按备份重建/);
+  assert.equal(recovery.children[4].children.length, 2, '重建条目必须给出恢复按钮');
+  assert.equal(
+    context.historyRow(entry({ id: 'r2', status: 'recoveryAvailable', backupExists: false }))
+      .children[4].children.length,
+      1, '备份已被清掉的重建条目不该再挂恢复按钮');
+
   // 冲突：先确认，再带 force 重来；取消则一发都不发。
   restoreReply = { success: false, conflict: true, filePath: '/Pictures/a.png', error: '这个文件在压缩后又被修改过', historyIds: [] };
   confirmAnswer = false;
@@ -229,5 +243,24 @@ const last = name => [...invoked].reverse().find(call => call[0] === name);
     settingsHtml.indexOf('<option value="0">') < settingsHtml.indexOf('<option value="1">'),
     '「不保留」是默认档，排第一');
 
-  console.log('PASS: dense history rows, per-state copy, restore without paths, conflict force retry, queue restore shares the service, 不保留档位');
+  // ── 压缩进行中不许清空历史：后端会拒绝，前端先收成不可点，别让人撞报错 ──
+  context.historyEntries = [entry({})];
+  context.isCompressing = true;
+  context.renderHistory();
+  assert.equal(ids.historyClearBtn.disabled, true, '批次跑着的时候清空按钮必须不可点');
+  assert.match(ids.historyClearBtn.title, /压缩进行中/);
+  invoked.length = 0;
+  toasts.length = 0;
+  await context.clearHistory();
+  assert.ok(!invoked.some(call => call[0] === 'clear_history'), '前端就不该发这次清空');
+  assert.match(toasts[toasts.length - 1], /压缩进行中/);
+
+  context.isCompressing = false;
+  context.renderHistory();
+  assert.equal(ids.historyClearBtn.disabled, false, '批次结束后必须恢复可用');
+  invoked.length = 0;
+  await context.clearHistory();
+  assert.ok(invoked.some(call => call[0] === 'clear_history'), '空闲时清空照常走后端');
+
+  console.log('PASS: dense history rows, per-state copy, 重建条目可恢复, restore without paths, conflict force retry, queue restore shares the service, 不保留档位, 压缩中拒绝清空');
 })().catch(error => { console.error(error); process.exitCode = 1; });

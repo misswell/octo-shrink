@@ -701,6 +701,232 @@ do {
     check(Retention.options.first == Retention.noRetain, "设置页下拉第一档就是「不保留」")
 }
 
+// ─── 20. history.json 读不出来：隔离现场 + 按备份重建 + 本次禁止清理 ─────────
+print("[20] 历史损坏不得变成\"备份没人引用\"")
+do {
+    let root = freshRoot("20")
+    let store = HistoryStore(root: root)
+    let source = canonicalPath(NSTemporaryDirectory() + "octoshrink-check-20/k.png")
+    makeFile(source, [1, 2, 3])
+    let backup = store.ensureBackup(for: source)!
+    store.add(HistoryEntry.record(
+        source: source, result: result(file: source, size: 3), output: source,
+        backup: backup, retentionDays: 3
+    ))
+    // 崩溃留下的半个 history.json：老实现把它当空历史，下一次启动就把所有备份删光。
+    writeData(store.historyFile, Array("[{\"id\":\"x\",\"sourcePa".utf8))
+
+    let reopened = HistoryStore(root: root)
+    let report = reopened.cleanupExpired(retentionDays: 3)
+    check(report.removedEntries == 0 && report.removedBackups == 0,
+          "损坏现场一次备份都不许删（removedBackups \(report.removedBackups)）")
+    check(fm.fileExists(atPath: backup) && readBytes(backup) == [1, 2, 3],
+          "原图备份完整保留，内容仍是真正原图")
+    check(reopened.cleanupIsLocked(), "本次启动锁死备份清理")
+    check(report.warnings.contains { $0.contains("已损坏") },
+          "报告说清是损坏：\(report.warnings.joined(separator: " / "))")
+    check(fm.contentsOfDirectory(atPath: root).contains { $0.hasPrefix("history.corrupt-") },
+          "损坏现场被改名留档，而不是被 [] 覆盖")
+
+    // 来历记录是 v1（只有 sourcePath/createdAt）也必须认：老用户的历史就靠它重建。
+    let rebuilt = reopened.list()
+    check(rebuilt.count == 1, "按备份重建出 1 条恢复入口（实际 \(rebuilt.count)）")
+    check(rebuilt.first?.status == .recoveryAvailable, "状态是 recoveryAvailable")
+    check(rebuilt.first?.algorithm == HistoryStore.recoveryAlgorithm, "算法位标明不是真实压缩")
+    check(rebuilt.first?.backupPath == backup, "重建条目带着备份位置")
+    check(rebuilt.first?.sourcePath == source, "重建条目认得原图属于谁")
+
+    let startup = reopened.takeStartupReport()
+    check(startup?.recoveredEntries == 1, "启动报告统计到重建条目")
+    check(startup == nil, "启动报告只报一次")
+
+    // 锁定期内连退出清理也不许动手：历史不可信时备份可能是原图唯一的副本。
+    let quit = reopened.purgeBackupsOnExit()
+    check(quit.removedBackups == 0 && fm.fileExists(atPath: backup),
+          "损坏锁定期内退出也不清备份")
+
+    // 重建条目必须真的能一键恢复，而且不误报冲突（明细填的是当下实测值）。
+    let restored = reopened.restoreOutcome(entry: rebuilt[0], force: false)
+    check(restored.success, "重建出来的条目能直接恢复：\(restored.error ?? "")")
+    check(readBytes(source) == [1, 2, 3], "恢复后源文件回到真正原图")
+    check(!fm.fileExists(atPath: backup), "恢复成功后备份才让位")
+}
+
+// ─── 21. 覆盖事务：不能被历史证明提交的覆盖一律回滚 ─────────────────────────
+print("[21] replace 事务与崩溃恢复")
+func transaction(_ id: String, source: String, output: String, backup: String,
+                 crossFormat: Bool = false) -> ReplaceTransaction {
+    ReplaceTransaction(
+        id: id, historyId: id, sourcePath: source, outputPath: output, backupPath: backup,
+        tempOutputPath: nil, originalSize: 3, expectedOutputSize: 1,
+        createdAt: OctoClock.nowMillis, crossFormat: crossFormat
+    )
+}
+
+do {
+    let root = freshRoot("21")
+    let store = HistoryStore(root: root)
+    let journal = OutputTransactionStore(root: root)
+    let dir = NSTemporaryDirectory() + "octoshrink-check-21"
+    let source = canonicalPath(dir + "/a.png")
+    makeFile(source, [9, 9, 9])                    // 崩溃现场：源文件已是压缩结果
+    let backupFile = dir + "/original.png"
+    writeData(backupFile, [1, 2, 3])               // 备份里是真正的原图
+
+    try? journal.prepare(transaction("t-missing", source: source,
+                                     output: source, backup: backupFile))
+    check(journal.hasPending(), "覆盖前登记的记账凭证还在")
+    let report = journal.recover(store)
+    check(report.rolledBack == 1 && report.warnings.isEmpty,
+          "历史证明不了提交 → 自动回滚（\(report.warnings.joined(separator: " / "))）")
+    check(readBytes(source) == [1, 2, 3], "源文件回到真正原图")
+    check(!journal.hasPending(), "回滚完成即销账")
+    check(fm.fileExists(atPath: backupFile), "回滚不许顺手删备份：它可能是原图唯一的副本")
+
+    // 已提交：历史里有同 id 的记录 → 只补删日志，绝不碰用户文件。
+    makeFile(source, [9, 9, 9])
+    store.add(HistoryEntry.record(withId: "t-committed", source: source,
+                                  result: result(file: source, size: 3), output: source,
+                                  backup: backupFile, retentionDays: 3))
+    try? { _ in }(() as Void)
+    _ = journal.prepare(transaction("t-committed", source: source,
+                                    output: source, backup: backupFile))
+    let committed = journal.recover(store)
+    check(committed.committed == 1 && committed.rolledBack == 0, "已提交的事务只销账")
+    check(readBytes(source) == [9, 9, 9], "已提交的事务绝不动用户文件")
+
+    // 跨格式：PNG → JPG 的回滚要连转换出来的新文件一起删。
+    let png = canonicalPath(dir + "/photo.png")
+    makeFile(png, [9, 9])
+    let jpg = dir + "/photo.jpg"
+    writeData(jpg, [8, 8])
+    writeData(backupFile, [1, 2, 3])
+    _ = journal.prepare(transaction("t-cross", source: png,
+                                    output: jpg, backup: backupFile, crossFormat: true))
+    check(journal.recover(store).rolledBack == 1, "跨格式事务被回滚")
+    check(readBytes(png) == [1, 2, 3], "跨格式回滚写回真正原图")
+    check(!fm.fileExists(atPath: jpg), "跨格式回滚删掉转换出来的新文件")
+
+    // 半个日志文件：认不出代表哪次覆盖，就一个文件都不许动。
+    let brokenDir = freshRoot("21b")
+    let brokenStore = HistoryStore(root: brokenDir)
+    let brokenJournal = OutputTransactionStore(root: brokenDir)
+    let kept = canonicalPath(brokenDir + "/kept.png")
+    makeFile(kept, [9, 9])
+    writeData(brokenJournal.root + "/broken.json", Array("{ half".utf8))
+    let unparsed = brokenJournal.recover(brokenStore)
+    check(unparsed.rolledBack == 0, "读不懂的日志不做回滚")
+    check(readBytes(kept) == [9, 9], "读不懂的日志一个字节都不删")
+    check(fm.fileExists(atPath: brokenJournal.root + "/broken.unparsed"), "现场改名留档")
+}
+
+// ─── 22. 备份的来历记录写不成 = 没有备份 ────────────────────────────────────
+print("[22] 备份必须文件与来历记录双全")
+do {
+    let root = freshRoot("22")
+    let source = canonicalPath(NSTemporaryDirectory() + "octoshrink-check-22/m.png")
+    makeFile(source, [1, 2, 3])
+    let store = HistoryStore(root: root)
+    // 把 meta 的位置做成目录：备份文件写得成，来历记录一定写不成。
+    let key = HistoryStore.backupKey(forPath: source)
+    try? fm.createDirectory(atPath: root + "/backups/\(key)", withIntermediateDirectories: true)
+    try? fm.createDirectory(
+        atPath: root + "/backups/\(key)/\(HistoryStore.metaFileName)",
+        withIntermediateDirectories: true)
+    check(store.ensureBackup(for: source) == nil, "来历记录写不成时返回 nil（调用方据此放弃覆盖）")
+    let leftovers = (try? fm.contentsOfDirectory(atPath: root + "/backups")) ?? []
+    check(!leftovers.contains(key), "半成品目录被清掉，不会留下认不出的备份")
+    check(readBytes(source) == [1, 2, 3], "用户的源文件不受影响")
+}
+
+// ─── 23. 恢复的提交顺序：历史写失败时备份必须留着 ────────────────────────────
+print("[23] 恢复先写文件，历史失败就保留备份")
+do {
+    let root = freshRoot("23")
+    let store = HistoryStore(root: root)
+    let source = canonicalPath(NSTemporaryDirectory() + "octoshrink-check-23/n.png")
+    makeFile(source, [1, 2, 3])
+    let backup = store.ensureBackup(for: source)!
+    let entry = HistoryEntry.record(
+        source: source, result: result(file: source, size: 3), output: source,
+        backup: backup, retentionDays: 3
+    )
+    store.add(entry)
+    writeData(source, [9, 9, 9])   // 模拟已被压缩结果覆盖
+    // 让 history.json 的落盘必然失败：目标位置做成目录。
+    try? fm.removeItem(atPath: store.historyFile)
+    try? fm.createDirectory(atPath: store.historyFile, withIntermediateDirectories: true)
+
+    let outcome = store.restoreOutcome(entry: store.list()[0], force: true)
+    check(!outcome.success, "历史没落盘就不能报\"恢复成功\"")
+    check(outcome.error?.contains("文件已恢复") == true,
+          "说清文件已回到原图：\(outcome.error ?? "")")
+    check(readBytes(source) == [1, 2, 3], "文件确实先回到了原图")
+    check(fm.fileExists(atPath: backup), "备份留着，用户重试即可收敛")
+}
+
+// ─── 24. 同格式 replace 的输出就是源文件：恢复后绝不删它 ─────────────────────
+print("[24] 删压缩输出前必须判同一性")
+do {
+    let root = freshRoot("24")
+    let store = HistoryStore(root: root)
+    let realDir = NSTemporaryDirectory() + "octoshrink-check-24"
+    let source = canonicalPath(realDir + "/o.png")
+    makeFile(source, [1, 2, 3])
+    let backup = store.ensureBackup(for: source)!
+    // /var/… 与 /private/var/… 指的是同一个文件，字面却不等。
+    let alias = source.replacingOccurrences(of: "/private/var/", with: "/var/")
+    check(alias != source, "构造出同文件不同字面的路径对")
+    let entry = HistoryEntry.record(
+        source: source, result: result(file: source, size: 3), output: alias,
+        backup: backup, retentionDays: 3
+    )
+    store.add(entry)
+    writeData(source, [9, 9, 9])
+    let outcome = store.restoreOutcome(entry: store.list()[0], force: true)
+    check(outcome.success, "恢复成功：\(outcome.error ?? "")")
+    check(fm.fileExists(atPath: alias), "刚写回的原图没被当成压缩产物删掉")
+    check(readBytes(source) == [1, 2, 3], "源文件内容确实是真正原图")
+}
+
+// ─── 25. 取消不解除暂停；被取消的任务在闸门之前就自己退出 ───────────────────
+print("[25] 取消与暂停互不干扰")
+do {
+    let scheduler = CompressionScheduler(maxParallelism: 2)
+    scheduler.beginBatch()
+    scheduler.pause()
+    let meter = PeakMeter()
+    let group = DispatchGroup()
+    group.enter()
+    DispatchQueue.global().async {
+        // 已取消：哪怕闸门关着，也不该在这儿等下去。
+        let permit = scheduler.acquire(cancelled: { true })
+        if permit != nil { meter.begin(); meter.end() }
+        group.leave()
+    }
+    group.wait(timeout: .now() + 2)
+    check(meter.peak == 0, "取消的任务不占 CPU 名额")
+    check(scheduler.isPaused, "取消不把暂停一起解除")
+
+    // wakeWaiters：只唤醒等待者，闸门该关着还是关着。
+    scheduler.wakeWaiters()
+    check(scheduler.isPaused, "wakeWaiters 不解除暂停")
+    let running = DispatchGroup()
+    running.enter()
+    DispatchQueue.global().async {
+        let permit = scheduler.acquire(cancelled: { false })
+        permit.release()
+        running.leave()
+    }
+    Thread.sleep(forTimeInterval: 0.1)
+    check(!running.wait(timeout: .now()), "暂停中等待者仍被拦住")
+    scheduler.resume()
+    running.wait()
+    check(!scheduler.isPaused, "resume 后闸门开")
+    scheduler.endBatch()
+    check(scheduler.state == "idle", "批次收尾回到 idle")
+}
+
 print(failures == 0
       ? "\n✓ Swift 历史 / 备份 / 暂停 / CPU 上限自检全部通过"
       : "\n✗ Swift 自检失败 \(failures) 项")

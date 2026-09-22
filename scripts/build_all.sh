@@ -79,74 +79,44 @@ APPSTORE_APP="$BUNDLE_DIR/${APP_NAME}.app"
 cp -R "$PROJECT_DIR/frontend/." "$APPSTORE_APP/Contents/Resources/" || true
 ok "前端文件已复制"
 
-# 复制 CLI 工具到 App Store .app（自包含的 + 带 dylib 依赖的）
-log "复制 CLI 工具到 App Store .app"
-mkdir -p "$APPSTORE_APP/Contents/Resources/bin"
-AS_BIN="$APPSTORE_APP/Contents/Resources/bin"
-AS_LIB="$APPSTORE_APP/Contents/Resources/lib"
-mkdir -p "$AS_LIB"
-SRC_BIN="$TAURI_DIR/resources/bin"
+# App Store 版**不打包任何内置 CLI / dylib**：进程内引擎（engine_inproc.rs）只调
+# 链接进主程序的 Rust crate；而且沙盒子进程拿不到父进程的 security-scoped 文件授权，
+# 打包 CLI 在这条线上必然失败。历史上这里复制过 pngquant/oxipng/gifsicle 以求
+# "与 Direct 对齐"，结果是死代码 + bundle 里多出第三方可执行文件（审核风险）。
+# 见 AGENTS.md「App Store bundle 自检」。
+rm -rf "$APPSTORE_APP/Contents/Resources/bin" "$APPSTORE_APP/Contents/Resources/lib"
 
-# gifsicle（自包含，仅依赖 libSystem）
-if [ -f "$TAURI_DIR/resources/bin/gifsicle" ]; then
-  cp "$SRC_BIN/gifsicle" "$AS_BIN/"
-  ok "gifsicle 已复制"
-else
-  echo "    ⚠ gifsicle 未找到，GIF 将降级为 gif crate"
-fi
-
-# oxipng（自包含，仅依赖 libiconv + libSystem）
-if [ -f "$SRC_BIN/oxipng" ]; then
-  cp "$SRC_BIN/oxipng" "$AS_BIN/"
-  ok "oxipng 已复制"
-else
-  echo "    ⚠ oxipng 未找到，PNG 无损优化将降级为 inproc oxipng crate"
-fi
-
-# pngquant + 依赖 dylib（libpng16 + liblcms2，均仅递归依赖系统库）
-if [ -f "$SRC_BIN/pngquant" ]; then
-  cp "$SRC_BIN/pngquant" "$AS_BIN/"
-  # 复制 pngquant 的非系统 dylib 依赖
-  for lib in libpng16.16.dylib liblcms2.2.dylib; do
-    SRC_LIB=""
-    # 尝试从 otool 输出提取实际路径
-    SRC_LIB=$(otool -L "$SRC_BIN/pngquant" 2>/dev/null | grep "$lib" | awk '{print $1}' | head -1)
-    if [ -n "$SRC_LIB" ] && [ -f "$SRC_LIB" ]; then
-      cp "$SRC_LIB" "$AS_LIB/"
-      ok "$lib 已复制"
-    else
-      echo "    ⚠ $lib 未找到，pngquant 可能无法运行"
-    fi
-  done
-  # 用 install_name_tool 将 dylib 路径改为 @executable_path（沙盒不依赖 DYLD）
-  install_name_tool -change /opt/homebrew/opt/little-cms2/lib/liblcms2.2.dylib \
-    @executable_path/../lib/liblcms2.2.dylib "$AS_BIN/pngquant" 2>/dev/null || true
-  install_name_tool -change /opt/homebrew/opt/libpng/lib/libpng16.16.dylib \
-    @executable_path/../lib/libpng16.16.dylib "$AS_BIN/pngquant" 2>/dev/null || true
-  # 修正 dylib 自身 ID
-  if [ -f "$AS_LIB/liblcms2.2.dylib" ]; then
-    install_name_tool -id @executable_path/../lib/liblcms2.2.dylib "$AS_LIB/liblcms2.2.dylib" 2>/dev/null || true
+# bundle 自检：App Store 包里除主程序外不许有第三方 Mach-O / dylib，
+# 引擎源码里不许有 spawn CLI 的写法（注释里提到这些词不算）。
+check_appstore_bundle() {
+  local app="$1" foreign macho spawns
+  foreign=$(find "$app/Contents" \( -name '*.dylib' -o -path '*/Resources/bin/*' \) -type f 2>/dev/null || true)
+  if [ -n "$foreign" ]; then
+    echo "$foreign" >&2
+    fail "App Store 包里混进了外部可执行文件/dylib（沙盒线必须全进程内）"
   fi
-  if [ -f "$AS_LIB/libpng16.16.dylib" ]; then
-    install_name_tool -id @executable_path/../lib/libpng16.16.dylib "$AS_LIB/libpng16.16.dylib" 2>/dev/null || true
+  macho=$(find "$app/Contents/MacOS" -type f ! -name "$APP_NAME" 2>/dev/null || true)
+  if [ -n "$macho" ]; then
+    echo "$macho" >&2
+    fail "Contents/MacOS 下有额外可执行文件"
   fi
-  ok "pngquant + dylib 路径已修正"
-else
-  echo "    ⚠ pngquant 未找到，PNG 压缩将降级为 inproc imagequant"
-fi
+  # 只扫生产代码：自检测试里就写着这些词（截到第一个 #[cfg(test)] 之前）。
+  spawns=$(sed -n '1,/#\[cfg(test)\]/p' "$TAURI_DIR/src/engine_inproc.rs" \
+    | sed 's://.*::' \
+    | grep -nE 'find_tool|make_command|cli_to_file|Command::new' || true)
+  if [ -n "$spawns" ]; then
+    echo "$spawns" >&2
+    fail "engine_inproc.rs 出现了 spawn CLI 的写法，沙盒线必须全部进程内"
+  fi
+  ok "bundle 自检通过（无外部可执行文件、引擎无 spawn）"
+}
+check_appstore_bundle "$APPSTORE_APP"
 
 # 签名 App Store 版（可选）
 if [ "${SIGN:-0}" = "1" ]; then
   SIGN_IDENTITY_AS="${APPSTORE_SIGN_IDENTITY:-Apple Distribution: Guofeng Liu (U8U443D7ZL)}"
   log "签名 App Store 版：${SIGN_IDENTITY_AS}"
   ENT_AS="$TAURI_DIR/entitlements-appstore.plist"
-  # 先签名所有子进程可执行文件和 dylib（子进程需要独立签名）
-  for bin in "$AS_BIN"/*; do
-    [ -f "$bin" ] && codesign --force --options runtime --sign "${SIGN_IDENTITY_AS}" "$bin" 2>/dev/null || true
-  done
-  for lib in "$AS_LIB"/*.dylib; do
-    [ -f "$lib" ] && codesign --force --options runtime --sign "${SIGN_IDENTITY_AS}" "$lib" 2>/dev/null || true
-  done
   codesign --force --options runtime --entitlements "$ENT_AS" --sign "${SIGN_IDENTITY_AS}" "$APPSTORE_APP" \
     || echo "    ⚠ App Store 签名失败：确认钥匙串已安装 Apple Distribution 证书"
   ok "App Store 版已签名"

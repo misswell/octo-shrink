@@ -52,7 +52,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 这笔欠账留给下一次正常退出收，启动时只扫无人引用的孤儿。
     private func purgeBackupsIfNotRetained() {
         guard SettingsStore().load().originalRetentionDays == Retention.noRetain else { return }
-        let report = HistoryStore().purgeBackupsOnExit()
+        // 必须用进程内那一份实例：损坏锁死标记挂在实例上，另 new 一个会把启动时
+        // 立起来的锁丢掉，现场刚留档就被 sweep。
+        let report = HistoryStore.shared.purgeBackupsOnExit()
         if report.removedBackups > 0 || !report.warnings.isEmpty {
             NSLog("OctoShrink 退出清理: 原图备份 -%d 份（历史记录保留）", report.removedBackups)
         }

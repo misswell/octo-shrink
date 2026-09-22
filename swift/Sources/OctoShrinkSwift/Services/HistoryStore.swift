@@ -34,6 +34,24 @@ func fileExists(at path: String) -> Bool {
     FileManager.default.fileExists(atPath: path)
 }
 
+/// 两个路径指的是不是同一个文件。
+///
+/// 记录里的 `sourcePath` 是规范路径，`outputPath` 是当时那个字符串 —— macOS 上
+/// `/var/…` 与 `/private/var/…`、任何软链目录都会让两者字面不等。同格式 replace 的
+/// 压缩输出**就是**源文件本身，判成"另一个文件"会在恢复之后把刚写回的原图删掉。
+func sameFile(_ a: String, _ b: String) -> Bool {
+    a == b || canonicalPath(a) == canonicalPath(b)
+}
+
+/// 落盘到"崩溃后还在"：写完立刻 fsync，数据先于 rename 生效。
+func syncFile(at path: String) {
+    let fd = Darwin.open(path, O_RDONLY)
+    if fd >= 0 {
+        _ = Darwin.fsync(fd)
+        Darwin.close(fd)
+    }
+}
+
 /// 覆盖式复制：FileManager.copyItem 目标存在即失败，此处对齐 Rust fs::copy 的覆盖语义。
 @discardableResult
 func copyFileOverwriting(from src: String, to dst: String) -> Bool {
@@ -85,6 +103,8 @@ enum HistoryStatus: String, Codable {
     case restored
     /// 压缩结果或原图位置已不存在（外部改名/删除）
     case missing
+    /// `history.json` 损坏后从备份目录重建出来的条目：压缩明细已丢失，但原图还能一键恢复
+    case recoveryAvailable
 }
 
 struct HistoryEntry: Codable, Identifiable {
@@ -189,6 +209,15 @@ private let entrySequence = NSLock()
 private var entryCounter: UInt32 = 0
 
 extension HistoryEntry {
+    /// 事务 id 与历史 id 同一个值：覆盖是否提交成功就靠这两者对账。
+    static func newId(forSource source: String) -> String {
+        entrySequence.lock()
+        entryCounter &+= 1
+        let sequence = entryCounter
+        entrySequence.unlock()
+        return "\(OctoClock.nowNanos)-\(sequence)-\(HistoryStore.backupKey(forPath: canonicalPath(source)))"
+    }
+
     /// 一次成功产出对应一条历史。`expiresAt` 只用于展示：启动清理按 `created_at`
     /// 判定，所以同一张图重压多次时，备份的存活期顺延到最后一次相关压缩之后。
     static func record(
@@ -198,14 +227,27 @@ extension HistoryEntry {
         backup: String?,
         retentionDays: Int
     ) -> HistoryEntry {
+        record(
+            withId: newId(forSource: source),
+            source: source, result: result, output: output,
+            backup: backup, retentionDays: retentionDays
+        )
+    }
+
+    /// replace 模式用事务里那个 id 建记录：事务日志先于覆盖写下这个 id，
+    /// 历史里出现的必须是**同一个** id，否则回滚会把已提交的那次当成中断。
+    static func record(
+        withId id: String,
+        source: String,
+        result: CompressResult,
+        output: String,
+        backup: String?,
+        retentionDays: Int
+    ) -> HistoryEntry {
         let createdAt = OctoClock.nowMillis
-        entrySequence.lock()
-        entryCounter &+= 1
-        let sequence = entryCounter
-        entrySequence.unlock()
         let canonical = canonicalPath(source)
         return HistoryEntry(
-            id: "\(OctoClock.nowNanos)-\(sequence)-\(HistoryStore.backupKey(forPath: canonical))",
+            id: id,
             createdAt: createdAt,
             // 「不保留」没有"几天后到期"这回事：这份备份的寿命就是这次运行。
             expiresAt: retentionDays == Retention.noRetain
@@ -235,6 +277,10 @@ struct CleanupReport {
     var removedBackups = 0
     var keptBackups = 0
     var warnings: [String] = []
+    /// 损坏的 `history.json` 被留档成了哪个文件（只在这次真的处理过损坏时才有）。
+    var quarantinedTo: String?
+    /// 从备份目录重建出多少条恢复入口。
+    var recoveredEntries = 0
 }
 
 enum RestoreError: Error {
@@ -285,9 +331,21 @@ final class HistoryStore: @unchecked Sendable {
     static let backupsDirName = "backups"
     static let historyFileName = "history.json"
     static let metaFileName = "backup-meta.json"
+    /// `history.json` 损坏后重建出来的条目用的算法标记：它不是一次真实压缩。
+    static let recoveryAlgorithm = "recovery"
+    /// 历史条数硬上限：清理逻辑再怎么出错，也不能让 history.json 无限膨胀。
+    /// 淘汰最老的记录，且只连带删它自己那份没人认领的备份。
+    static let maxHistoryEntries = 10_000
 
     let root: String
     private let lock = NSLock()
+    /// `history.json` 读不出来过 → 本次启动锁死一切备份 sweep。
+    /// 锁是整次启动的，不因后来某次写入成功而解除。
+    private var cleanupLocked = false
+    /// 损坏现场的处理结果，只报一次给启动流程。
+    private var pendingReport: CleanupReport?
+    /// 已经隔离 + 重建过一轮：同一次启动不反复隔离，也不在写失败时把现场丢掉。
+    private var corruptHandled = false
 
     /// Swift 线用自己的 App Support 子目录：与 Direct / App Store 两条 Tauri 线
     /// 的 history.json 完全隔离，避免三个进程写同一份历史。
@@ -296,6 +354,10 @@ final class HistoryStore: @unchecked Sendable {
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
         return base.appendingPathComponent("com.misswell.octoshrink.swift").path
     }
+
+    /// 全进程共用一份：损坏锁死、启动报告这些状态是**这一次运行**的，两处各 new 一个
+    /// 实例会让退出清理看不到启动时立起来的锁 —— 现场刚被留档，备份就被 sweep 掉。
+    static let shared = HistoryStore()
 
     init(root: String = HistoryStore.appDataRoot()) {
         self.root = root
@@ -309,11 +371,115 @@ final class HistoryStore: @unchecked Sendable {
 
     // ─── 读写 ────────────────────────────────────────────────────
 
+    /// 严格读取：**"没有历史"和"历史读不出来"是两回事**。
+    ///
+    /// 老实现是 `contents + try? decode else []`，把半个 JSON 当成空历史；下一次启动
+    /// 清理看到"没有任何记录引用这些备份"，就把用户所有原图备份删了 —— 拿原图换一个
+    /// 不报错。损坏时改为：隔离现场留档 → 按 backup-meta 重建恢复入口 → 本次启动锁死
+    /// 一切备份清理。
     private func readRaw() -> [HistoryEntry] {
-        guard let data = FileManager.default.contents(atPath: historyFile),
-              let entries = try? JSONDecoder().decode([HistoryEntry].self, from: data)
-        else { return [] }
-        return entries
+        guard let data = FileManager.default.contents(atPath: historyFile) else {
+            return []   // 文件不存在 = 真的没有历史，正常状态
+        }
+        let text = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if text.isEmpty { return [] }
+        if let entries = try? JSONDecoder().decode([HistoryEntry].self, from: data) {
+            return entries
+        }
+        return handleCorrupt()
+    }
+
+    /// 损坏现场：改名留档（证据绝不能被 `[]` 覆盖）→ 从备份重建 → 锁死清理。
+    /// 调用方必须已持有 `lock`。
+    private func handleCorrupt() -> [HistoryEntry] {
+        let rebuilt = rebuildFromBackups()
+        guard !corruptHandled else { return rebuilt }
+        corruptHandled = true
+        cleanupLocked = true
+        var report = CleanupReport()
+        if let kept = quarantineHistoryFile() {
+            report.quarantinedTo = kept
+            report.warnings.append("历史记录文件已损坏，现场已留档为 \(kept)")
+        } else {
+            report.warnings.append("历史记录文件已损坏且无法留档，本次启动不会写历史、也不会清理备份")
+        }
+        report.recoveredEntries = rebuilt.count
+        if !writeRaw(rebuilt) {
+            report.warnings.append("重建的历史记录写入失败，本次启动跳过清理")
+        }
+        report.warnings.append("检测到可恢复的原图备份 \(rebuilt.count) 份（压缩明细已丢失，历史页可一键恢复）")
+        pendingReport = report
+        return rebuilt
+    }
+
+    /// 损坏文件改名留档。毫秒足够唯一，本项目不引日期库。
+    private func quarantineHistoryFile() -> String? {
+        let stamped = (root as NSString).appendingPathComponent(
+            "history.corrupt-\(OctoClock.nowMillis).json")
+        guard Darwin.rename(historyFile, stamped) == 0 else { return nil }
+        return stamped
+    }
+
+    /// 本次启动是否禁止清理无人引用的备份。
+    func cleanupIsLocked() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        _ = readRaw()   // 触发一次加载/损坏处理
+        return cleanupLocked
+    }
+
+    /// 取出损坏现场的处理结果（只有一份，报告完就没了）。
+    func takeStartupReport() -> CleanupReport? {
+        lock.lock(); defer { lock.unlock() }
+        _ = readRaw()
+        return takePendingReportLocked()
+    }
+
+    /// 调用方必须已持有 `lock`。
+    private func takePendingReportLocked() -> CleanupReport? {
+        defer { pendingReport = nil }
+        return pendingReport
+    }
+
+    /// 按备份目录的来历记录重建恢复入口。只认得出"谁的备份、还在不在"，
+    /// 压缩明细（省了多少、什么算法）已经无从得知 —— 但原图必须还能一键恢复。
+    private func rebuildFromBackups() -> [HistoryEntry] {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: backupsDir) else { return [] }
+        let now = OctoClock.nowMillis
+        var rebuilt: [HistoryEntry] = []
+        for name in names.sorted() {
+            let dir = (backupsDir as NSString).appendingPathComponent(name)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: dir, isDirectory: &isDir), isDir.boolValue else { continue }
+            guard let backup = existingBackupFile(name) else { continue }
+            // 没有来历记录就不知道这份备份是谁的图，宁可不认也不许瞎猜。
+            guard let meta = readMeta(name) else { continue }
+            let source = meta.sourcePath
+            rebuilt.append(HistoryEntry(
+                id: "recovery-\(name)",
+                createdAt: meta.createdAt,
+                expiresAt: now,
+                sourcePath: source,
+                outputPath: source,          // replace 模式覆盖的就是源文件本身
+                fileName: (source as NSString).lastPathComponent,
+                outputMode: "replace",
+                originalSize: meta.originalSize > 0 ? meta.originalSize : fileLength(backup),
+                // 明细无从得知，但"此刻源文件什么样"是量得出来的：填实时值，
+                // 否则每次恢复都会误报「压缩后又被修改过」。
+                compressedSize: max(0, fileLength(source)),
+                savings: 0,
+                outType: ((source as NSString).pathExtension).lowercased(),
+                algorithm: HistoryStore.recoveryAlgorithm,
+                backupPath: backup,
+                status: .recoveryAvailable,
+                restoredAt: nil,
+                outputModifiedAt: fileMtimeMillis(source) ?? meta.originalModifiedAt,
+                sourceExists: fileExists(at: source),
+                backupExists: true
+            ))
+        }
+        return rebuilt
     }
 
     private func writeRaw(_ entries: [HistoryEntry]) -> Bool {
@@ -348,6 +514,14 @@ final class HistoryStore: @unchecked Sendable {
         return decorate(readRaw()).first { $0.id == historyId }
     }
 
+    /// 覆盖事务是否已提交：历史里有这条 id 且还没被恢复，就证明整条链路都走完了。
+    ///
+    /// 判定只依赖这一条事实 —— 别的都可能是崩溃现场的一部分。
+    func containsCommitted(_ historyId: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return readRaw().contains { $0.id == historyId && $0.status != .restored }
+    }
+
     /// 主队列的「恢复原图」不带 id 时，按源路径找最近一条还没恢复的记录。
     func findLatest(forSource sourcePath: String) -> HistoryEntry? {
         lock.lock(); defer { lock.unlock() }
@@ -363,7 +537,26 @@ final class HistoryStore: @unchecked Sendable {
         var entries = readRaw()
         entries.removeAll { $0.id == entry.id }
         entries.append(entry)
-        return writeRaw(entries)
+        guard entries.count > Self.maxHistoryEntries else { return writeRaw(entries) }
+        // 淘汰最老的，直到回到上限内；备份只在"没有幸存记录再引用它"时才连带删。
+        let overflow = entries.count - Self.maxHistoryEntries
+        let oldest = Array(entries.sorted {
+            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+            return $0.id < $1.id
+        }.prefix(overflow))
+        let doomed = Set(oldest.map { $0.id })
+        let survivors = entries.filter { !doomed.contains($0.id) }
+        guard writeRaw(survivors) else { return false }
+        dropBackupsOf(evicted: oldest, survivors: survivors)
+        return true
+    }
+
+    /// 被淘汰条目独享的备份目录才删；还有别的记录引用就留着。
+    private func dropBackupsOf(evicted: [HistoryEntry], survivors: [HistoryEntry]) {
+        let stillReferenced = Set(survivors.compactMap { $0.backupKey })
+        for key in Set(evicted.compactMap { $0.backupKey }) where !stillReferenced.contains(key) {
+            _ = removeDirectory(backupDir(key))
+        }
     }
 
     func clear() -> CleanupReport {
@@ -421,10 +614,14 @@ final class HistoryStore: @unchecked Sendable {
         return matches.last
     }
 
-    /// 为一次 replace 压缩准备原图备份，返回 nil 表示备份没写成。
+    /// 为一次 replace 压缩准备原图备份，返回 nil 表示备份不可信。
     ///
     /// 关键不变量：**已有有效备份时绝不覆盖**。同一张图连压三次，备份里永远是
     /// 第一次压缩前的真正原图，否则「恢复原图」只会回到上一版压缩结果。
+    ///
+    /// 备份文件 + 来历记录**都在**才算成功：`history.json` 一旦损坏，重建恢复入口
+    /// 只认得出"谁的备份"靠的就是这份 meta。缺一半等于没备份 —— 返回 nil，调用方
+    /// 必须放弃这次覆盖（宁可压缩失败，也不能出现"覆盖了但没原图"）。
     func ensureBackup(for source: String) -> String? {
         lock.lock(); defer { lock.unlock() }
         let canonical = canonicalPath(source)
@@ -451,13 +648,38 @@ final class HistoryStore: @unchecked Sendable {
             guard (try? FileManager.default.createDirectory(
                 atPath: dir, withIntermediateDirectories: true)) != nil else { return nil }
             let backupPath = (dir as NSString).appendingPathComponent("original.\(extensionName)")
-            guard copyFileOverwriting(from: canonical, to: backupPath) else { return nil }
-            let meta = BackupMeta(sourcePath: canonical, createdAt: OctoClock.nowMillis)
-            if let data = try? JSONEncoder().encode(meta) {
-                _ = writeAtomic(
+            // 先写临时名再 rename：崩溃不许留下半个 original.xxx 冒充有效备份。
+            let staged = (dir as NSString).appendingPathComponent(".original.\(extensionName).tmp")
+            guard copyFileOverwriting(from: canonical, to: staged) else {
+                _ = removeDirectory(dir)
+                return nil
+            }
+            syncFile(at: staged)
+            guard Darwin.rename(staged, backupPath) == 0 else {
+                _ = removeDirectory(dir)
+                return nil
+            }
+            let meta = BackupMeta(
+                version: 2,
+                sourcePath: canonical,
+                createdAt: OctoClock.nowMillis,
+                originalSize: max(0, fileLength(backupPath)),
+                originalModifiedAt: fileMtimeMillis(canonical),
+                originalExtension: extensionName
+            )
+            guard let data = try? JSONEncoder().encode(meta),
+                  writeAtomic(
                     path: (dir as NSString).appendingPathComponent(Self.metaFileName),
                     data: data
-                )
+                  )
+            else {
+                _ = removeDirectory(dir)
+                return nil
+            }
+            // 落盘后再认一次：任何一半缺失都不算备份。
+            guard existingBackupFile(key) != nil, readMeta(key) != nil else {
+                _ = removeDirectory(dir)
+                return nil
             }
             return backupPath
         }
@@ -474,9 +696,14 @@ final class HistoryStore: @unchecked Sendable {
     func cleanupExpired(retentionDays: Int) -> CleanupReport {
         lock.lock(); defer { lock.unlock() }
         var report = CleanupReport()
+        let all = readRaw()          // 先触发加载，损坏时才会把锁置起来
+        if cleanupLocked {
+            if let pending = takePendingReportLocked() { report = pending }
+            report.warnings.append("历史记录文件已损坏，本次启动跳过清理，原图备份全部保留")
+            return report
+        }
         let expiresByTime = retentionDays > Retention.noRetain
         let cutoff = OctoClock.nowMillis - Int64(max(1, retentionDays)) * historyDayMillis
-        let all = readRaw()
         let kept = all.filter { entry in
             let expired = expiresByTime && entry.createdAt < cutoff
             if expired { report.removedEntries += 1 }
@@ -497,6 +724,14 @@ final class HistoryStore: @unchecked Sendable {
     func purgeBackupsOnExit() -> CleanupReport {
         lock.lock(); defer { lock.unlock() }
         var report = CleanupReport()
+        _ = readRaw()               // 先触发加载，损坏时才会把锁置起来
+        if cleanupLocked {
+            // 历史读不出来时，备份目录里那些文件可能是用户原图**唯一**的副本。
+            // 既不能"按历史清理"（历史本身不可信），也不能顺手把 backupPath 抹成 nil
+            // —— 那会让重建出来的恢复入口永久失联。整个锁定期原样留给下次启动。
+            report.warnings.append("历史记录文件已损坏，本次退出不清理原图备份")
+            return report
+        }
         var cleared = readRaw()
         for index in cleared.indices { cleared[index].backupPath = nil }
         guard writeRaw(cleared) else {
@@ -510,6 +745,11 @@ final class HistoryStore: @unchecked Sendable {
 
     /// 删掉没有任何存活条目引用的备份目录。调用方必须已持有 `lock`。
     private func sweepUnreferencedBackups(kept: [HistoryEntry], report: inout CleanupReport) {
+        // 兜底：历史不可信的整次启动里，任何路径都不许走到"删无人引用的备份"。
+        guard !cleanupLocked else {
+            report.warnings.append("历史记录不可信，跳过备份清理")
+            return
+        }
         let referenced = Set(
             kept.filter { $0.status != .restored }.compactMap { $0.backupKey }
         )
@@ -541,7 +781,8 @@ final class HistoryStore: @unchecked Sendable {
 
     // ─── 恢复 ────────────────────────────────────────────────────
 
-    private func markRestored(_ ids: [String]) {
+    /// false = 历史没落盘。调用方（restore）必须留着备份并报错，让用户重试。
+    private func markRestored(_ ids: [String]) -> Bool {
         lock.lock(); defer { lock.unlock() }
         let stamp = OctoClock.nowMillis
         var entries = readRaw()
@@ -554,14 +795,18 @@ final class HistoryStore: @unchecked Sendable {
             entries[index].backupExists = false
             touched = true
         }
-        if touched { _ = writeRaw(entries) }
+        return touched ? writeRaw(entries) : true
     }
 
-    private func removeIds(_ ids: [String]) {
+    /// 写失败就抛错：撤销没落盘，这条记录还留在历史里，用户可以重试。
+    private func removeIds(_ ids: [String]) throws {
         lock.lock(); defer { lock.unlock() }
         let before = readRaw()
         let after = before.filter { !ids.contains($0.id) }
-        if after.count != before.count { _ = writeRaw(after) }
+        guard after.count != before.count else { return }
+        guard writeRaw(after) else {
+            throw RestoreError.io("history.json 写入失败")
+        }
     }
 
     /// 同一条备份可能被多条记录引用（同一张图重压 N 次）。恢复的是那份真正原图，
@@ -586,12 +831,10 @@ final class HistoryStore: @unchecked Sendable {
         return abs(current - recorded) > historyMtimeToleranceMillis
     }
 
-    /// 把备份原子地写回源路径，并处理跨格式输出的清理。
-    private func restoreBackupFiles(_ entry: HistoryEntry) throws {
-        guard let backup = entry.backupPath, fileExists(at: backup) else {
-            throw RestoreError.backupGone
-        }
-        let target = entry.sourcePath
+    /// 把一份备份原子地写回目标位置：同目录临时文件 → fsync → rename。
+    ///
+    /// `restore` 和事务回滚共用这一个实现 —— 恢复原图这件事绝不允许有两套写法。
+    static func writeBackupBack(to target: String, backup: String) throws {
         let parent = (target as NSString).deletingLastPathComponent
         let tmp = (parent as NSString).appendingPathComponent(
             ".octoshrink-restore-\(OctoClock.nowNanos).tmp"
@@ -599,19 +842,29 @@ final class HistoryStore: @unchecked Sendable {
         guard copyFileOverwriting(from: backup, to: tmp) else {
             throw RestoreError.io("无法写入恢复临时文件")
         }
+        // 写回原图这一步不能只留在内核缓存里：崩溃后用户看到的必须真是原图。
+        syncFile(at: tmp)
         if Darwin.rename(tmp, target) != 0 {
             // 覆盖到一半失败时保留原目标文件，只清掉临时文件。
             try? FileManager.default.removeItem(atPath: tmp)
             throw RestoreError.io("无法把原图写回目标位置")
         }
-        // 跨格式 replace（PNG → JPG）时压缩结果是个新文件，恢复后不该留下孤儿。
-        if let output = entry.outputPath, output != target {
-            try? FileManager.default.removeItem(atPath: output)
-        }
+    }
+
+    /// 跨格式 replace（PNG → JPG）时压缩结果是个新文件，恢复后不该留下孤儿。
+    /// 同格式 replace 的输出就是源文件本身，绝不许删。
+    private static func removeGeneratedOutput(_ entry: HistoryEntry) {
+        guard let output = entry.outputPath else { return }
+        guard !sameFile(output, entry.sourcePath) else { return }
+        try? FileManager.default.removeItem(atPath: output)
     }
 
     /// 统一恢复入口：主队列 / 历史页 / 恢复全部 都走这里，
     /// 避免三套逻辑对历史状态的处理不一致。
+    ///
+    /// 提交顺序是**刻意**的：写回原图 → 历史落盘 → 才删压缩输出和备份目录。
+    /// 反过来（先删备份再写历史）一旦历史写失败，历史会显示「已压缩」而备份已经没了 ——
+    /// 用户看到一条永远恢复不了的记录。现在最坏只留下一个没人引用的孤儿目录。
     @discardableResult
     func restore(entry: HistoryEntry, force: Bool) throws -> [String] {
         guard entry.status != .restored else { throw RestoreError.notRestorable }
@@ -624,18 +877,25 @@ final class HistoryStore: @unchecked Sendable {
                     throw RestoreError.io(error.localizedDescription)
                 }
             }
-            removeIds([entry.id])
+            try removeIds([entry.id])
             return [entry.id]
         }
         if !force && Self.hasConflict(entry) { throw RestoreError.conflict }
+        guard let backup = entry.backupPath, fileExists(at: backup) else {
+            throw RestoreError.backupGone
+        }
         let ids = siblingsSharingBackup(entry)
-        let backupDir = entry.backupPath.flatMap(Self.backupDir(ofBackupPath:))
-        try restoreBackupFiles(entry)
-        if let dir = backupDir {
-            // 备份在 App Support 内，不需要任何沙盒授权。
+        let backupDirectory = entry.backupPath.flatMap(Self.backupDir(ofBackupPath:))
+        try Self.writeBackupBack(to: entry.sourcePath, backup: backup)
+        guard markRestored(ids) else {
+            // 文件已经回到原图，但状态没落盘：备份必须留着，用户重试即可收敛。
+            throw RestoreError.io("文件已恢复，但历史记录状态保存失败，原图备份已保留")
+        }
+        Self.removeGeneratedOutput(entry)
+        if let dir = backupDirectory {
+            // 备份在 App Support 内，不需要任何沙盒授权。删不掉只是孤儿，下次启动扫。
             _ = removeDirectory(dir)
         }
-        markRestored(ids)
         return ids
     }
 
@@ -673,8 +933,14 @@ extension RestoreError {
 }
 
 private struct BackupMeta: Codable {
+    /// 1 = 只有 sourcePath/createdAt（老版本）；2 = 带大小、mtime、扩展名。
+    /// 老文件必须还能读：`history.json` 损坏时就靠这份记录重建恢复入口。
+    var version: Int = 2
     var sourcePath: String
     var createdAt: Int64
+    var originalSize: Int64 = 0
+    var originalModifiedAt: Int64? = nil
+    var originalExtension: String = ""
 }
 
 // MARK: - App 级设置（保留天数）

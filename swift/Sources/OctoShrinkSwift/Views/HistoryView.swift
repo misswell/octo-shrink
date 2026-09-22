@@ -29,7 +29,12 @@ func historyTimeText(_ millis: Int64) -> String {
 
 /// 只有真正被覆盖过、且备份还在的记录才谈得上「恢复原图」。
 func historyCanRestore(_ entry: HistoryEntry) -> Bool {
-    entry.status == .compressed
+    // recoveryAvailable = history.json 损坏后从备份目录重建出来的条目：
+    // 压缩明细已经无从得知，但备份确实还在，原图仍然可以一键恢复。
+    if entry.status == .recoveryAvailable {
+        return entry.backupExists && entry.sourceExists
+    }
+    return entry.status == .compressed
         && entry.outputMode == "replace"
         && entry.backupExists
         && entry.sourceExists
@@ -40,10 +45,23 @@ func historyStatusText(_ entry: HistoryEntry) -> String {
         guard let restoredAt = entry.restoredAt else { return "已恢复" }
         return "已恢复 · \(historyTimeText(restoredAt))"
     }
+    if entry.status == .recoveryAvailable {
+        return entry.backupExists ? "检测到可恢复的原图备份" : "原图备份已清理"
+    }
     if entry.outputMode != "replace" { return "原图未覆盖" }
     if !entry.sourceExists { return "原文件位置不存在" }
     if !entry.backupExists { return "原图备份已清理" }
     return "已压缩"
+}
+
+/// 重建条目没有这次压缩的明细，报一个算出来的 0.0% 节省率是假数字。
+func historySavingsText(_ entry: HistoryEntry) -> String {
+    entry.status == .recoveryAvailable ? "明细已丢失" : "节省 \(String(format: "%.1f", abs(entry.savings)))%"
+}
+
+/// 算法位上写的是"这条记录怎么来的"：重建条目不是任何一次真实压缩。
+func historyAlgorithmText(_ entry: HistoryEntry) -> String {
+    entry.status == .recoveryAvailable ? "按备份重建" : (entry.algorithm.isEmpty ? entry.outType : entry.algorithm)
 }
 
 // MARK: - 历史记录页（主窗口内部视图：切过来不影响队列，也不打断压缩）
@@ -64,7 +82,9 @@ struct HistoryPageView: View {
                     Label("清空历史", systemImage: "trash").labelIconToTextSpacing(3)
                 }
                 .buttonStyle(GhostButtonStyle())
-                .disabled(appState.historyEntries.isEmpty)
+                // 清空 = 连原图备份一起删。压缩进行中禁用；真正的判据在后端
+                // （clearHistory 还会看有没有挂着的事务）。
+                .disabled(appState.historyEntries.isEmpty || appState.scheduler.isBatchActive)
                 .help("清空历史记录，以及 OctoShrink 保存的原图备份")
             }
 
@@ -95,13 +115,15 @@ struct HistoryRowView: View {
     @EnvironmentObject var appState: AppState
     let entry: HistoryEntry
 
+    private var isRecovery: Bool { entry.status == .recoveryAvailable }
+
     var body: some View {
         HStack(spacing: 8) {
             ZStack {
                 Circle().fill(Color(nsColor: .separatorColor).opacity(0.35))
-                Image(systemName: entry.status == .restored ? "arrow.uturn.backward" : "checkmark")
+                Image(systemName: rowIcon)
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(entry.status == .restored ? .secondary : .green)
+                    .foregroundColor(rowIconColor)
             }
             .frame(width: 24, height: 24)
 
@@ -123,9 +145,9 @@ struct HistoryRowView: View {
                 Text("\(CompressResult.formatBytesJS(entry.originalSize)) → \(CompressResult.formatBytesJS(entry.compressedSize))")
                     .font(.system(size: 10))
                     .monospacedDigit()
-                Text("节省 \(String(format: "%.1f", abs(entry.savings)))%")
+                Text(historySavingsText(entry))
                     .font(.system(size: 10))
-                    .foregroundColor(entry.savings >= 0 ? .green : .orange)
+                    .foregroundColor(isRecovery ? .secondary : (entry.savings >= 0 ? .green : .orange))
             }
             .frame(width: 132, alignment: .trailing)
 
@@ -134,7 +156,7 @@ struct HistoryRowView: View {
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
                     .monospacedDigit()
-                Text(entry.algorithm.isEmpty ? entry.outType : entry.algorithm)
+                Text(historyAlgorithmText(entry))
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
                     .lineLimit(1)
@@ -164,7 +186,18 @@ struct HistoryRowView: View {
         .padding(.horizontal, AppMetrics.sectionHPadding)
         .padding(.vertical, 6)
         .frame(minHeight: 40)
-        .opacity(entry.status == .restored ? 0.55 : 1)
+        .opacity(entry.status == .restored || isRecovery ? 0.55 : 1)
+    }
+
+    /// 重建条目用警告图标而不是对勾：它不是一次成功的压缩，是一次数据抢救。
+    private var rowIcon: String {
+        if isRecovery { return "exclamationmark.triangle" }
+        return entry.status == .restored ? "arrow.uturn.backward" : "checkmark"
+    }
+
+    private var rowIconColor: Color {
+        if isRecovery { return .orange }
+        return entry.status == .restored ? .secondary : .green
     }
 
     /// 压缩结果与源文件不是同一个时优先跳到结果，否则回到源路径。

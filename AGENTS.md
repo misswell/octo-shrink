@@ -134,13 +134,15 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - ✅ 白屏与 IPC 问题已最终修复（v2.2.9）：固定端口段 41845-41847 + HTTP 服务器 + 完整 ACL（allow-* + remote.urls 精确带端口 origin），详见第 3 节「白屏与 IPC 反复 bug 终极解法」
 - ✅ 沙盒文件访问已修复：security-scoped bookmarks + 弹窗授权 + 清理旧授权功能
 - ✅ PNG 进程内化已完成（阶段 1.1）：imagequant + oxipng crate 接入
+- ✅ App Store 线已做到**真正全进程内**：`engine_inproc.rs` 不再有优先 spawn 打包 CLI 的分支（沙盒子进程拿不到 security-scoped 授权，那条路径必然失败），`build_all.sh` 也不再往 App Store .app 里复制 CLI/dylib；两个构建脚本 + 一个源码自检测试共同守住"包里无第三方可执行文件、引擎无 spawn"（见「App Store bundle 自检」）
 - ✅ JPG/WebP/AVIF 进程内化已完成：mozjpeg / webp / ravif crate 接入
 - ✅ macOS 系统转换模式已接入：两条产物线共用 ImageIO/CoreGraphics，支持 JPEG/PNG/HEIF、Finder 尺寸档位和元数据保留，不调用外部进程
 - ✅ 输出文件名后缀支持自定义：默认 `_compressed`，两条产物线共用 `outputSuffix`，并对路径分隔符做安全清理
 - ✅ 两条产物线功能对齐：JXL 已从前端输出格式下拉移除（两版一致）；GIF 两版均有压缩功能（Direct gifsicle 减色更优，App Store image crate 重编码，属质量差异非功能差异）
 - ✅ 对比视图已改为独立原生窗口（未发版）：`compare.html` + `compare_window.js`，label="compare"，由 `open_compare_window` 命令创建（Direct 用 tauri:// 内嵌页，App Store 用本地 HTTP 页），自由缩放可大于主窗口、自带红绿灯；载荷经 `pending_compare` 状态 + `take_compare_window_payload` 首屏取回，`compare-open` / `compare-results-changed` 事件双向同步；`on_window_event` 仅在 label=="main" 关闭时 exit(0)；首屏与 resize 均按"适合窗口"fit 适配（先 showPanel 再测量视口，隐藏态测量会得到 0 而回退 100%，大图只显示局部），缩放下限 0.02，重置按钮=重新适配，用户手动缩放后 resize 不再打断
-- ✅ 安全暂停已接入（三线一致）：压缩中可暂停/继续，只拦「还没开始」的文件，绝不 kill 正在跑的 CLI 子进程；进度按钮文案变「暂停中…」，旁边一个小号 [暂停]/[继续]
+- ✅ 安全暂停已接入（三线一致）：压缩中可暂停/继续，只拦「还没开始」的文件，绝不 kill 正在跑的 CLI 子进程；进度按钮文案变「暂停中…」，旁边一个小号 [暂停]/[继续]。**取消一个文件只 `wake_waiters()`、绝不 `resume()`**（详见「安全暂停」），整批取消走一次 `cancel_batch`
 - ✅ 压缩历史 + 原图保留/恢复已接入（三线一致）：`history.rs::HistoryStore` / Swift `Services/HistoryStore.swift` 落 App Support（**不再是临时目录**），历史页/设置页为主窗口内部视图，恢复统一走一个服务（`restore_original` / `restore_history_entry` / `restore_all` 共用 `HistoryStore::restore`），保留档位为「不保留」（默认，退出时清理）或 1/3/7/14/30 天（启动时按天清理，详见下一节）
+- ✅ 覆盖事务与崩溃安全已接入（Rust 两线，Swift 线待补）：`output_transaction.rs::TransactionStore` 在覆盖前记账、`history.add` 落盘后才销账，启动时 `recover()` 补记或自动回滚上次中断的覆盖；`history.json` 严格读取（损坏→隔离 + 按 `backup-meta.json` 重建 `recoveryAvailable` + 本次启动锁死备份 sweep）；`write_output_file` 全链路 `Result`（任一步失败必须把 `CompressResult.success` 翻成 false）；备份 key 从 `DefaultHasher` 迁到 FNV-1a 64（老 key 只读复用/续认，含书签）；`MAX_HISTORY_ENTRIES = 10_000`
 - ✅ CPU 使用上限已接入（三条线一致）：设置页「性能」小节 + `CompressionScheduler`（暂停与并行预算同一套闸门）+两层预算（并发文件数 × 单编码器内部线程），检测见 `system_info.rs` / `SystemInfo.swift`，详见「CPU 使用上限（三条线共用不变量）」
 - ✅ Swift 原生线（`swift/`）与两条 Tauri 线功能对齐，历史/备份/暂停语义一致，但存储根目录独立（`~/Library/Application Support/com.misswell.octoshrink.swift`），三条线互不读写对方的 history.json
 - 🟡 App Store 审核待提交：2.2.9 已上传 ASC，需补全元数据 + 回复 network.server 解释（路径B）后提交审核
@@ -164,11 +166,13 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 | 拖放（drag-drop） | Tauri drop payload 直给路径 | 同上 + bookmark 化 | 沙盒需 security-scoped URL |
 | walk_dir 递归 | fs::read_dir 任意路径；稳定排序并按规范路径去重，前端批次使用已展开文件快照 | 同上 + 仅在已书签根内递归 | 沙盒只认授权范围；队列不能因重复目录或处理期间新增文件而改变 |
 | 队列批次文件清单 | 导入完成后展开并去重，开始处理时只提交该批次快照；目录根通过 `sourceRoots` 保留相对输出路径 | 同上，书签授权范围内执行 | 避免处理中追加、异步扫描乱序和清空后旧事件回流 |
-| write_output_file | fs::write；系统跨格式覆盖时改扩展名并避让同名目标；后缀模式使用自定义 `outputSuffix`（默认 `_compressed`） | 系统转换开始前强制经文件夹选择器授权，随后写入已授权目录；后缀模式使用同一自定义 `outputSuffix` | 沙盒不能依赖单文件授权写入旁路新文件；两版需保持输出命名一致 |
+| write_output_file | ①`ensure_backup`（写不成就不碰用户文件）②写 `history/transactions/<id>.json` 记账 ③同目录 `.octoshrink-write-<millis>.tmp` ④flush + fsync ⑤rename 覆盖目标 ⑥`history.add`（失败=回滚：备份写回源文件、删生成结果、销账）⑦ 删账。系统跨格式覆盖时改扩展名并避让同名目标；后缀模式使用自定义 `outputSuffix`（默认 `_compressed`） | 系统转换开始前强制经文件夹选择器授权，随后写入已授权目录；后缀模式使用同一自定义 `outputSuffix` | 沙盒不能依赖单文件授权写入旁路新文件；两版需保持输出命名一致。**落盘任一步失败都必须把 `CompressResult.success` 翻成 false**，UI 绝不许显示「压缩完成」 |
 | restore_original / restore_history_entry / restore_all | 三条命令共用同一个恢复服务 `HistoryStore::restore`：backup → `.octoshrink-restore-<nanos>.tmp` → rename 覆盖源文件 → 再删本次生成的压缩输出与备份目录；命中冲突（大小或 mtime 变化 >2 s，仅 replace 模式）时返回 `conflict=true`，前端确认后带 `force=true` 重试 | 同上，源图/输出/备份路径均经 bookmark 授权；路径一律由 historyId 从存储读取，前端不拼路径 | 沙盒；两版恢复语义一致，**不允许复制三套恢复逻辑** |
-| 历史记录与原图备份 | `HistoryStore` 落 `<appdata>/history/history.json` + `<appdata>/history/backups/<key>/`（App Support，跨启动长期保留） | 同上（沙盒容器内的 App Support）| 备份绝不放 temp_dir/Caches，否则系统清理会丢掉原图；Swift 线用独立根 `~/Library/Application Support/com.misswell.octoshrink.swift` |
-| 启动清理 | `setup` 里跑一次 `cleanup_expired(retention_days)`：只删过期 `HistoryEntry` 和只被该条目引用的备份目录；`retention_days == 0`（「不保留」，默认档）时**只扫无人引用的孤儿备份** | 同上 | 不留常驻计时器；「不保留」档的备份**只在正常退出时清**（`RunEvent::Exit` / `applicationWillTerminate`），因为崩溃现场那份可能是唯一的原图；**绝不删用户的 sourcePath / outputPath / 输出目录里的文件**（历史过期 ≠ 用户文件过期） |
-| 安全暂停 | `CompressionControl`（`pause_compression` / `resume_compression` / `compression_state`）：闸门只拦「还没开始」的文件，正在跑的 CLI 子进程绝不 kill；`Notify` + 250 ms 超时轮询 | 同上（进程内引擎同样只在新任务起点等待）| 两版行为一致；Swift 线为 `PauseGate` |
+| restore_original / restore_history_entry / restore_all | 三条命令共用同一个恢复服务 `HistoryStore::restore`：备份 → `.octoshrink-restore-<nanos>.tmp` → fsync → rename 覆盖源文件 → **历史状态落盘成功之后**才删本次生成的压缩输出与备份目录；命中冲突（大小或 mtime 变化 >2 s，仅 replace 模式）时返回 `conflict=true`，前端确认后带 `force=true` 重试 | 同上，源图/输出/备份路径均经 bookmark 授权；路径一律由 historyId 从存储读取，前端不拼路径 | 沙盒；两版恢复语义一致，**不允许复制三套恢复逻辑**。顺序反了会出现"历史说已恢复、备份已删、原图没写回" |
+| 历史记录与原图备份 | `HistoryStore` 落 `<appdata>/history/history.json` + `<appdata>/history/backups/<key>/`（App Support，跨启动长期保留）；备份 key = **FNV-1a 64 位**（`stable_hash`，跨 rustc 版本稳定），老 `DefaultHasher` key 仍被识别用于续用已有备份与书签 | 同上（沙盒容器内的 App Support）| 备份绝不放 temp_dir/Caches，否则系统清理会丢掉原图；Swift 线用独立根 `~/Library/Application Support/com.misswell.octoshrink.swift`。**标准库从不承诺 `DefaultHasher` 的跨版本稳定性**，一次升级就能让所有备份看起来"无人引用" |
+| 启动清理 | `setup` 里先 `transactions.recover(history)`（补记或自动回滚上次中断的覆盖），再跑一次 `cleanup_expired(retention_days)`：只删过期 `HistoryEntry` 和只被该条目引用的备份目录；`retention_days == 0`（「不保留」，默认档）时**只扫无人引用的孤儿备份** | 同上 | 不留常驻计时器；「不保留」档的备份**只在正常退出时清**（`RunEvent::Exit` / `applicationWillTerminate`），因为崩溃现场那份可能是唯一的原图；**绝不删用户的 sourcePath / outputPath / 输出目录里的文件**（历史过期 ≠ 用户文件过期） |
+| history.json 读不出来 | **严格读**：文件不存在=空历史（正常）；存在但解析失败=损坏 → 隔离为 `history.corrupt-<millis>.json`（现场绝不许被 `[]` 覆盖）→ 按 `backups/<key>/backup-meta.json` 重建 `status: "recoveryAvailable"` 条目 → 本次启动**禁止一切备份 sweep**（`cleanup_is_locked()`） | 同上 | 老实现 `unwrap_or_default()` 把半个文件当空历史，下一次启动清理就"合法地"删光所有原图备份。重建出的条目没有压缩明细，但保证**原图仍可一键恢复** |
+| 安全暂停 / 取消 | `CompressionScheduler`（`pause_compression` / `resume_compression` / `compression_state` / `cancel_file` / `cancel_batch` / `clear_cancel_queue`）：闸门只拦「还没开始」的文件，正在跑的 CLI 子进程绝不 kill；`Notify` + 250 ms 超时轮询，等待者用 `acquire_or_cancelled` 自带取消退出条件 | 同上（进程内引擎同样只在新任务起点等待）| 两版行为一致；Swift 线为 `CompressionScheduler.acquire(cancelled:)`。**取消只 `wake_waiters()`，绝不 `resume()`** |
 | 对比窗口（compare 独立窗口）| WebviewUrl::App 加载内嵌 compare.html，经 convertFileSrc / read_image_dataurl 读图 | WebviewUrl::External 指向本地 HTTP 服务器 `http://localhost:<port>/compare.html`（`frontend_http_port()`），经 read_image_dataurl（bookmark 授权范围内）读图，窗口创建时 `visible(false)` + on_page_load show 防白屏 | 沙盒阻止 tauri://；两版窗口行为一致，URL 按 feature 分叉 |
 | open_in_finder | Command::new("open").arg("-R") | tauri-plugin-opener（NSWorkspace）| 沙盒禁 spawn Finder |
 | ~/Library/... 访问 | 任意 | 仅 App Support / Caches / Tmp（sandbox 允许子集）| 沙盒 |
@@ -199,6 +203,8 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 | gifsicle | image crate（无减色优化）| ✅ 已完成（质量降级：无 gifsicle --colors=N 减色，两版均有 GIF 压缩功能）|
 | Finder「转换图像」 | macOS ImageIO/CoreGraphics（两版共用） | ✅ 系统转换模式：JPEG/PNG/HEIF + 实际/1280/640/320 px + 元数据开关 |
 
+⚠️ **`engine_inproc.rs` 里绝不允许出现 `find_tool` / `make_command` / `cli_to_file` / `Command::new`**（曾经为了"压缩效果对齐 Direct"优先 spawn 打包 CLI，但那在沙盒下是必然失败的死路径）。为什么：security-scoped 文件授权挂在**父进程**的 sandbox extension 上，不随 spawn 继承，子进程读不到用户选中的图片；`scripts/build_appstore.sh` 也从不再往包里放 CLI。两处机器可查的守卫：`engine_inproc.rs` 的 `the_inproc_engine_never_spawns_an_external_tool`（扫自己源码）+ 两个构建脚本里的 bundle 自检（包里不许有第三方 Mach-O / dylib）。
+
 ## 变更本文件的规定
 
 - 任何 PR / 提交若改变两条产物线的并行结构、文件访问差异、entitlements 配置、CLI↔crate 映射 → 必须在本文件同步更新对应小节
@@ -210,14 +216,27 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 
 ### 存储位置：永远在 App Support，绝不在临时目录
 
-| 线 | 根目录 | history 文件 | 备份目录 |
-|---|---|---|---|
-| Direct | `app.path().app_data_dir()`（identifier `com.misswell.octoshrink`） | `<root>/history/history.json` | `<root>/history/backups/<key>/original.<ext>` |
-| App Store | 同上，identifier `com.misswell.octoshrink.appstore` → 自动落沙盒容器 | 同上 | 同上 |
-| Swift | `~/Library/Application Support/com.misswell.octoshrink.swift` | 同上 | 同上 |
+| 线 | 根目录 | history 文件 | 备份目录 | 覆盖事务凭证 |
+|---|---|---|---|---|
+| Direct | `app.path().app_data_dir()`（identifier `com.misswell.octoshrink`） | `<root>/history/history.json` | `<root>/history/backups/<key>/original.<ext>` | `<root>/history/transactions/<id>.json` |
+| App Store | 同上，identifier `com.misswell.octoshrink.appstore` → 自动落沙盒容器 | 同上 | 同上 | 同上 |
+| Swift | `~/Library/Application Support/com.misswell.octoshrink.swift` | 同上 | 同上 | 同上 |
 
-- 三条线的存储根**互不相同**，备份 key 的哈希算法也不同（Rust 用 `DefaultHasher` 取 16 位十六进制；Swift 用自实现的 FNV-1a 64 位，因为 Swift 的 `hashValue` 每进程随机播种、跨启动不稳定）。这是刻意设计：任何两条线都不能读写同一份 `history.json`。
+- 三条线的存储根**互不相同**，备份 key 的哈希算法也不同（Rust 与 Swift 各自实现 FNV-1a 64 位）。这是刻意设计：任何两条线都不能读写同一份 `history.json`。
 - ❌ 不要把备份放进 `temp_dir` / `NSTemporaryDirectory` / `Caches` —— 系统会随手清理，用户原图就没了。历史功能上线前的老版本确实在 temp 里放过，那份残骸（`<tmp>/octoshrink-backups`）只在启动时清目录本身。
+- ⚠️ 备份 key **必须**是 `fnv1a_64(canonical(sourcePath))` 的 16 位十六进制，❌ 不得改回 `std::collections::hash_map::DefaultHasher`：标准库从不把它的算法承诺为持久格式，一次 rustc 升级就会让所有已有备份"查无此人"，于是它们变成孤儿并被清理，而对应的用户原图早已被覆盖 —— 等于批量丢原图。老 key 只读不写：`legacy_backup_key` 仍参与 `ensure_backup` 的查找（命中就**复用那一份**，❌ 不许另起炉灶把压缩结果当原图存进新目录），安全作用域书签同理（`BookmarkAccess::try_slot`），并在那里对新 key **补写一份**（write-through），老目录留着不动、由自然过期收尾。
+- `history.json` 有条数上限 `MAX_HISTORY_ENTRIES = 10_000`，超出时淘汰**最老**的记录；连带删备份的前提是"没有幸存记录再引用它"（`drop_backups_of(evicted, survivors)`）。这是内存缓存常驻 + 整文件重写的成本上限，不是给用户的功能裁剪。
+
+### 覆盖事务：每一笔"盖掉用户原文件"的操作都要能自证
+
+`src-tauri/src/output_transaction.rs::TransactionStore` ↔ Swift `Services/OutputTransactionStore.swift`。解决的问题：rename 覆盖成功、但进程在 `history.add` 之前死掉 —— 磁盘上是压缩结果，账上什么都没有，下次启动谁也不知道该回滚还是该记账。
+
+- **凭证在覆盖之前落盘**：`prepare()` 写 `transactions/<id>.json`（含 `history_id` / source / output / backup 路径 / `cross_format`），`history_id` 与稍后写入的 `HistoryEntry.id` **同一个**，这是唯一的关联键。
+- **提交凭据 = 只有一条事实**：`history.contains_committed(history_id)`。真 → `finish()` 销账；假 → `rollback()`（备份写回源文件、删本次生成结果）。❌ 不许凭"文件存在 / mtime 对了"之类的猜测来判断提交。
+- `rollback()` **永不删备份**：回滚失败时它是唯一的原图副本，必须留给下一次。
+- 启动时 `transactions.recover(history)` 先跑，再跑 `cleanup_expired`；`setup` 的 `CleanupReport` 会把中断事务的处置结果带出去（补记 or 已自动回滚）。
+- 只要还有 pending 凭证，`clear_history` 必须拒绝（「仍有文件事务正在处理，暂时无法清空历史记录」）。
+- **清空历史同样受批次闸门约束**：`clear_history` 在压缩进行中直接返回错误（「压缩进行中，无法清空历史记录」），因为历史是"备份还有人认领"的账本 —— 一边在写备份一边销账，正在处理的那几张图就会变成无人引用的孤儿并被扫掉。前端配套：`renderHistory` 在 `isCompressing` 时禁用 `historyClearBtn` 并给 title，`clearHistory()` 自己也要早退 + toast（只靠按钮 disabled 挡不住键盘触发）。这条在 `tests/history-view.cjs` 有回归断言。
 
 ### 备份：一次写成，永不覆盖
 
@@ -225,11 +244,24 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - **已有有效备份时绝不覆盖**：同一张图连压三次，备份里必须还是第一次压缩前的真正原图。哈希撞到其他源路径时往后挪槽位（`<key>-1` … `<key>-31`），不串别人的原图。
 - `history.json` 与 `backup-meta.json` 一律"写 tmp → fsync → rename"，崩溃不会留下半个文件。
 
+### 历史文件读不出来：宁可少删，不可错删
+
+`history.json` 是"哪些备份还有人认领"的唯一依据。读不出来时如果把损坏当成空历史，下一次启动清理就会"合法地"删光所有备份目录 —— 而那些目录里是已被覆盖的**用户原图唯一的副本**。
+
+- **严格读**：文件不存在 = 空历史（正常状态）；文件存在但解析失败 = 损坏。❌ 不许 `serde_json::from_str(...).unwrap_or_default()` 这类"读不出就当没有"。
+- 损坏时**先隔离现场**：整份挪成为 `history.corrupt-<epoch millis>.json`（毫秒足够唯一，本项目不引 chrono）。❌ 绝不许用重建出的 `[]` 或少量记录去覆盖它 —— 那是销毁证据，也是销毁用户的东西。
+- 隔离之后按 `backups/<key>/backup-meta.json` 重建 `status: "recoveryAvailable"` 条目：没有压缩明细（省了多少字节、用的什么算法），但带**真实原图副本的位置**，用户仍然能一键恢复。备份目录里连 meta 都没有的那些，保持孤儿身份，等解锁后再扫。
+- 本次启动**锁死一切备份 sweep**：`cleanup_is_locked()` 为真时，`cleanup_expired` / `purge_backups_on_exit` / `sweep_unreferenced_backups` 一律直接返回并给出警告文案「历史记录文件已损坏，本次启动跳过清理，原图备份全部保留」。锁是**整次启动**的，不因某一次成功写入而解除。
+- 前端文案（三条线一致）：`recoveryAvailable` 显示「检测到可恢复的原图备份」，明细行显示「明细已丢失」，算法行显示「按备份重建」，用警告图标而不是对勾。❌ 不许伪造「节省 0.0%」—— 那是把"我不知道"包装成"压得不好"。备份也没了的时候同样显示「原图备份已清理」并收起恢复按钮。
+- `restore` 对 `recoveryAvailable` 条目照常工作（它只需要 `backup_path`）。冲突判定比的是文件大小 + mtime，而这两个值对重建条目来说无从得知 —— 必须填**当下实测到的源文件状态**（`compressed_size: file_size(source)`、`output_modified_at: file_mtime_millis(source)`），否则每一次恢复都会误报「压缩后又被修改过」，逼用户确认一次根本没有的冲突。
+
 ### 恢复：一个服务，三条入口
 
 - `restore_original` / `restore_history_entry` / `restore_all` **共用**同一个恢复实现（Rust `HistoryStore::restore`，Swift `HistoryStore.restore(entry:force:)`）。禁止复制三套恢复逻辑。
 - 前端**不拼路径**：只传 `historyId`，源图路径、输出路径、备份路径全部从存储读取。
-- 原子顺序：备份 → 同目录 `.octoshrink-restore-<nanos>.tmp` → rename 覆盖源文件 → 才删本次生成的压缩输出和备份目录。中途失败不留半个文件，也不许提前删备份。
+- 原子顺序（replace 模式）：① 取目录授权 ② 备份 → 同目录 `.octoshrink-restore-<nanos>.tmp` → flush + fsync → rename 覆盖源文件 ③ `mark_restored` 把状态落盘 ④ 才删本次生成的压缩输出 ⑤ 才删备份目录。中途失败不留半个文件，也不许提前删备份。
+- ③ 落盘失败时**必须保留备份并直接报错**（「文件已恢复，但历史记录状态保存失败（…），原图备份已保留」）：文件已经回到用户手上，此时删备份就是把唯一的原图副本押在一条没写成的记录上。用户重试即可收敛（第二次 `force` 或不 force 都能正常走完）。
+- ④ 删压缩输出前必须判**同一性**：`same_file(output_path, source_path)`（Rust）/ Swift 侧等价判断。记录里的 `source_path` 是规范路径、`output_path` 是当时那个原始字符串，macOS 上 `/var/…` 与 `/private/var/…`、任何软链目录都会让两者**字面不等**；判成"另一个文件"就会把刚写回的原图当成压缩产物删掉（这是真实修过的丢文件 bug，不是洁癖）。
 - 冲突保护：仅 replace 模式比对记录时的文件大小 / mtime（容差 2000 ms），任一不符即返回 `conflict=true`；前端弹「这个文件在压缩后又被修改过。恢复原图会覆盖当前版本。」→ 用户确认后带 `force=true` 重试。
 - 恢复后**历史记录不删**，只标 `restored` 并删备份；共享同一备份的兄弟条目一起标记。非 replace 模式没有备份，其"撤销"只删本次压缩输出并移除条目。
 
@@ -252,7 +284,9 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 
 - 暂停只拦"还没开始"的文件：闸门在取下一个任务前等待，**绝不 kill / SIGSTOP 正在运行的 CLI 子进程**，也不打断正在跑的进程内引擎。
 - 等待要有超时（Rust `tokio::sync::Notify` + 250 ms 兜底，防丢唤醒；Swift `CompressionScheduler` 的 `NSCondition.wait(until:)` 0.25 s），否则取消/退出会挂死。
-- 一批开始/结束时必然清除暂停态（Rust `begin_batch()` / `end_batch()`，Swift `beginBatch()` / `endBatch()`）；`cancel_file` / `clear_cancel_queue` 同样 `resume()`，防止"闸门关着却没人开"。
+- 一批开始/结束时必然清除暂停态（Rust `begin_batch()` / `end_batch()`，Swift `beginBatch()` / `endBatch()`）。
+- **取消绝不解除暂停**：`cancel_file` / `cancel_batch` / `clear_cancel_queue` 只 `wake_waiters()`（Rust）/ `wakeWaiters()`（Swift）—— 只把等待者叫醒让它们看见"这个文件已被取消"，闸门仍然是关的。老实现调 `resume()`，结果是"暂停中移除一个文件 → 整批悄悄继续跑"，前端还显示「暂停中…」。
+  防"闸门关着却没人开"的正确做法不是取消时开门，而是**等待者自己带退出条件**：`acquire_or_cancelled(cancelled)`（Rust）在暂停判定之前先查取消，被取消的文件直接结束并上报 `status: "cancelled"`，永不启动；Swift 侧 `acquire(cancelled:)` 同语义。批次结束时 `end_batch()` 必然 `resume()`，所以关着的闸门总有一个人会来开。
 - UI 保持现有密度：进度按钮仍是 `startCompressBtn`，旁边一个小号 `[暂停]/[继续]`，标题文案「暂停中…」，队列摘要追加「 · 已暂停」。不要做成大按钮。
 
 ## CPU 使用上限（三条线共用不变量）
@@ -273,7 +307,7 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 
 ### 2. L2 的三个强制写法
 
-- **命令行开关集中在一张表**：`engine.rs::cpu_flags(tool, threads)` ↔ Swift `CPUResourcePolicy.flags(for:)`，一一对应：`avifenc → --jobs N`、`oxipng → --threads N`、`cwebp → 只在 N > 1 时给 -mt`，其余工具不加参数。**新增压缩函数不许自己写 `-mt` / `--jobs`**，一律走 `make_command()` / `CLIRunner.run(…) / runToFile(…)`。
+- **命令行开关集中在一张表**：`engine.rs::cpu_flags(tool, threads)` ↔ Swift `CPUResourcePolicy.flags(for:)`，一一对应：`avifenc → --jobs N`、`oxipng → --threads N`、`cjxl → --num_threads=N`（⚠️ 它的默认 `0` = 按硬件线程数全开，不钉住就是"上限 3 个文件 × 每个用满全部核心"；且 cjxl 的参数是 `--num_threads=` **等号**形式，不是空格分隔）、`cwebp → 只在 N > 1 时给 -mt`（`-mt` 只能开关、不能指定线程数，单 worker 预算下传它就是超发），其余工具（pngquant / gifsicle / cjpeg）不加参数。**新增压缩函数不许自己写 `-mt` / `--jobs` / `--num_threads`**，一律走 `make_command()` / `CLIRunner.run(…) / runToFile(…)`，否则 `tests/cpu-limit.cjs` 与 `engine.rs` 的 `cpu_flags` 单表就会和真实调用分叉。
 - **线程类环境变量无条件注入**：`OMP_NUM_THREADS` / `RAYON_NUM_THREADS`（Rust `cpu_env()`，Swift `CLIRunner.environment()`）。Swift 侧这两个变量必须在 `DYLD_FALLBACK_LIBRARY_PATH` 那个 `if let lib` 分支**之外**设置，否则资源目录缺失时预算静默失效。
 - **进程内 crate 走编译期裁剪，不走运行时调线程数**：`oxipng` 的并行度由 `parallel` feature（rayon）决定、其 `Options` 没有 threads 字段；`imagequant` 的 `threads` feature 同理；rayon 全局池一旦初始化就调不动。所以这三个 crate 在 `Cargo.toml` 里一律 `default-features = false`，`ravif` 单独 `with_num_threads(Some(per_task_threads()))`。❌ 不要为"动态调线程"给它们重开 feature，❌ 不要 `rayon::ThreadPoolBuilder::build_global()`。
 
@@ -310,6 +344,7 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - src-tauri/capabilities/default.json — IPC 权限（App Store 版需显式声明所有 app 命令权限）
 - src-tauri/permissions/commands.toml — app 命令 ACL 权限定义
 - src-tauri/src/history.rs + src-tauri/src/app_settings.rs — 历史记录、原图备份、保留期（两条 Tauri 线共用）
+- src-tauri/src/output_transaction.rs — 覆盖事务凭证（`TransactionStore` / `ReplaceTransaction` / `rollback`），启动时 `recover()`
 - swift/Sources/OctoShrinkSwift/Services/HistoryStore.swift — 同上的 Swift 原生线实现（含 `PauseGate`）
 - tests/history-view.cjs（`npm run test:frontend`）— 前端历史页/恢复/暂停纯逻辑自检
 - scripts/test_swift_history.sh — Swift 线历史·备份·恢复·PauseGate 自检（真跑文件系统）
@@ -355,6 +390,16 @@ xcrun productbuild --component \
 
 或直接用 `bash scripts/build_appstore.sh`（封装了上述步骤）。
 
+### 2.5 App Store bundle 自检（送审前必过）
+
+`scripts/build_appstore.sh` 与 `scripts/build_all.sh` 在签名前都会检查 App Store 版 `.app`：
+
+1. `Contents/**` 里不许有 `*.dylib`，也不许有 `Contents/Resources/bin/*`（第三方可执行文件）。
+2. `Contents/MacOS/` 里除 `OctoShrink` 主程序外不许有别的可执行文件。
+3. `src-tauri/src/engine_inproc.rs` 的生产代码里不许出现 `find_tool` / `make_command` / `cli_to_file` / `Command::new`。
+
+任一条不过就 `exit 1`。为什么值得写成脚本 + 测试各一份：App Store 的自动分析会看"包里有可执行文件 / 有 entitlements 却声明不做网络或子进程"，一次驳回就是 1-3 周；而 `cs.disable-library-validation` 在沙盒线根本不允许，带进来的 dylib 连加载都过不去。历史上 `build_all.sh` 曾把 pngquant/oxipng/gifsicle 连同两个 homebrew dylib 复制进 App Store 包以求"与 Direct 画质对齐"，现在已删除 —— Direct 版的 `resources/bin` + `resources/lib` 照旧打包，不受影响（规则 4）。
+
 ### 3. 白屏与 IPC 反复 bug 终极解法（v2.2.8，务必遵守）
 
 **根因**：macOS 27 App Sandbox 阻止 `tauri://localhost`（WKURLSchemeHandler 完全不工作）→ webview 拿不到内容 → 白屏。必须用本地 HTTP 服务器（监听 127.0.0.1 随机端口）服务前端资源。
@@ -366,7 +411,7 @@ xcrun productbuild --component \
 **正确方案（v2.2.9，缺一不可）**：
 - `lib.rs` `#[cfg(feature = "inproc-backends")]` 块：`TcpListener::bind` **固定端口段** `[41845u16, 41846, 41847]`（带 fallback 防冲突），serve resource_dir 前端，`window.navigate("http://localhost:PORT/")`
 - `entitlements-appstore.plist`：`network.server` + `network.client` 必需
-- `capabilities/default.json`：当前 34 个 `allow-*` app 命令权限（与 `permissions/commands.toml` 的 34 个 `[[permission]]` 一一对应；permissions 数组共 39 项，其余 5 项是 `core:default` / `dialog:default` / `opener:default` / `core:window:allow-start-dragging` / `core:window:allow-close`）+ `remote.urls: ["http://localhost:41845","http://localhost:41846","http://localhost:41847"]`（**精确匹配带端口 origin**）+ `core:window:allow-start-dragging` + `core:window:allow-close`；`windows` 必须同时含 `"main"` 和 `"compare"`（独立对比窗口按 label 授权，漏掉 compare 会让对比窗口 IPC 静默失效）
+- `capabilities/default.json`：`allow-*` app 命令权限（当前 **35** 个，与 `permissions/commands.toml` 的 35 个 `[[permission]]` 一一对应；permissions 数组共 **40** 项，其余 5 项是 `core:default` / `dialog:default` / `opener:default` / `core:window:allow-start-dragging` / `core:window:allow-close`。数字会随命令增长，别信它 —— 用 `python3 -c "import json;p=json.load(open('src-tauri/capabilities/default.json'))['permissions'];print(len([x for x in p if x.startswith('allow-')]),len(p))"` 与 `grep -c '^\[\[permission\]\]' src-tauri/permissions/commands.toml` 现算）+ `remote.urls: ["http://localhost:41845","http://localhost:41846","http://localhost:41847"]`（**精确匹配带端口 origin**）+ `core:window:allow-start-dragging` + `core:window:allow-close`；`windows` 必须同时含 `"main"` 和 `"compare"`（独立对比窗口按 label 授权，漏掉 compare 会让对比窗口 IPC 静默失效）
 - 启动白闪：前端把最终解析出的 `light/dark` 通过 `set_startup_theme` 写入 `NSHomeDirectory()/Library/Application Support/OctoShrink/startup-theme`（App Store 自动落入沙盒容器）；Rust 在 `Builder::run` 创建窗口前读取主题（首次使用 macOS 系统外观）并改写运行时 `WindowConfig.background_color`。本地 HTTP 资源必须返回 `Cache-Control: no-store`，否则 WKWebView 可能复用旧版主题脚本。不要等到 `setup()` 后才设置背景，窗口创建瞬间会漏出静态浅色帧。
 
 **勿再犯**：
@@ -379,7 +424,7 @@ xcrun productbuild --component \
 
 ### 4. IPC 权限（App Store 版必须配置）
 
-- 在 `capabilities/default.json` 中显式声明所有 app 命令的 permission（当前 34 个，与 `permissions/commands.toml` 的 `[[permission]]` 数量保持一致；新增 command 时三处同改：`commands.rs` 的 handler、`lib.rs` 的 `invoke_handler`、`commands.toml` + `capabilities/default.json` 的 kebab-case 权限名，如 `set_original_retention_days` → `allow-set-original-retention-days`）
+- 在 `capabilities/default.json` 中显式声明所有 app 命令的 permission（数量必须与 `permissions/commands.toml` 的 `[[permission]]` 保持一致，现算而不是信文档；新增 command 时三处同改：`commands.rs` 的 handler、`lib.rs` 的 `invoke_handler`、`commands.toml` + `capabilities/default.json` 的 kebab-case 权限名，如 `set_original_retention_days` → `allow-set-original-retention-days`，`cancel_batch` → `allow-cancel-batch`。前端漏注册权限的表现是 **invoke 静默失败、不报错**，最难查）
 - 创建 `permissions/commands.toml` 定义权限 schema
 - 不配置 → 前端 invoke 全部失败（静默，不报错）
 - Direct 版不需要此配置（非沙盒，不检查 ACL）

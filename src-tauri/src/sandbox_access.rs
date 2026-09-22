@@ -116,10 +116,15 @@ impl BookmarkAccess {
     }
 
     fn slot(&self, path: &Path) -> PathBuf {
-        self.dir.join(format!(
-            "{}.bookmark",
-            crate::history::HistoryStore::backup_key(path)
-        ))
+        self.slots(path)[0].clone()
+    }
+
+    /// [新 key, 老 key]。备份目录名换了算法，书签文件名跟着换 ——
+    /// 所以读的时候两把都要认，否则升级后所有已有授权一夜失效，
+    /// 用户得给每个文件夹重新点一遍允许。
+    fn slots(&self, path: &Path) -> [PathBuf; 2] {
+        let keys = crate::history::HistoryStore::bookmark_keys_for(path);
+        keys.map(|key| self.dir.join(format!("{key}.bookmark")))
     }
 
     fn grant(
@@ -202,9 +207,19 @@ impl BookmarkAccess {
     }
 
     fn try_slot(&self, path: &Path) -> Option<AccessGuard> {
+        let [current, legacy] = self.slots(path);
+        if let Some(guard) = self.read_slot(path, &current) {
+            return Some(guard);
+        }
+        // 老 key 命中：顺手补一份新 key 的书签，下次就不用再走兼容路径了。
+        let guard = self.read_slot(path, &legacy)?;
+        self.write_bookmark(path, &current);
+        Some(guard)
+    }
+
+    fn read_slot(&self, path: &Path, slot: &Path) -> Option<AccessGuard> {
         use objc2_foundation::{NSData, NSURL, NSURLBookmarkResolutionOptions, NSString};
 
-        let slot = self.slot(path);
         let raw = NSData::dataWithContentsOfFile(&NSString::from_str(&slot.to_string_lossy()))?;
         let mut stale = objc2::runtime::Bool::default();
         let url = unsafe {
@@ -218,7 +233,7 @@ impl BookmarkAccess {
         .ok()?;
         if stale.as_bool() {
             // 同一 URL 重新签一份书签即可续期，不需要打扰用户。
-            self.write_bookmark(path, &slot);
+            self.write_bookmark(path, slot);
         }
         self.grant(&url)
     }

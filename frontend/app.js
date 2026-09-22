@@ -817,10 +817,10 @@ function clearAllFiles() {
   var wasCompressing = isCompressing;
   queueRevision++;
   if (wasCompressing) {
-    activeBatchPaths.forEach(function(filePath) {
-      cancelledFiles.add(filePath);
-      invoke('cancel_file', { filePath: filePath }).catch(function() {});
-    });
+    activeBatchPaths.forEach(function(filePath) { cancelledFiles.add(filePath); });
+    // 一次调用取消整批：逐个 invoke 会让每个请求都顺手动一次暂停闸门，
+    // 队列会在清空过程中被重新放行。
+    invoke('cancel_batch', { filePaths: activeBatchPaths }).catch(function() {});
   }
 
   files = [];
@@ -1207,10 +1207,8 @@ function clearResults() {
   var wasCompressing = isCompressing;
   queueRevision++;
   if (wasCompressing) {
-    activeBatchPaths.forEach(function(filePath) {
-      cancelledFiles.add(filePath);
-      invoke('cancel_file', { filePath: filePath }).catch(function() {});
-    });
+    activeBatchPaths.forEach(function(filePath) { cancelledFiles.add(filePath); });
+    invoke('cancel_batch', { filePaths: activeBatchPaths }).catch(function() {});
   }
   results = [];
   files = [];
@@ -1327,6 +1325,11 @@ function historyTime(millis) {
 }
 
 function canRestoreHistory(entry) {
+  // recoveryAvailable = history.json 损坏后从备份目录重建出来的条目：
+  // 压缩明细已经无从得知，但备份确实还在，原图仍然可以一键恢复。
+  if (entry.status === 'recoveryAvailable') {
+    return !!entry.backupExists && !!entry.sourceExists;
+  }
   return entry.status === 'compressed'
     && entry.outputMode === 'replace'
     && !!entry.backupExists
@@ -1337,6 +1340,9 @@ function historyStatusText(entry) {
   if (entry.status === 'restored') {
     return '已恢复' + (entry.restoredAt ? ' · ' + historyTime(entry.restoredAt) : '');
   }
+  if (entry.status === 'recoveryAvailable') {
+    return entry.backupExists ? '检测到可恢复的原图备份' : '原图备份已清理';
+  }
   if (entry.outputMode !== 'replace') return '原图未覆盖';
   if (!entry.sourceExists) return '原文件位置不存在';
   if (!entry.backupExists) return '原图备份已清理';
@@ -1345,11 +1351,15 @@ function historyStatusText(entry) {
 
 function historyRow(entry) {
   var row = document.createElement('div');
-  row.className = 'history-item' + (entry.status === 'restored' ? ' restored' : '');
+  var isRecovery = entry.status === 'recoveryAvailable';
+  row.className = 'history-item'
+    + (entry.status === 'restored' || isRecovery ? ' restored' : '');
 
   var icon = document.createElement('span');
   icon.className = 'history-icon';
-  icon.innerHTML = iconMarkup(entry.status === 'restored' ? 'restore' : 'check', true);
+  icon.innerHTML = iconMarkup(
+    isRecovery ? 'warning' : (entry.status === 'restored' ? 'restore' : 'check'),
+    true);
 
   var main = document.createElement('span');
   main.className = 'history-main';
@@ -1368,7 +1378,8 @@ function historyRow(entry) {
   var sizes = document.createElement('span');
   sizes.textContent = formatBytes(entry.originalSize) + ' → ' + formatBytes(entry.compressedSize);
   var saving = document.createElement('span');
-  saving.textContent = '节省 ' + Math.abs(entry.savings).toFixed(1) + '%';
+  // 重建条目没有这次压缩的明细，报一个算出来的 0.0% 节省率是假数字。
+  saving.textContent = isRecovery ? '明细已丢失' : '节省 ' + Math.abs(entry.savings).toFixed(1) + '%';
   metrics.appendChild(sizes);
   metrics.appendChild(saving);
 
@@ -1377,7 +1388,7 @@ function historyRow(entry) {
   var created = document.createElement('span');
   created.textContent = historyTime(entry.createdAt);
   var algo = document.createElement('span');
-  algo.textContent = entry.algorithm || entry.outType || '';
+  algo.textContent = isRecovery ? '按备份重建' : (entry.algorithm || entry.outType || '');
   when.appendChild(created);
   when.appendChild(algo);
 
@@ -1421,6 +1432,12 @@ function renderHistory() {
   if (empty) empty.hidden = historyEntries.length > 0;
   var meta = document.getElementById('historyMeta');
   if (meta) meta.textContent = historyEntries.length + ' 条';
+  // 后端在批次/事务进行中会拒绝清空，这里提前收成不可点，别让用户撞上报错。
+  var clearBtn = document.getElementById('historyClearBtn');
+  if (clearBtn) {
+    clearBtn.disabled = isCompressing;
+    clearBtn.title = isCompressing ? '压缩进行中，这一批结束后才能清空历史' : '清空历史记录';
+  }
 }
 
 async function refreshHistory() {
@@ -1461,6 +1478,11 @@ async function restoreFromHistory(entry, force) {
 
 async function clearHistory() {
   if (historyEntries.length === 0) return;
+  // 按钮通常已被收成不可点；这里兜住"渲染时机没赶上"的那一次点击。
+  if (isCompressing) {
+    showToast('压缩进行中，这一批结束后才能清空历史');
+    return;
+  }
   if (!confirm('确定要清空 ' + historyEntries.length + ' 条历史记录吗？\n只清理 OctoShrink 保存的原图备份，不会删除你的图片。')) return;
   try {
     var removed = await invoke('clear_history');

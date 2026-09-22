@@ -15,6 +15,7 @@ use tauri_plugin_dialog::DialogExt;
 use crate::app_settings::{effective_cpu_limit, AppSettings, SettingsStore, KEEP_UNTIL_QUIT};
 use crate::engine::{self, CompressOptions, CompressResult, EngineResult};
 use crate::history::{HistoryEntry, HistoryStore, RestoreError};
+use crate::output_transaction::{self, ReplaceTransaction, StagedOutput, TransactionStore};
 use crate::sandbox_access::FileAccess;
 use crate::system_info::{CpuInfo, CpuStatus};
 
@@ -25,6 +26,8 @@ pub struct AppState {
     pub pending_compare: Mutex<Option<serde_json::Value>>,
     pub compression: std::sync::Arc<CompressionScheduler>,
     pub history_store: std::sync::Arc<HistoryStore>,
+    /// replace 覆盖的事务日志：崩溃后据此把原图恢复回来。
+    pub transactions: std::sync::Arc<TransactionStore>,
     pub settings_store: std::sync::Arc<SettingsStore>,
     /// 跨启动的文件访问授权：Direct 版直通，沙盒版用 security-scoped bookmark。
     pub access: std::sync::Arc<dyn FileAccess>,
@@ -72,11 +75,24 @@ impl CompressionScheduler {
         self.paused.store(true, Ordering::Release);
     }
 
-    /// 解除暂停并唤醒等待中的 worker。取消/清空/退出也必须走这里，
-    /// 否则停在 `acquire` 的 worker 会拖住整个批次。
+    /// 解除暂停并唤醒等待中的 worker。**只有用户点「继续」和批次起止才许调用**。
     pub fn resume(&self) {
         self.paused.store(false, Ordering::Release);
         self.notify.notify_waiters();
+    }
+
+    /// 只唤醒等待者，不改动暂停态。
+    ///
+    /// 与 `resume()` 的区别必须分清：取消一个文件需要正在等的 worker 醒来看到这个取消，
+    /// 但**绝不**需要顺便把整批解除暂停 —— 老实现调的是 `resume()`，于是"暂停中移除一张图"
+    /// 会让其余所有等待中的文件偷偷继续压缩，而 UI 上仍写着「暂停中…」。
+    pub fn wake_waiters(&self) {
+        self.notify.notify_waiters();
+    }
+
+    /// 是否有批次在跑。清空历史这类破坏性操作的硬保护看这个，不看前端状态。
+    pub fn is_batch_active(&self) -> bool {
+        self.active_batch.load(Ordering::Acquire)
     }
 
     pub fn is_paused(&self) -> bool {
@@ -130,10 +146,37 @@ impl CompressionScheduler {
     ///
     /// 老实现是"等信号量 → 再查一次暂停"两步，因为信号量不知道暂停。
     /// 现在两者在同一次 CAS 里判断，拿到 permit 的那一刻必然既没暂停也没超载。
+    #[cfg(test)]
     pub async fn acquire(self: &std::sync::Arc<Self>) -> ParallelPermit {
+        // 这里传一个永远为假的取消判据：调用方不关心取消，只是要闸门开。
+        self.acquire_or_cancelled(|| false)
+            .await
+            .expect("这个调用永远不会返回 Cancelled")
+    }
+
+    /// 拿一份 CPU 预算，等待期间 `cancelled()` 变真就立刻退出等待并返回 None。
+    ///
+    /// 判断顺序是刻意的：**先查取消，再查暂停/名额**。所以
+    /// `paused == true` 且这个文件已被取消时，worker 能马上退出，
+    /// 而暂停状态原样保留给其余还在排队的文件。
+    pub async fn acquire_or_cancelled<F>(
+        self: &std::sync::Arc<Self>,
+        mut cancelled: F,
+    ) -> Option<ParallelPermit>
+    where
+        F: FnMut() -> bool,
+    {
         loop {
+            if cancelled() {
+                return None;
+            }
             if let Some(permit) = self.try_acquire() {
-                return permit;
+                if cancelled() {
+                    // 拿到的这一刻才被取消：还回预算，这个文件不压。
+                    drop(permit);
+                    return None;
+                }
+                return Some(permit);
             }
             let notified = self.notify.notified();
             let _ = tokio::time::timeout(Duration::from_millis(250), notified).await;
@@ -346,10 +389,49 @@ fn available_system_conversion_path(file_path: &Path, out_type: &str) -> PathBuf
     unreachable!()
 }
 
+/// 落盘失败的分类。每一种都必须把 `CompressResult.success` 翻成 false ——
+/// 引擎算成功但文件没写成时，UI 绝不许显示「压缩完成」。
+#[derive(Debug)]
+pub enum OutputWriteError {
+    BackupFailed(String),
+    TransactionFailed(String),
+    OutputWriteFailed(String),
+    HistoryWriteFailed,
+    RollbackFailed(String),
+}
+
+impl OutputWriteError {
+    pub fn user_message(&self) -> String {
+        match self {
+            OutputWriteError::BackupFailed(detail) => {
+                format!("无法保存原图备份，已跳过覆盖（{detail}）")
+            }
+            OutputWriteError::TransactionFailed(detail) => {
+                format!("无法登记这次覆盖，已跳过覆盖（{detail}）")
+            }
+            OutputWriteError::OutputWriteFailed(detail) => {
+                format!("压缩结果写入失败，原图未被覆盖（{detail}）")
+            }
+            OutputWriteError::HistoryWriteFailed => {
+                "压缩结果已生成，但历史记录保存失败，已自动恢复原图".into()
+            }
+            OutputWriteError::RollbackFailed(detail) => format!(
+                "历史记录保存失败，且自动恢复原图也没成功：原图还在那份备份里，请不要清理备份，重试恢复即可（{detail}）"
+            ),
+        }
+    }
+}
+
 /// Write the compressed bytes to disk according to the output mode.
 ///
-/// 成功落盘后返回对应的历史记录（并已写入 HistoryStore）；未产出文件时返回 None。
-/// `history` 同时承担原图备份的存放位置 —— 备份随 App 退出保留，不再是临时目录。
+/// replace 模式必须走完整的事务顺序，任何一步失败都不得留下"覆盖了但没人知道"的状态：
+///
+/// ```text
+/// ① ensure_backup  ② 写 transaction  ③ 同目录临时文件写压缩结果
+/// ④ flush + fsync  ⑤ rename 覆盖目标  ⑥ history.add  ⑦ 删 transaction
+/// ```
+///
+/// ⑥ 失败就回滚：用备份把真正原图写回去、删掉这次生成的文件，并把错误报给用户。
 fn write_output_file(
     result: &mut CompressResult,
     file_path: &Path,
@@ -357,16 +439,17 @@ fn write_output_file(
     file_paths: &[String],
     options: &CompressOptions,
     history: &HistoryStore,
+    transactions: &TransactionStore,
     retention_days: u32,
-) -> Option<HistoryEntry> {
+) -> Result<(), OutputWriteError> {
     if !result.success || compressed.is_empty() {
-        return None;
+        return Ok(());
     }
     // 格式转换时跳过大小检查（用户明确要求转换为目标格式）
     let is_format_conversion = options.output_format != "original";
     if !is_format_conversion && (compressed.len() as u64) >= result.original_size {
         result.error = Some("原图已是最优，无需替换".into());
-        return None;
+        return Ok(());
     }
     let mut backup_file: Option<PathBuf> = None;
     let out_ext = format!(".{}", result.out_type);
@@ -374,11 +457,9 @@ fn write_output_file(
         "replace" => {
             // 先备份再覆盖：备份没写成就不碰用户文件，否则原图永久丢失。
             let backup = match history.ensure_backup(file_path) {
-                Some(backup) => backup,
-                None => {
-                    result.success = false;
-                    result.error = Some("无法保存原图备份，已跳过覆盖".into());
-                    return None;
+                Ok(backup) => backup,
+                Err(detail) => {
+                    return Err(OutputWriteError::BackupFailed(detail));
                 }
             };
             result.backup_path = Some(backup.to_string_lossy().into_owned());
@@ -392,7 +473,7 @@ fn write_output_file(
                 || (current_ext == "jpeg" && result.out_type == "jpg")
                 || (current_ext == "jpg" && result.out_type == "jpeg")
                 || (current_ext == "heif" && result.out_type == "heic")
-                || (current_ext == "heic" && result.out_type == "heif");
+                || (current_ext == "heic" && result.out_type == "heic");
             if options.processing_mode == "system" && is_format_conversion && !same_format {
                 Some(available_system_conversion_path(file_path, &result.out_type))
             } else {
@@ -439,21 +520,100 @@ fn write_output_file(
         _ => None,
     };
 
-    let out_path = out_path?;
-    if fs::write(&out_path, compressed).is_err() {
-        return None;
+    let Some(out_path) = out_path else {
+        return Ok(());
+    };
+    let is_replace = options.output_mode == "replace";
+    let cross_format = is_replace && out_path != file_path;
+
+    // ①事务id 必须在覆盖之前定下来：历史落盘成功与否就靠它和 transaction 对账。
+    let history_id = is_replace.then(|| HistoryEntry::new_id(file_path));
+    let mut txn = history_id.as_ref().map(|id| ReplaceTransaction {
+        id: id.clone(),
+        history_id: id.clone(),
+        source_path: path_identity(file_path),
+        output_path: out_path.to_string_lossy().into_owned(),
+        backup_path: backup_file
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        temp_output_path: None,
+        original_size: result.original_size,
+        expected_output_size: compressed.len() as u64,
+        created_at: crate::history::now_millis(),
+        cross_format,
+    });
+    // ②记账先于动手：写不进日志就还不许碰用户文件。
+    if let Some(record) = txn.as_ref() {
+        if let Err(detail) = transactions.prepare(record) {
+            return Err(OutputWriteError::TransactionFailed(detail));
+        }
     }
-    if options.output_mode == "replace" && out_path != file_path {
+
+    // ③④⑤同目录临时文件 → flush + fsync → rename。失败时目标文件保持原样。
+    let staged = match StagedOutput::write(&out_path, compressed) {
+        Ok(staged) => staged,
+        Err(detail) => {
+            if let Some(record) = txn.take() {
+                transactions.finish(&record.id);
+            }
+            return Err(OutputWriteError::OutputWriteFailed(detail));
+        }
+    };
+    if let Some(record) = txn.as_mut() {
+        record.temp_output_path = Some(staged.temp.to_string_lossy().into_owned());
+    }
+
+    if cross_format {
         let _ = fs::remove_file(file_path);
     }
     result.output_path = Some(out_path.to_string_lossy().into());
     result.output_mode = Some(options.output_mode.clone());
+
     // 输出确认落盘之后才记历史：历史里绝不出现没写成的文件。
-    let entry = HistoryEntry::record(file_path, result, &out_path, backup_file.as_deref(), retention_days);
+    let entry = match history_id {
+        Some(id) => HistoryEntry::record_with_id(
+            id,
+            file_path,
+            result,
+            &out_path,
+            backup_file.as_deref(),
+            retention_days,
+        ),
+        None => HistoryEntry::record(
+            file_path,
+            result,
+            &out_path,
+            backup_file.as_deref(),
+            retention_days,
+        ),
+    };
     if let Err(error) = history.add(entry.clone()) {
+        // ⑥失败 = 这次覆盖不能算数：把真正原图写回去，删掉这次生成的文件。
+        staged.discard();
         log::warn!("写入压缩历史失败: {error}");
+        if let Some(record) = txn.as_ref() {
+            match output_transaction::rollback(record) {
+                Ok(()) => {
+                    transactions.finish(&record.id);
+                    result.output_path = None;
+                    result.backup_path = None;
+                    return Err(OutputWriteError::HistoryWriteFailed);
+                }
+                // 回滚也没成：事务日志必须留着，下次启动的 recovery 再试一次。
+                Err(rollback) => {
+                    return Err(OutputWriteError::RollbackFailed(format!(
+                        "{error}；{rollback}"
+                    )));
+                }
+            }
+        }
     }
-    Some(entry)
+    // ⑦历史已经落盘 = 这次覆盖有据可查，销账。留着的话下次启动会误判成中断事务。
+    if let Some(record) = txn.as_ref() {
+        transactions.finish(&record.id);
+    }
+    Ok(())
 }
 
 // ─── Batch compression core ─────────────────────────────────────
@@ -517,47 +677,35 @@ async fn compress_batch(
     let cancel_queue = &state.cancel_queue;
     let control = state.compression.clone();
     let history = state.history_store.clone();
+    let transactions = state.transactions.clone();
     let results_arc = Arc::new(Mutex::new(Vec::<CompressResult>::new()));
     let processed_arc = Arc::new(Mutex::new(0usize));
 
     let mut handles: Vec<(tokio::task::JoinHandle<()>, String)> = Vec::new();
     for file_path in all_files {
-        // Check before waiting for a worker and again after acquiring the
-        // permit. A waiting item can be cancelled while other files run.
-        if take_cancelled(cancel_queue, &file_path) {
-            let mut pr = processed_arc.lock().await;
-            *pr += 1;
-            let _ = app_arc.emit(
-                "compress-progress",
-                ProgressPayload {
-                    total,
-                    current: *pr,
-                    file: file_path.clone(),
-                    status: "cancelled".into(),
-                    result: None,
-                },
-            );
-            continue;
-        }
-
         // 闸门：暂停或名额满了就在这里等，拿到的瞬间两者都已满足。
-        let permit = control.acquire().await;
-        if take_cancelled(cancel_queue, &file_path) {
-            let mut pr = processed_arc.lock().await;
-            *pr += 1;
-            let _ = app_arc.emit(
-                "compress-progress",
-                ProgressPayload {
-                    total,
-                    current: *pr,
-                    file: file_path.clone(),
-                    status: "cancelled".into(),
-                    result: None,
-                },
-            );
-            drop(permit);
-            continue;
-        }
+        // 等待期间这个文件被取消就直接退出，**绝不因此解除暂停**。
+        let permit = match control
+            .acquire_or_cancelled(|| take_cancelled(cancel_queue, &file_path))
+            .await
+        {
+            Some(permit) => permit,
+            None => {
+                let mut pr = processed_arc.lock().await;
+                *pr += 1;
+                let _ = app_arc.emit(
+                    "compress-progress",
+                    ProgressPayload {
+                        total,
+                        current: *pr,
+                        file: file_path.clone(),
+                        status: "cancelled".into(),
+                        result: None,
+                    },
+                );
+                continue;
+            }
+        };
 
         // Emit "starting" only after the worker is available.
         {
@@ -578,6 +726,7 @@ async fn compress_batch(
         let fps = file_paths_arc.clone();
         let app_c = app_arc.clone();
         let history_c = history.clone();
+        let transactions_c = transactions.clone();
         let results_c = results_arc.clone();
         let processed_c = processed_arc.clone();
         let fp = file_path.clone();
@@ -595,15 +744,22 @@ async fn compress_batch(
             };
 
             let mut result = build_result(&fp, &engine_result);
-            write_output_file(
+            if let Err(error) = write_output_file(
                 &mut result,
                 &path,
                 &engine_result.compressed,
                 &fps,
                 &opts,
                 &history_c,
+                &transactions_c,
                 retention_days,
-            );
+            ) {
+                // 落盘没成就是没成：UI 绝不许显示「压缩完成」。
+                eprintln!("[ERROR] {fp} 落盘失败: {error:?}");
+                result.success = false;
+                result.output_path = None;
+                result.error = Some(error.user_message());
+            }
 
             eprintln!("[DEBUG] spawn task done for: {} success={}", fp, result.success);
             {
@@ -813,15 +969,29 @@ pub fn purge_backups_if_not_retained(app: &AppHandle) {
 #[tauri::command]
 pub fn cancel_file(file_path: String, state: State<'_, AppState>) -> bool {
     state.cancel_queue.lock().unwrap().insert(file_path);
-    // 暂停中取消文件：等待中的 worker 必须先被唤醒才能看到这个取消。
-    state.compression.resume();
+    // 只把正在等的 worker 叫醒，暂停态原样保留 —— 取消一张图不等于继续整批。
+    state.compression.wake_waiters();
     true
+}
+
+/// 一次 IPC 取消整批：前端 Clear All 不再循环 N 次 `cancel_file`。
+///
+/// 逐个 invoke 会让"部分已取消、部分还在排队"的中间态暴露给调度器，
+/// 几十个异步 IPC 之间只要有一次暂停/名额变化就会出现竞态。
+#[tauri::command]
+pub fn cancel_batch(file_paths: Vec<String>, state: State<'_, AppState>) -> usize {
+    let unique: HashSet<String> = file_paths.into_iter().collect();
+    let queued = unique.len();
+    state.cancel_queue.lock().unwrap().extend(unique);
+    // 一批取消只唤醒一次：与逐个 invoke 相比，中间态少得多。
+    state.compression.wake_waiters();
+    queued
 }
 
 #[tauri::command]
 pub fn clear_cancel_queue(state: State<'_, AppState>) -> bool {
     state.cancel_queue.lock().unwrap().clear();
-    state.compression.resume();
+    state.compression.wake_waiters();
     true
 }
 
@@ -847,8 +1017,18 @@ pub fn list_history(state: State<'_, AppState>) -> Vec<HistoryEntry> {
     state.history_store.list()
 }
 
+/// 清空历史 = 连原图备份一起删。这是全 App 里破坏性最大的操作，
+/// 所以判据必须在**后端**，不能指望前端把按钮禁用住。
 #[tauri::command]
 pub fn clear_history(state: State<'_, AppState>) -> Result<usize, String> {
+    if state.compression.is_batch_active() {
+        return Err("压缩进行中，无法清空历史记录".into());
+    }
+    // 批次可能刚好结束、事务还挂着（比如 worker 被取消后迟到的写入）：
+    // 这时清历史会连正在跑那批的备份一起删掉，比 batch active 更严格的判据。
+    if state.transactions.has_pending() {
+        return Err("仍有文件事务正在处理，暂时无法清空历史记录".into());
+    }
     let report = state.history_store.clear()?;
     for warning in report.warnings {
         log::warn!("清理历史失败: {warning}");
@@ -1430,6 +1610,56 @@ mod tests {
         assert_eq!(scheduler.state(), "idle");
     }
 
+    /// 暂停中取消一个还没开始的文件：它自己退出等待，但闸门**保持关闭**。
+    ///
+    /// 老实现在取消路径上调的是 `resume()`，于是"暂停中从队列里移走一张图"
+    /// 会让其余排队的文件全部悄悄开跑，而 UI 上仍写着「暂停中…」。
+    #[tokio::test]
+    async fn cancelling_a_paused_file_leaves_the_rest_still_paused() {
+        let scheduler = std::sync::Arc::new(CompressionScheduler::new(2));
+        let queue = std::sync::Arc::new(Mutex::new(HashSet::new()));
+        queue.lock().unwrap().insert("/gone.png".to_string());
+        scheduler.begin_batch();
+        scheduler.pause();
+
+        let leaving = {
+            let scheduler = scheduler.clone();
+            let queue = queue.clone();
+            tokio::spawn(async move {
+                scheduler
+                    .acquire_or_cancelled(|| take_cancelled(&queue, "/gone.png"))
+                    .await
+            })
+        };
+        let staying = {
+            let scheduler = scheduler.clone();
+            tokio::spawn(async move { scheduler.acquire().await })
+        };
+
+        let exited = match tokio::time::timeout(Duration::from_millis(500), leaving).await {
+            Ok(Ok(None)) => true,
+            _ => false,
+        };
+        assert!(
+            exited,
+            "被取消的文件必须立刻退出等待，而不是拿着名额去压缩"
+        );
+        assert!(scheduler.is_paused(), "取消绝不能顺手解除暂停");
+        assert_eq!(scheduler.active(), 0, "退出等待必须归还预算");
+        assert!(!staying.is_finished(), "还在排队的文件必须继续被闸门拦住");
+
+        // 唤醒只叫醒不开门；真正开门的仍然只有用户点「继续」和批次收尾。
+        scheduler.wake_waiters();
+        tokio::task::yield_now().await;
+        assert!(!staying.is_finished(), "wake_waiters 只叫醒等待者，不放行");
+        assert!(scheduler.is_paused());
+
+        scheduler.resume();
+        let permit = staying.await.unwrap();
+        assert_eq!(scheduler.active(), 1);
+        drop(permit);
+    }
+
     /// 暂停中清空队列 / 取消全部 / 退出：批次收尾必须唤醒还堵在闸门上的 worker。
     #[tokio::test]
     async fn ending_a_batch_wakes_workers_still_waiting_on_the_gate() {
@@ -1581,6 +1811,7 @@ mod tests {
             &[input.to_string_lossy().into_owned()],
             &options,
             &history_in(temp.path()),
+            &transactions_in(temp.path()),
             3,
         )
         .expect("目录模式的输出必须落进已选根目录");
@@ -1596,6 +1827,7 @@ mod tests {
     fn only_replace_mode_keeps_an_original_backup() {
         let temp = tempfile::tempdir().unwrap();
         let history = history_in(temp.path());
+        let transactions = transactions_in(temp.path());
         let engine_result = EngineResult {
             success: true,
             compressed: b"small".to_vec(),
@@ -1614,19 +1846,27 @@ mod tests {
                 output_dir: Some(temp.path().join("out").to_string_lossy().into_owned()),
                 ..Default::default()
             };
-            let entry = write_output_file(
+            write_output_file(
                 &mut result,
                 &input,
                 &engine_result.compressed,
                 &[input.to_string_lossy().into_owned()],
                 &options,
                 &history,
+                &transactions,
                 3,
             )
             .expect("输出写入成功必须产生历史");
-            assert_eq!(entry.backup_path, None);
+            assert_eq!(result.backup_path, None);
+            let entry = history
+                .list()
+                .into_iter()
+                .next()
+                .expect("这次压缩必须留下一条历史");
             assert_eq!(entry.output_mode, mode);
-            assert!(history.find(&entry.id).is_some());
+            assert_eq!(entry.backup_path, None);
+            // 非覆盖模式不动用户原图，也就不需要事务凭证。
+            assert!(!transactions.has_pending());
         }
 
         let input = temp.path().join("replace-in.png");
@@ -1636,22 +1876,90 @@ mod tests {
             output_mode: "replace".into(),
             ..Default::default()
         };
-        let entry = write_output_file(
+        write_output_file(
             &mut result,
             &input,
             &engine_result.compressed,
             &[input.to_string_lossy().into_owned()],
             &options,
             &history,
+            &transactions,
             3,
         )
         .expect("覆盖模式必须产出历史");
+        let entry = history.list().into_iter().next().unwrap();
         assert!(PathBuf::from(entry.backup_path.unwrap()).exists());
         assert_eq!(fs::read(&input).unwrap(), b"small");
+        // 提交完成 = 事务凭证必须收走，否则下次启动会白回滚一次。
+        assert!(!transactions.has_pending());
     }
 
     fn history_in(dir: &Path) -> HistoryStore {
         HistoryStore::new(dir.join("history")).unwrap()
+    }
+
+    fn transactions_in(dir: &Path) -> TransactionStore {
+        TransactionStore::new(
+            dir.join("history")
+                .join(output_transaction::TRANSACTIONS_DIR),
+        )
+    }
+
+    /// 历史写不成 = 这次覆盖不能算数：原图必须回到用户手上，事务凭证必须收走。
+    #[test]
+    fn a_history_write_failure_rolls_the_overwrite_back_to_the_original() {
+        let temp = tempfile::tempdir().unwrap();
+        let history = history_in(temp.path());
+        let transactions = transactions_in(temp.path());
+        let input = temp.path().join("photo.png");
+        fs::write(&input, b"true-original-bytes").unwrap();
+
+        // 先把内存快照建立起来：否则下面的堵塞点会被"损坏现场隔离"整目录挪走，
+        // 测的就不是写入失败而是损坏恢复了（那条另有测试覆盖）。
+        assert!(history.list().is_empty());
+        // 注入失败：history.json 的位置放一个**非空**目录，rename 必撞 EISDIR
+        // （空目录会被 macOS 直接替换掉，所以必须留一个占位子目录）。
+        let blocked = temp.path().join("history").join("history.json");
+        fs::create_dir_all(blocked.join("stale")).unwrap();
+
+        let engine_result = EngineResult {
+            success: true,
+            compressed: b"small".to_vec(),
+            out_type: "png".into(),
+            algorithm: "test".into(),
+            error: None,
+        };
+        let mut result = build_result(&input.to_string_lossy(), &engine_result);
+        let options = CompressOptions {
+            output_mode: "replace".into(),
+            ..Default::default()
+        };
+        let error = write_output_file(
+            &mut result,
+            &input,
+            &engine_result.compressed,
+            &[input.to_string_lossy().into_owned()],
+            &options,
+            &history,
+            &transactions,
+            3,
+        )
+        .expect_err("历史落盘失败必须报给调用方");
+        assert!(matches!(error, OutputWriteError::HistoryWriteFailed));
+        // 覆盖撤销：源文件回到真正原图，UI 侧不能再报"输出在 X"。
+        assert_eq!(fs::read(&input).unwrap(), b"true-original-bytes");
+        assert_eq!(result.output_path, None);
+        assert_eq!(result.backup_path, None);
+        // 凭证已销账，下次启动不会再把这次当成中断事务。
+        assert!(!transactions.has_pending());
+        // 备份**不删**：它成了无人引用的孤儿，留给启动清理，绝不在这条路径上丢掉原图副本。
+        let backups = temp.path().join("history").join("backups");
+        assert!(
+            fs::read_dir(&backups)
+                .map(|mut iter| iter.next().is_some())
+                .unwrap_or(false),
+            "回滚之后原图副本必须还在磁盘上"
+        );
     }
 
     #[test]
@@ -1704,6 +2012,7 @@ mod tests {
             &[input.to_string_lossy().into_owned()],
             &options,
             &history_in(temp.path()),
+            &transactions_in(temp.path()),
             3,
         )
         .expect("后缀模式的输出必须落盘");

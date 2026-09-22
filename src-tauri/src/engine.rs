@@ -55,6 +55,9 @@ fn cpu_flags(tool: &str, threads: usize) -> Vec<String> {
         "oxipng" => vec!["--threads".into(), threads.to_string()],
         // cwebp 的 -mt 只能"开"或"不开"，没法指定几线程 —— 单 worker 就别开。
         "cwebp" if threads > 1 => vec!["-mt".into()],
+        // cjxl 的 --num_threads 默认 0 = 按硬件线程数全开，必须显式钉住，
+        // 否则"上限 3"变成"3 个文件 × 每个用满全部核心"。
+        "cjxl" => vec![format!("--num_threads={threads}")],
         _ => Vec::new(),
     }
 }
@@ -887,8 +890,18 @@ mod cpu_budget_tests {
     }
 
     #[test]
+    fn cjxl_has_its_default_all_cores_behaviour_pinned_down() {
+        // cjxl 的 --num_threads 默认 0 = 按硬件线程数全开，是唯一"没传参就等于超发"的工具。
+        assert_eq!(flags_of("cjxl"), vec!["--num_threads=1".to_string()]);
+        assert_eq!(
+            cpu_flags("cjxl", 4),
+            vec!["--num_threads=4".to_string()]
+        );
+    }
+
+    #[test]
     fn single_threaded_tools_get_no_extra_flags() {
-        for tool in ["pngquant", "gifsicle", "cjpeg", "cjxl"] {
+        for tool in ["pngquant", "gifsicle", "cjpeg"] {
             assert!(flags_of(tool).is_empty(), "{tool} 不该拿到额外的 CPU 参数");
         }
     }

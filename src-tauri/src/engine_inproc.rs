@@ -1,11 +1,14 @@
 // 进程内压缩引擎（App Store 产物线 / feature = inproc-backends）
 //
-// 与 engine.rs 公共接口一致，但直接调用 Rust 库（沙盒友好，无外部 CLI / dylib）。
-// 当前为骨架：PNG/JPG 走 image crate 兜底编码（弱于 pngquant/mozjpeg），
-// 其它格式待接入专用 crate（见 AGENTS.md「内置 CLI 工具与 Rust crate 对照」）。
+// 与 engine.rs 公共接口一致，但**只调用链接进本进程的 Rust crate**：
+// 这里绝不允许出现 find_tool / make_command / Command::new —— 沙盒子进程拿不到
+// 父进程的 security-scoped 文件授权（书签授权挂在父进程的 sandbox extension 上，
+// 不随 fork 继承），所以打包 CLI 在这条线上必然失败，只会白付一次 spawn 的成本。
+// 提交用的 scripts/build_appstore.sh 也从不往 .app 里放 CLI/dylib。
 //
 // 改造原则（强制）：本文件的公共函数签名必须与 engine.rs 同名函数严格一致，
 // CompressOptions / EngineResult 等类型复用 super::engine，不得重复定义。
+// 新增格式 → 只加 crate 实现；要引外部编码器，先在 AGENTS.md 对照表里登记。
 
 use std::fs;
 use std::path::Path;
@@ -48,83 +51,32 @@ fn unsupported(original: Vec<u8>, out_type: &str, reason: &str) -> EngineResult 
     }
 }
 
-/// PNG：优先调打包的 pngquant/oxipng CLI（与 Direct 版完全一致），找不到降级 inproc。
+/// PNG：imagequant 量化（与 pngquant 同源算法）→ oxipng 库版 → image crate 兜底。
 async fn compress_png(file: &Path, options: &CompressOptions) -> EngineResult {
     let original = fs::read(file).unwrap_or_default();
     let original_size = original.len() as u64;
     let quality = options.quality;
 
-    // 1. pngquant CLI（与 Direct 版 engine.rs 完全一致的调用方式）
-    if let Some(tool) = super::find_tool("pngquant") {
-        let tmp = tempfile::tempdir().ok();
-        if let Some(ref td) = tmp {
-            let out = td.path().join("c.png");
-            let q_low = quality.saturating_sub(10).max(10);
-            let q_high = quality.min(100);
-            let args = vec![
-                format!("--quality={}-{}", q_low, q_high),
-                "--speed=3".into(),
-                "--strip".into(),
-                "--output".into(),
-                out.to_string_lossy().into(),
-                "--".into(),
-                file.to_string_lossy().into(),
-            ];
-            if let Some(data) = super::cli_to_file(&tool, &args, &out).await {
-                if (data.len() as u64) < original_size {
-                    return ok(data, "png", "pngquant");
-                }
-            }
-        }
-    }
-
-    // 2. oxipng CLI（与 Direct 版一致，自包含可沙盒运行）
-    if let Some(tool) = super::find_tool("oxipng") {
-        let tmp = tempfile::tempdir().ok();
-        if let Some(ref td) = tmp {
-            let out = td.path().join("c.png");
-            let _ = fs::copy(file, &out);
-            let level = (quality / 20).min(6).max(1);
-            let args = vec![
-                format!("-o{}", level),
-                "--strip".into(),
-                "safe".into(),
-                out.to_string_lossy().into(),
-            ];
-            let _ = super::make_command(&tool).args(&args)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status().await;
-            if let Ok(data) = fs::read(&out) {
-                if !data.is_empty() && (data.len() as u64) < original_size {
-                    return ok(data, "png", "oxipng");
-                }
-            }
-        }
-    }
-
-    // 3. inproc imagequant 降级（CLI 工具未找到时，如 dev 模式）
     if let Some(data) = compress_png_with_imagequant(file, quality) {
         if (data.len() as u64) < original_size {
-            return ok(data, "png", "pngquant (inproc fallback)");
+            return ok(data, "png", "pngquant (inproc)");
         }
     }
 
-    // 4. inproc oxipng 降级
     if let Some(data) = compress_png_with_oxipng(file, quality) {
         if (data.len() as u64) < original_size {
-            return ok(data, "png", "oxipng (inproc fallback)");
+            return ok(data, "png", "oxipng (inproc)");
         }
     }
 
-    // 5. image crate 兜底
+    // 兜底：无损重编码。前两条都不适用时才轮到它。
     if let Some(data) = compress_png_with_image(file) {
         if (data.len() as u64) < original_size {
             return ok(data, "png", "image-png");
         }
     }
 
-    no_improvement(original, "png", "pngquant", original_size, original_size)
+    no_improvement(original, "png", "pngquant (inproc)", original_size, original_size)
 }
 
 /// image crate 兜底：PNG 无损重编码，保留原色型（RGB→RGB8，RGBA→RGBA8）。
@@ -315,43 +267,19 @@ fn compress_gif_with_image(file: &Path) -> Option<Vec<u8>> {
     if buf.is_empty() { None } else { Some(buf) }
 }
 
-/// GIF：优先调打包的 gifsicle CLI（与 Direct 版完全一致），找不到降级 gif crate。
-/// gifsicle 是自包含二进制（仅依赖 libSystem），沙盒可直接 spawn。
+/// GIF：image crate 逐帧重编码（无 gifsicle 减色，属已记录的质量降级，非功能缺失）。
 async fn compress_gif(file: &Path, options: &CompressOptions) -> EngineResult {
+    let _ = options;
     let original = fs::read(file).unwrap_or_default();
     let original_size = original.len() as u64;
-    let quality = options.quality;
 
-    // 1. gifsicle CLI（与 Direct 版 engine.rs 完全一致的调用方式）
-    if let Some(tool) = super::find_tool("gifsicle") {
-        let tmp = tempfile::tempdir().ok();
-        if let Some(ref td) = tmp {
-            let out = td.path().join("c.gif");
-            let colors = ((quality as f64 / 100.0) * 256.0).floor().max(32.0) as u32;
-            let args = vec![
-                format!("--optimize=3"),
-                format!("--colors={}", colors),
-                "--no-comments".into(),
-                "--output".into(),
-                out.to_string_lossy().into(),
-                file.to_string_lossy().into(),
-            ];
-            if let Some(data) = super::cli_to_file(&tool, &args, &out).await {
-                if (data.len() as u64) < original_size {
-                    return ok(data, "gif", "gifsicle");
-                }
-            }
-        }
-    }
-
-    // 2. gif crate 降级（gifsicle 未找到时，如 dev 模式）
     if let Some(data) = compress_gif_with_image(file) {
         if (data.len() as u64) < original_size {
-            return ok(data, "gif", "gifsicle (gif-crate fallback)");
+            return ok(data, "gif", "gifsicle (inproc)");
         }
     }
 
-    no_improvement(original, "gif", "gifsicle", original_size, original_size)
+    no_improvement(original, "gif", "gifsicle (inproc)", original_size, original_size)
 }
 
 /// ravif crate 编码（同源 AV1/rav1e，对齐 avifenc）：with_quality + with_speed(6)。
@@ -479,20 +407,69 @@ pub async fn compress_smart(file: &Path, options: &CompressOptions) -> EngineRes
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
-    #[tokio::test]
-    async fn test_compress_png_inproc() {
-        let test_file = PathBuf::from("/tmp/test_octoshrink.png");
-        if !test_file.exists() {
-            eprintln!("[TEST] test file not found, skipping");
-            return;
+    /// 沙盒线必须**没有**外部进程：security-scoped 授权挂在父进程的 sandbox
+    /// extension 上，不随 spawn 继承，所以打包 CLI 在这里必然读不到用户文件，
+    /// 只是白付一次进程启动。这条不变量靠读自己的源码守 —— 注释里提到这些词不算。
+    #[test]
+    fn the_inproc_engine_never_spawns_an_external_tool() {
+        let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/engine_inproc.rs"))
+            .expect("自检读不到自己的源码");
+        // 只扫测试模块之前的生产代码：本测试自己就写着这些词。
+        let production = source.split("#[cfg(test)]").next().unwrap_or("");
+        let code: String = production
+            .lines()
+            .map(|line| line.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for banned in ["find_tool", "make_command", "cli_to_file", "Command::new", "std::process"] {
+            assert!(
+                !code.contains(banned),
+                "进程内引擎出现了 {banned}：沙盒线只许调链接进本进程的 crate"
+            );
         }
-        let opts = CompressOptions {
+    }
+
+    /// 真跑一次进程内 PNG 压缩：自己造夹具，不许因为临时文件不存在就静默跳过。
+    #[tokio::test]
+    async fn compressing_a_png_keeps_pixels_and_shrinks_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.png");
+        // 渐变 + 少量噪声：能被量化压缩，但像素语义仍可核对。
+        let mut img = image::RgbImage::new(64, 64);
+        for (x, y, pixel) in img.enumerate_pixels_mut() {
+            *pixel = image::Rgb([x as u8, y as u8, ((x + y) / 2) as u8]);
+        }
+        img.save(&file).unwrap();
+        let original = image::open(&file).unwrap().to_rgb8();
+
+        let result = compress_image(&file, &inproc_options(80)).await;
+        assert!(result.success, "压缩失败：{:?}", result.error);
+        assert!(!result.compressed.is_empty());
+        fs::write(&file, &result.compressed).unwrap();
+        let round_trip = image::open(&file).unwrap().to_rgb8();
+        assert_eq!(round_trip.dimensions(), original.dimensions());
+        // 量化带误差扩散，单像素最大偏差可以很大但平均很小 —— 这里只保证"图没坏"，
+        // 所以用平均偏差，不用最大偏差（后者是 dithering 的正常表现，不是缺陷）。
+        let mut total = 0u64;
+        let mut samples = 0u64;
+        for (before, after) in original.pixels().zip(round_trip.pixels()) {
+            for (a, b) in before.0.iter().zip(&after.0) {
+                total += a.abs_diff(*b) as u64;
+                samples += 1;
+            }
+        }
+        let mean = total as f64 / samples as f64;
+        assert!(mean <= 6.0, "量化平均偏差 {mean}，图已经坏了");
+        assert!(!result.algorithm.starts_with("none"), "走了兜底分支：{:?}", result.error);
+    }
+
+    fn inproc_options(quality: u32) -> CompressOptions {
+        CompressOptions {
             processing_mode: "advanced".into(),
             system_image_size: "actual".into(),
             preserve_metadata: true,
-            quality: 80,
+            quality,
             output_format: "original".into(),
             smart_mode: false,
             backend: "auto".into(),
@@ -503,11 +480,6 @@ mod tests {
             output_dir: None,
             source_roots: Vec::new(),
             lossless: None,
-        };
-        eprintln!("[TEST] calling compress_image on {:?}", test_file);
-        let result = compress_image(&test_file, &opts).await;
-        eprintln!("[TEST] result: success={} out_type={} algo={} err={:?} comp_len={}",
-            result.success, result.out_type, result.algorithm, result.error, result.compressed.len());
-        assert!(result.success, "compression should succeed");
+        }
     }
 }

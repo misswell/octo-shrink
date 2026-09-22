@@ -67,5 +67,37 @@ const last = name => [...calls].reverse().find(call => call[0] === name);
 
   context.setPauseButtonVisible(false);
   assert.equal(elements.pauseCompressBtn.style.display, 'none');
-  console.log('PASS: pause/resume signals, 暂停中… title, 已暂停 summary, rollback on failure');
+
+  // 取消整批 = 一次 cancel_batch，并且绝不因此解除暂停。
+  const countOf = needle => source.split(needle).length - 1;
+  assert.equal(countOf("invoke('cancel_file'"), 1, '只有队列里单个文件才逐个取消');
+  assert.equal(countOf("invoke('cancel_batch'"), 2, '清空全部与清除结果各发一次批量取消');
+
+  const batchCalls = [];
+  const paths = ['/a.png', '/b.png', '/c.png'];
+  const batch = vm.createContext({
+    console, Set, Map, Promise, JSON,
+    files: paths.slice(), results: [], inputPaths: [], fileRows: {},
+    isCompressing: true, queueRevision: 0, pendingAutoCompress: true,
+    activeBatchPaths: paths.slice(), activeBatchSet: new Set(paths),
+    activeBatchRows: new Map(), activeBatchRevision: 7,
+    cancelledFiles: new Set(), compressionPaused: true,
+    confirm: () => true,
+    document: { getElementById: () => null },
+    settingsPanel: { style: {} }, resultsPanel: { style: {} },
+    updateQueueSummary() {}, emitCompareResultsChanged() {},
+    invoke: async (command, args) => { batchCalls.push([command, args]); return null; },
+  });
+  vm.runInContext(slice('function clearAllFiles(', '// ─── Compression'), batch);
+  batch.clearAllFiles();
+  await flush();
+  assert.equal(batchCalls.length, 1, `清空全部只许发一次取消请求：${JSON.stringify(batchCalls)}`);
+  assert.equal(batchCalls[0][0], 'cancel_batch');
+  assert.deepEqual(batchCalls[0][1].filePaths, paths);
+  assert.deepEqual([...batch.cancelledFiles], paths, '这批路径必须全部标记为已取消');
+  assert.equal(batch.pendingAutoCompress, false);
+  assert.equal(batch.compressionPaused, true, '取消不能把暂停闸门打开');
+  assert.ok(!batchCalls.some(call => call[0] === 'resume_compression'),
+    '取消路径里绝不许出现 resume_compression');
+  console.log('PASS: pause/resume signals, 暂停中… title, 已暂停 summary, rollback on failure, 一次批量取消不动暂停');
 })().catch(error => { console.error(error); process.exitCode = 1; });

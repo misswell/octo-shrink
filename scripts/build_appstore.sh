@@ -4,9 +4,8 @@
 # 与 scripts/notarize.sh 完全独立。走进程内 Rust 库、沙盒 entitlements、
 # Apple Distribution 证书，产物是 .pkg（productbuild archive），待 Transporter 上传。
 #
-# 规则（见 AGENTS.md）：本脚本不依赖 scripts/notarize.sh，不复制内置 CLI / dylib。
-# 当前进度为骨架占位：仅做 cargo build 检验，签名/打包/上传部分待 Apple Distribution
-# 证书就绪后补齐。先保证 --features appstore 能跑通编译。
+# 规则（见 AGENTS.md）：本脚本不依赖 scripts/notarize.sh，不复制内置 CLI / dylib，
+# 且送审前必须通过下面的 bundle 自检（包里除主程序外不许有第三方 Mach-O）。
 
 set -euo pipefail
 
@@ -45,6 +44,28 @@ ok "$APP"
 cp -R "$PROJECT_DIR/frontend/." "$APP/Contents/Resources/" \
   || fail "复制前端文件失败"
 ok "前端文件已复制到 .app"
+
+# ---------- 1.5 bundle 自检（送审前必须干净）----------
+# 沙盒线一切编码都在本进程内：包里不许有第三方可执行文件 / dylib，
+# 引擎源码里不许有 spawn CLI 的写法（注释里提到这些词不算）。
+foreign=$(find "$APP/Contents" \( -name '*.dylib' -o -path '*/Resources/bin/*' \) -type f 2>/dev/null || true)
+if [ -n "$foreign" ]; then
+  echo "$foreign" >&2
+  fail "App Store 包里混进了外部可执行文件/dylib（沙盒线必须全进程内）"
+fi
+extra_macho=$(find "$APP/Contents/MacOS" -type f ! -name "$APP_NAME" 2>/dev/null || true)
+if [ -n "$extra_macho" ]; then
+  echo "$extra_macho" >&2
+  fail "Contents/MacOS 下有额外可执行文件"
+fi
+spawns=$(sed -n '1,/#\[cfg(test)\]/p' "$TAURI_DIR/src/engine_inproc.rs" \
+  | sed 's://.*::' \
+  | grep -nE 'find_tool|make_command|cli_to_file|Command::new' || true)
+if [ -n "$spawns" ]; then
+  echo "$spawns" >&2
+  fail "engine_inproc.rs 出现了 spawn CLI 的写法，沙盒线必须全部进程内"
+fi
+ok "bundle 自检通过（无外部可执行文件、引擎无 spawn）"
 
 # ---------- 2. Apple Distribution 签名（hardened runtime + sandbox entitlements）----------
 # 前置：在钥匙串安装 "Apple Distribution: <name>" 证书（Apple Developer > Certificates > +）。

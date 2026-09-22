@@ -7,11 +7,13 @@
 // `retentionDays == 0`（「不保留」，默认档）：备份随这次运行存活，覆盖原文件前照写
 // 不误（没有备份就不许覆盖），在**正常退出**时清干净；异常退出留下的等到下次正常退出，
 // 启动时只扫没人引用的孤儿。
+//
+// 读取是**严格**的：`history.json` 存在但解析不出来时，绝不退化成"空历史"。
+// 空历史会让所有备份看起来无人引用，进而被清理掉 —— 那是拿用户原图换一个不报错。
+// 损坏时改名留档、按 `backup-meta.json` 重建恢复入口，并且本次启动禁止任何备份清理。
 
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
-use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -30,6 +32,15 @@ const META_FILE: &str = "backup-meta.json";
 pub const DAY_MILLIS: i64 = 86_400_000;
 /// mtime 比文件大小更容易被无关操作扰动；容忍 2 秒以内的写入抖动。
 const MTIME_TOLERANCE_MILLIS: i64 = 2_000;
+/// 历史条数的硬上限：清理逻辑再怎么出错，也不能让 history.json 无限膨胀。
+/// 淘汰的是最老的记录，且只连带删它自己那份备份。
+pub const MAX_HISTORY_ENTRIES: usize = 10_000;
+/// `history.json` 损坏时从备份重建出来的条目用的算法标记：它不是一次真实压缩。
+pub const RECOVERY_ALGORITHM: &str = "recovery";
+
+pub fn file_size(path: &Path) -> u64 {
+    fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
 
 pub fn now_millis() -> i64 {
     SystemTime::now()
@@ -87,6 +98,9 @@ pub enum HistoryStatus {
     Restored,
     /// 压缩结果或原图位置已不存在（外部改名/删除）
     Missing,
+    /// `history.json` 损坏后从备份目录的 `backup-meta.json` 重建出来的条目：
+    /// 备份确实还在，但这次压缩的明细（算法、节省率）已经无从得知。
+    RecoveryAvailable,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,6 +134,18 @@ pub struct HistoryEntry {
 static ENTRY_SEQUENCE: AtomicU32 = AtomicU32::new(0);
 
 impl HistoryEntry {
+    /// 事务id 必须在覆盖开始之前就定下来：`ReplaceTransaction` 和历史记录靠它对齐，
+    /// 启动时"历史里有没有这个 id"就是这次覆盖是否完整提交的唯一判据。
+    pub fn new_id(source: &Path) -> String {
+        let sequence = ENTRY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        format!(
+            "{}-{}-{}",
+            now_nanos(),
+            sequence,
+            HistoryStore::backup_key(source)
+        )
+    }
+
     /// 一次成功产出对应一条历史。`expires_at` 只用于展示：启动清理按 `created_at`
     /// 判定，所以同一张图重压多次时，备份的存活期顺延到最后一次相关压缩之后。
     pub fn record(
@@ -129,15 +155,27 @@ impl HistoryEntry {
         backup: Option<&Path>,
         retention_days: u32,
     ) -> Self {
+        Self::record_with_id(
+            Self::new_id(source),
+            source,
+            result,
+            output,
+            backup,
+            retention_days,
+        )
+    }
+
+    pub fn record_with_id(
+        id: String,
+        source: &Path,
+        result: &CompressResult,
+        output: &Path,
+        backup: Option<&Path>,
+        retention_days: u32,
+    ) -> Self {
         let created_at = now_millis();
-        let sequence = ENTRY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         Self {
-            id: format!(
-                "{}-{}-{}",
-                now_nanos(),
-                sequence,
-                HistoryStore::backup_key(source)
-            ),
+            id,
             created_at,
             // 「不保留」没有"几天后到期"这回事：这份备份的寿命就是这次运行。
             expires_at: if retention_days == crate::app_settings::KEEP_UNTIL_QUIT {
@@ -170,11 +208,26 @@ impl HistoryEntry {
     }
 }
 
+/// 每份原图备份的来历。`history.json` 一旦损坏，这份元数据就是重建恢复入口的
+/// 唯一依据 —— 所以 version、大小、扩展名都必须写全，不能只留路径。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BackupMeta {
+    /// 1 = 只有 sourcePath/createdAt（老版本）；2 = 带大小、mtime、扩展名。
+    #[serde(default = "meta_version_v1")]
+    version: u32,
     source_path: String,
     created_at: i64,
+    #[serde(default)]
+    original_size: u64,
+    #[serde(default)]
+    original_modified_at: Option<i64>,
+    #[serde(default)]
+    original_extension: String,
+}
+
+fn meta_version_v1() -> u32 {
+    1
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -183,6 +236,10 @@ pub struct CleanupReport {
     pub removed_entries: usize,
     pub removed_backups: usize,
     pub kept_backups: usize,
+    /// 本次启动从备份目录重建出的恢复入口数。
+    pub recovered_entries: usize,
+    /// 损坏的 `history.json` 被改名留下的现场（绝对路径）。
+    pub quarantined_to: Option<String>,
     pub warnings: Vec<String>,
 }
 
@@ -214,11 +271,33 @@ impl RestoreError {
     }
 }
 
+/// 内存里的历史快照 + 可信度。落盘永远是整份覆盖（写 tmp → fsync → rename），
+/// 所以"缓存与磁盘不一致"只可能发生在写失败之后 —— 那时缓存不更新，
+/// 内存反映的仍是磁盘上那份可信内容。
+#[derive(Debug, Default)]
+struct Cache {
+    entries: Vec<HistoryEntry>,
+    loaded: bool,
+    /// `history.json` 存在但读不出可信内容（半个文件 / 无法读）：
+    /// 引用关系已经不可信，本次启动**禁止 sweep 备份**。
+    untrusted: bool,
+}
+
 /// 进程内共享的历史存储。所有读-改-写都在同一把锁里完成，
 /// 3 个并发 worker 同时追加不会互相覆盖。
+///
+/// 启动时读一次 `history.json` 进内存，之后每次追加只覆盖落盘，
+/// 不再"读整份 → 解析整份 → 追加 → 序列化整份"。
 pub struct HistoryStore {
     root: PathBuf,
-    lock: Mutex<()>,
+    cache: Mutex<Cache>,
+    /// 备份目录的读-改-写单独一把锁：与 `cache` 无嵌套，不会互锁。
+    backup_lock: Mutex<()>,
+    /// 历史是"读全量 → 改 → 写全量"，所以读改写的整个过程必须独占：
+    /// 否则两个并发的压缩各自拿到同一份快照，后写的那份把前一份整条抹掉。
+    commit_lock: Mutex<()>,
+    /// 首次加载时对损坏现场做的处理，留给启动流程报告（只报一次）。
+    pending_report: Mutex<Option<CleanupReport>>,
 }
 
 impl HistoryStore {
@@ -226,7 +305,10 @@ impl HistoryStore {
         fs::create_dir_all(root.join(BACKUPS_DIR)).map_err(|e| e.to_string())?;
         Ok(Self {
             root,
-            lock: Mutex::new(()),
+            cache: Mutex::new(Cache::default()),
+            backup_lock: Mutex::new(()),
+            commit_lock: Mutex::new(()),
+            pending_report: Mutex::new(None),
         })
     }
 
@@ -240,16 +322,92 @@ impl HistoryStore {
 
     // ─── 读写 ────────────────────────────────────────────────────
 
-    fn read_raw(&self) -> Vec<HistoryEntry> {
-        match fs::read_to_string(self.history_path()) {
-            Ok(raw) => serde_json::from_str(&raw).unwrap_or_default(),
-            Err(_) => Vec::new(),
+    /// 严格读取：**"没有历史"和"历史读不出来"是两回事**。
+    ///
+    /// 老实现 `serde_json::from_str(&raw).unwrap_or_default()` 把半个 JSON 当成空历史，
+    /// 于是下一次启动清理看到"没有任何记录引用这些备份"，把用户所有原图备份全删了。
+    /// Err 只会来自"文件存在但内容不可信"，调用方据此关掉清理。
+    fn load_from_disk(&self) -> Result<Vec<HistoryEntry>, String> {
+        let raw = match fs::read_to_string(self.history_path()) {
+            Ok(raw) => raw,
+            // 文件不存在 = 真的没有历史，这是正常状态。
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(format!("无法读取历史记录: {error}")),
+        };
+        if raw.trim().is_empty() {
+            return Ok(Vec::new());
         }
+        serde_json::from_str(&raw).map_err(|error| format!("历史记录已损坏: {error}"))
+    }
+
+    /// 取内存快照（首次调用时落盘加载）。调用方必须已持有 `cache` 锁。
+    fn ensure_loaded(&self, cache: &mut Cache) {
+        if cache.loaded {
+            return;
+        }
+        cache.loaded = true;
+        match self.load_from_disk() {
+            Ok(entries) => cache.entries = entries,
+            Err(error) => {
+                cache.untrusted = true;
+                let mut report = CleanupReport::default();
+                report.warnings.push(error);
+                // 先保住现场：改名留档，绝不能让后续清理把这份文件覆盖成 []。
+                match self.quarantine_history_file() {
+                    Ok(path) => report.quarantined_to = Some(path.to_string_lossy().into_owned()),
+                    Err(eject) => report.warnings.push(eject),
+                }
+                // 备份还在，就还能恢复：按 backup-meta 重建恢复入口。
+                let rebuilt = self.rebuild_from_backups();
+                report.recovered_entries = rebuilt.len();
+                cache.entries = rebuilt;
+                // 重建出来的这份必须落盘，否则重启又看到空历史。
+                if let Err(write_error) = self.write_raw(&cache.entries) {
+                    report.warnings.push(write_error);
+                }
+                *self.pending_report.lock().unwrap() = Some(report);
+            }
+        }
+    }
+
+    fn quarantine_history_file(&self) -> Result<PathBuf, String> {
+        let path = self.history_path();
+        let stamped = self
+            .root
+            .join(format!("history.corrupt-{}.json", now_millis()));
+        fs::rename(&path, &stamped).map_err(|e| e.to_string())?;
+        Ok(stamped)
     }
 
     fn write_raw(&self, entries: &[HistoryEntry]) -> Result<(), String> {
         let json = serde_json::to_string_pretty(entries).map_err(|e| e.to_string())?;
         write_atomic(&self.history_path(), json.as_bytes())
+    }
+
+    /// 覆盖磁盘写入 + 内存快照：写失败时内存保持磁盘上那份可信内容。
+    fn store(&self, entries: Vec<HistoryEntry>) -> Result<(), String> {
+        self.write_raw(&entries)?;
+        let mut cache = self.cache.lock().unwrap();
+        self.ensure_loaded(&mut cache);
+        cache.entries = entries;
+        Ok(())
+    }
+
+    /// 本次启动是否禁止清理无人引用的备份。
+    pub fn cleanup_is_locked(&self) -> bool {
+        let mut cache = self.cache.lock().unwrap();
+        self.ensure_loaded(&mut cache);
+        cache.untrusted
+    }
+
+    /// 取出损坏现场的处理结果（只有一份，报告完就没了）。
+    /// 这里主动触发一次加载：启动流程可能在任何历史读取之前就调它。
+    pub fn take_startup_report(&self) -> Option<CleanupReport> {
+        {
+            let mut cache = self.cache.lock().unwrap();
+            self.ensure_loaded(&mut cache);
+        }
+        self.pending_report.lock().unwrap().take()
     }
 
     fn decorate(&self, mut entries: Vec<HistoryEntry>) -> Vec<HistoryEntry> {
@@ -267,46 +425,116 @@ impl HistoryStore {
         entries
     }
 
+    fn snapshot(&self) -> Vec<HistoryEntry> {
+        let mut cache = self.cache.lock().unwrap();
+        self.ensure_loaded(&mut cache);
+        cache.entries.clone()
+    }
+
     /// 最新在前，历史页直接渲染。
     pub fn list(&self) -> Vec<HistoryEntry> {
-        let _guard = self.lock.lock().unwrap();
-        let mut entries = self.read_raw();
+        let mut entries = self.snapshot();
         entries.sort_by(|a, b| b.created_at.cmp(&a.created_at).then_with(|| b.id.cmp(&a.id)));
         self.decorate(entries)
     }
 
     pub fn find(&self, history_id: &str) -> Option<HistoryEntry> {
-        let _guard = self.lock.lock().unwrap();
-        self.decorate(self.read_raw())
+        self.decorate(self.snapshot())
             .into_iter()
             .find(|entry| entry.id == history_id)
     }
 
+    /// 事务是否已完整提交：历史里有没有这条 id。crash recovery 的唯一判据。
+    pub fn contains_committed(&self, history_id: &str) -> bool {
+        self.snapshot()
+            .iter()
+            .any(|entry| entry.id == history_id && entry.status != HistoryStatus::Restored)
+    }
+
     /// 主队列的「恢复原图」不带 id 时，按源路径找最近一条还没恢复的记录。
     pub fn find_latest_for_source(&self, source_path: &str) -> Option<HistoryEntry> {
-        let _guard = self.lock.lock().unwrap();
-        self.decorate(self.read_raw())
+        self.decorate(self.snapshot())
             .into_iter()
             .filter(|entry| entry.source_path == source_path && entry.status != HistoryStatus::Restored)
             .max_by_key(|entry| entry.created_at)
     }
 
     pub fn add(&self, entry: HistoryEntry) -> Result<(), String> {
-        let _guard = self.lock.lock().unwrap();
-        let mut entries = self.read_raw();
+        let _commit = self.commit_lock.lock().unwrap();
+        let mut entries = self.snapshot();
         entries.retain(|existing| existing.id != entry.id);
         entries.push(entry);
-        self.write_raw(&entries)
+        // 硬上限：异常设置或时间问题都不许让历史无限膨胀。淘汰的是最老的记录，
+        // 备份只在"没有任何幸存记录引用它"时才连带删。
+        let evicted = self.trim_to_cap(&mut entries, MAX_HISTORY_ENTRIES);
+        if !evicted.is_empty() {
+            let survivors = entries.clone();
+            self.store(entries)?;
+            self.drop_backups_of(&evicted, &survivors);
+            return Ok(());
+        }
+        self.store(entries)
+    }
+
+    /// 只保留最近 `cap` 条，返回被淘汰的那些。
+    fn trim_to_cap(&self, entries: &mut Vec<HistoryEntry>, cap: usize) -> Vec<HistoryEntry> {
+        if entries.len() <= cap {
+            return Vec::new();
+        }
+        let mut order: Vec<usize> = (0..entries.len()).collect();
+        order.sort_by(|a, b| {
+            entries[*a]
+                .created_at
+                .cmp(&entries[*b].created_at)
+                .then_with(|| entries[*a].id.cmp(&entries[*b].id))
+        });
+        let doomed: HashSet<usize> = order.into_iter().take(entries.len() - cap).collect();
+        let mut evicted = Vec::with_capacity(doomed.len());
+        let mut kept = Vec::new();
+        for (index, entry) in entries.drain(..).enumerate() {
+            if doomed.contains(&index) {
+                evicted.push(entry);
+            } else {
+                kept.push(entry);
+            }
+        }
+        *entries = kept;
+        evicted
+    }
+
+    /// 删掉被淘汰记录独占的备份目录。`survivors` 是还留在历史里的那些 ——
+    /// 同一张图重压多次时备份是共享的，只要还有一个引用就绝不能动。
+    fn drop_backups_of(&self, evicted: &[HistoryEntry], survivors: &[HistoryEntry]) {
+        for stale in evicted {
+            let Some(dir) = stale
+                .backup_path
+                .as_deref()
+                .and_then(|path| Self::backup_dir_of_path(path))
+            else {
+                continue;
+            };
+            let Some(key) = backup_key_of(stale.backup_path.as_deref()) else {
+                continue;
+            };
+            let still_used = survivors.iter().any(|other| {
+                other.status != HistoryStatus::Restored
+                    && backup_key_of(other.backup_path.as_deref()).as_deref() == Some(key.as_str())
+            });
+            if !still_used {
+                let _ = fs::remove_dir_all(dir);
+            }
+        }
     }
 
     pub fn clear(&self) -> Result<CleanupReport, String> {
-        let _guard = self.lock.lock().unwrap();
-        let entries = self.read_raw();
+        let _commit = self.commit_lock.lock().unwrap();
+        let entries = self.snapshot();
         let referenced: HashSet<String> = entries
             .iter()
             .filter_map(|entry| backup_key_of(entry.backup_path.as_deref()))
             .collect();
-        self.write_raw(&[])?;
+        // 先让历史不再引用任何备份，再动手删：中间崩溃只是留下孤儿，下次启动扫掉。
+        self.store(Vec::new())?;
         let mut report = CleanupReport {
             removed_entries: entries.len(),
             ..Default::default()
@@ -323,12 +551,38 @@ impl HistoryStore {
 
     // ─── 原图备份 ────────────────────────────────────────────────
 
-    /// 稳定哈希：同一 sourcePath 在任意次启动后都落进同一个备份目录。
+    /// 稳定哈希：FNV-1a 64 位。同一 sourcePath 在任意次启动、任意 rustc 版本下
+    /// 都落进同一个备份目录，也和 Swift 线 `backupKey(forPath:)` 完全一致。
+    ///
+    /// 刻意不用 `DefaultHasher` —— 标准库从不把它的算法当作持久存储格式的保证，
+    /// 一次升级就能让所有已有备份变成"无人引用"，进而被启动清理删掉。
+    fn stable_hash(text: &str) -> String {
+        let mut hash: u64 = 0xcbf29ce484222325;
+        for byte in text.as_bytes() {
+            hash ^= *byte as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        format!("{hash:016x}")
+    }
+
     pub fn backup_key(path: &Path) -> String {
-        let canonical = canonical_path(path);
+        Self::stable_hash(&canonical_path(path))
+    }
+
+    /// 老版本 `DefaultHasher` 的 key：只用来认已有备份，不再产生新目录。
+    fn legacy_backup_key(path: &Path) -> String {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
         let mut hasher = DefaultHasher::new();
-        canonical.hash(&mut hasher);
+        canonical_path(path).hash(&mut hasher);
         format!("{:016x}", hasher.finish())
+    }
+
+    /// security-scoped 书签文件名候选：新 key 优先，老 key 只用于续认已有授权。
+    /// 只有沙盒线（`inproc-backends`）会读它，默认构建下不参与压缩。
+    #[cfg_attr(not(feature = "inproc-backends"), allow(dead_code))]
+    pub fn bookmark_keys_for(path: &Path) -> [String; 2] {
+        [Self::backup_key(path), Self::legacy_backup_key(path)]
     }
 
     fn backup_dir(&self, key: &str) -> PathBuf {
@@ -357,12 +611,15 @@ impl HistoryStore {
         names.pop()
     }
 
-    /// 为一次 replace 压缩准备原图备份，返回 None 表示备份没写成。
+    /// 为一次 replace 压缩准备原图备份。
+    ///
+    /// Err = 这份备份不可信（备份文件在、来历记录不在的半份备份等同于没有：
+    /// `history.json` 一旦损坏就再也认不出它属于谁）。调用方**必须放弃这次覆盖**。
     ///
     /// 关键不变量：**已有有效备份时绝不覆盖**。同一张图连压三次，备份里永远是
     /// 第一次压缩前的真正原图，否则「恢复原图」只会回到上一版压缩结果。
-    pub fn ensure_backup(&self, source: &Path) -> Option<PathBuf> {
-        let _guard = self.lock.lock().unwrap();
+    pub fn ensure_backup(&self, source: &Path) -> Result<PathBuf, String> {
+        let _guard = self.backup_lock.lock().unwrap();
         let canonical = PathBuf::from(canonical_path(source));
         let base_key = Self::backup_key(source);
         let extension = canonical
@@ -383,7 +640,7 @@ impl HistoryStore {
                 // 命中同一源路径：复用，不重新拷贝。
                 Some(meta) if meta.source_path == canonical.to_string_lossy() => {
                     if let Some(existing) = self.existing_backup_file(&key) {
-                        return Some(existing);
+                        return Ok(existing);
                     }
                     // 备份文件被外部删掉了，重新写一份真正原图。
                 }
@@ -393,26 +650,121 @@ impl HistoryStore {
                     if dir.exists() {
                         continue;
                     }
+                    // 升级前用老 key 备份过的图：认那一份，不另起炉灶，
+                    // 否则第二次压缩会把压缩结果当成原图存进新目录。
+                    if index == 0 {
+                        if let Some(legacy) = self
+                            .existing_backup_file(&Self::legacy_backup_key(source))
+                        {
+                            return Ok(legacy);
+                        }
+                    }
                 }
             }
 
             if fs::create_dir_all(&dir).is_err() {
-                return None;
+                return Err("无法创建原图备份目录".into());
             }
             let backup_path = dir.join(format!("original.{extension}"));
-            if fs::copy(&canonical, &backup_path).is_err() {
-                return None;
+            // 先写临时名再 rename：崩溃不许留下半个 original.xxx 冒充有效备份。
+            let staged = dir.join(format!(".original.{extension}.tmp"));
+            if fs::copy(&canonical, &staged).is_err() {
+                let _ = fs::remove_dir_all(&dir);
+                return Err("无法保存原图备份".into());
+            }
+            if let Ok(handle) = fs::File::open(&staged) {
+                let _ = handle.sync_all();
+            }
+            if let Err(error) = fs::rename(&staged, &backup_path) {
+                let _ = fs::remove_dir_all(&dir);
+                return Err(format!("无法保存原图备份: {error}"));
             }
             let meta = BackupMeta {
+                version: 2,
                 source_path: canonical.to_string_lossy().into_owned(),
                 created_at: now_millis(),
+                original_size: file_size(&backup_path),
+                original_modified_at: file_mtime_millis(source),
+                original_extension: extension.clone(),
             };
-            if let Ok(json) = serde_json::to_string(&meta) {
-                let _ = write_atomic(&dir.join(META_FILE), json.as_bytes());
+            let json = serde_json::to_string(&meta)
+                .map_err(|error| format!("原图备份的来历记录写不成功: {error}"))?;
+            if let Err(error) = write_atomic(&dir.join(META_FILE), json.as_bytes()) {
+                let _ = fs::remove_dir_all(&dir);
+                return Err(format!("原图备份的来历记录写不成功: {error}"));
             }
-            return Some(backup_path);
+            // 备份文件 + 来历记录**都在**才算备份成功，缺一处这次覆盖就不可恢复。
+            if self.existing_backup_file(&key).is_none() || self.read_meta(&key).is_none() {
+                let _ = fs::remove_dir_all(&dir);
+                return Err("原图备份不完整，已跳过覆盖".into());
+            }
+            return Ok(backup_path);
         }
-        None
+        Err("原图备份槽位已满，无法为这张图准备备份".into())
+    }
+
+    /// `history.json` 损坏后按备份目录重建恢复入口。
+    ///
+    /// 只"把文件留着但历史页看不到"不叫数据恢复 —— 用户必须看到
+    /// 「检测到可恢复的原图备份」并且能一键恢复。
+    fn rebuild_from_backups(&self) -> Vec<HistoryEntry> {
+        let Ok(dirs) = fs::read_dir(self.backups_dir()) else {
+            return Vec::new();
+        };
+        let now = now_millis();
+        let mut rebuilt = Vec::new();
+        for entry in dirs.flatten() {
+            let dir = entry.path();
+            if !dir.is_dir() {
+                continue;
+            }
+            let Some(key) = dir.file_name().and_then(|name| name.to_str()).map(str::to_owned)
+            else {
+                continue;
+            };
+            let Some(backup) = self.existing_backup_file(&key) else {
+                continue;
+            };
+            let meta = self.read_meta(&key);
+            // 没有来历记录就不知道这份备份是谁的图，宁可不认也不许瞎猜。
+            let Some(meta) = meta else { continue };
+            let source = Path::new(&meta.source_path);
+            rebuilt.push(HistoryEntry {
+                id: format!("recovery-{key}"),
+                created_at: meta.created_at,
+                expires_at: now,
+                source_path: meta.source_path.clone(),
+                // replace 模式覆盖的就是源文件本身。
+                output_path: Some(meta.source_path.clone()),
+                file_name: source
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "image".into()),
+                output_mode: "replace".into(),
+                original_size: if meta.original_size > 0 {
+                    meta.original_size
+                } else {
+                    file_size(&backup)
+                },
+                compressed_size: file_size(source),
+                savings: 0.0,
+                out_type: source
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| ext.to_lowercase())
+                    .unwrap_or_else(|| "bin".into()),
+                algorithm: RECOVERY_ALGORITHM.into(),
+                backup_path: Some(backup.to_string_lossy().into_owned()),
+                status: HistoryStatus::RecoveryAvailable,
+                restored_at: None,
+                // 明细已经无从得知，但"此刻源文件是什么样"是量得出来的：拿它的实时
+                // mtime，冲突判定才不会在每次恢复前都误报一次「压缩后又被修改过」。
+                output_modified_at: file_mtime_millis(source).or(meta.original_modified_at),
+                source_exists: true,
+                backup_exists: true,
+            });
+        }
+        rebuilt
     }
 
     pub fn backup_dir_of_path(backup_path: &str) -> Option<PathBuf> {
@@ -427,11 +779,20 @@ impl HistoryStore {
     /// `retention_days == 0`（不保留）**不按时间过期**：这一档的清理挂在正常退出上。
     /// 崩溃 / 强杀现场留下的那份备份可能是唯一还活着的原图，启动时只扫没人引用的孤儿。
     pub fn cleanup_expired(&self, retention_days: u32) -> CleanupReport {
-        let _guard = self.lock.lock().unwrap();
         let mut report = CleanupReport::default();
+        let _commit = self.commit_lock.lock().unwrap();
+        if self.cleanup_is_locked() {
+            // 引用关系不可信的时候一个备份都不许删：这是"history.json 损坏 →
+            // 所有备份变成无人引用 → 全被清掉"那条链路唯一的断点。
+            let mut report = self.take_startup_report().unwrap_or_default();
+            report.warnings.push(
+                "历史记录文件已损坏，本次启动跳过清理，原图备份全部保留".into(),
+            );
+            return report;
+        }
+        let all = self.snapshot();
         let expires_by_time = retention_days > crate::app_settings::KEEP_UNTIL_QUIT;
         let cutoff = now_millis() - retention_days.max(1) as i64 * DAY_MILLIS;
-        let all = self.read_raw();
         let kept: Vec<HistoryEntry> = all
             .iter()
             .filter(|entry| {
@@ -444,9 +805,11 @@ impl HistoryStore {
             .cloned()
             .collect();
 
-        if let Err(error) = self.write_raw(&kept) {
-            report.warnings.push(format!("history.json 写入失败: {error}"));
-            return report;
+        if kept.len() != all.len() {
+            if let Err(error) = self.store(kept.clone()) {
+                report.warnings.push(format!("history.json 写入失败: {error}"));
+                return report;
+            }
         }
 
         self.sweep_unreferenced_backups(&kept, &mut report);
@@ -458,10 +821,14 @@ impl HistoryStore {
     /// 历史条目本身留着 —— 那是用户的压缩记录，不是原图。只把 `backup_path` 抹掉，
     /// 前端读到 `backupExists == false` 就自然显示「原图备份已清理」并收起恢复按钮。
     pub fn purge_backups_on_exit(&self) -> CleanupReport {
-        let _guard = self.lock.lock().unwrap();
         let mut report = CleanupReport::default();
+        let _commit = self.commit_lock.lock().unwrap();
+        if self.cleanup_is_locked() {
+            report.warnings.push("历史记录不可信，退出时保留所有原图备份".into());
+            return report;
+        }
         let cleared: Vec<HistoryEntry> = self
-            .read_raw()
+            .snapshot()
             .into_iter()
             .map(|mut entry| {
                 entry.backup_path = None;
@@ -469,7 +836,7 @@ impl HistoryStore {
             })
             .collect();
 
-        if let Err(error) = self.write_raw(&cleared) {
+        if let Err(error) = self.store(cleared) {
             report.warnings.push(format!("history.json 写入失败: {error}"));
             return report;
         }
@@ -478,8 +845,12 @@ impl HistoryStore {
         report
     }
 
-    /// 删掉没有任何存活条目引用的备份目录。调用方必须已持有 `lock`。
+    /// 删掉没有任何存活条目引用的备份目录。
     fn sweep_unreferenced_backups(&self, kept: &[HistoryEntry], report: &mut CleanupReport) {
+        if self.cleanup_is_locked() {
+            report.warnings.push("历史记录不可信，跳过备份清理".into());
+            return;
+        }
         let referenced: HashSet<String> = kept
             .iter()
             .filter(|entry| entry.status != HistoryStatus::Restored)
@@ -515,9 +886,9 @@ impl HistoryStore {
     // ─── 恢复 ────────────────────────────────────────────────────
 
     fn mark_restored(&self, ids: &[String]) -> Result<(), String> {
-        let _guard = self.lock.lock().unwrap();
+        let _commit = self.commit_lock.lock().unwrap();
         let stamp = now_millis();
-        let mut entries = self.read_raw();
+        let mut entries = self.snapshot();
         let mut touched = false;
         for entry in &mut entries {
             if ids.contains(&entry.id) && entry.status != HistoryStatus::Restored {
@@ -529,21 +900,21 @@ impl HistoryStore {
             }
         }
         if touched {
-            self.write_raw(&entries)?;
+            self.store(entries)?;
         }
         Ok(())
     }
 
     fn remove_ids(&self, ids: &[String]) -> Result<(), String> {
-        let _guard = self.lock.lock().unwrap();
-        let before = self.read_raw();
+        let _commit = self.commit_lock.lock().unwrap();
+        let before = self.snapshot();
         let after: Vec<HistoryEntry> = before
             .iter()
             .filter(|entry| !ids.contains(&entry.id))
             .cloned()
             .collect();
         if after.len() != before.len() {
-            self.write_raw(&after)?;
+            self.store(after)?;
         }
         Ok(())
     }
@@ -551,11 +922,10 @@ impl HistoryStore {
     /// 同一条备份可能被多条记录引用（同一张图重压 N 次）。恢复的是那份真正原图，
     /// 所有这些记录的「已压缩」状态同时失效，必须一起标 Restored。
     fn siblings_sharing_backup(&self, entry: &HistoryEntry) -> Vec<String> {
-        let _guard = self.lock.lock().unwrap();
         let Some(key) = backup_key_of(entry.backup_path.as_deref()) else {
             return vec![entry.id.clone()];
         };
-        self.read_raw()
+        self.snapshot()
             .into_iter()
             .filter(|other| {
                 other.status != HistoryStatus::Restored
@@ -586,37 +956,38 @@ impl HistoryStore {
         }
     }
 
-    /// 把备份原子地写回源路径，并处理跨格式输出的清理。
-    /// 调用方负责沙盒访问；这里只做纯文件操作 + 历史记录状态更新。
-    fn restore_backup_files(&self, entry: &HistoryEntry) -> Result<(), RestoreError> {
-        let backup = entry
-            .backup_path
-            .as_ref()
-            .map(PathBuf::from)
-            .filter(|path| path.exists())
-            .ok_or(RestoreError::BackupGone)?;
-        let target = PathBuf::from(&entry.source_path);
-        let parent = target.parent().ok_or_else(|| {
-            RestoreError::Io("源文件路径无效".into())
-        })?;
+    /// 把一份备份原子地写回目标位置：同目录临时文件 → fsync → rename。
+    ///
+    /// `restore` 和事务回滚共用这一个实现 —— 恢复原图这件事绝不允许有两套写法。
+    pub fn write_backup_back_to_source(backup: &Path, target: &Path) -> Result<(), String> {
+        let parent = target
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
         let tmp = parent.join(format!(".octoshrink-restore-{}.tmp", now_nanos()));
-
-        fs::copy(&backup, &tmp).map_err(|e| RestoreError::Io(e.to_string()))?;
-        if fs::rename(&tmp, &target).is_err() {
+        fs::copy(backup, &tmp).map_err(|e| e.to_string())?;
+        if let Ok(handle) = fs::File::open(&tmp) {
+            // 写回原图这一步不能只留在内核缓存里：崩溃后用户看到的必须真是原图。
+            let _ = handle.sync_all();
+        }
+        if fs::rename(&tmp, target).is_err() {
             // 覆盖到一半失败时保留原目标文件，只清掉临时文件。
             let _ = fs::remove_file(&tmp);
-            return Err(RestoreError::Io(
-                "无法把原图写回目标位置".into(),
-            ));
+            return Err("无法把原图写回目标位置".into());
         }
-        // 跨格式 replace（PNG → JPG）时压缩结果是个新文件，恢复后不该留下孤儿。
+        Ok(())
+    }
+
+    /// 跨格式 replace（PNG → JPG）时压缩结果是个新文件，恢复后不该留下孤儿。
+    /// 同格式 replace 的输出就是源文件本身，绝不许删。
+    fn remove_generated_output(entry: &HistoryEntry) {
+        let target = PathBuf::from(&entry.source_path);
         if let Some(output) = entry.output_path.as_deref() {
             let output = Path::new(output);
-            if output != target {
+            if !same_file(output, &target) {
                 let _ = fs::remove_file(output);
             }
         }
-        Ok(())
     }
 
     /// 统一恢复入口：`restore_original` / `restore_history_entry` / `restore_all`
@@ -624,6 +995,10 @@ impl HistoryStore {
     ///
     /// `access` 负责在沙盒下临时取得目标位置的访问权（Direct 版直通），
     /// 守卫必须覆盖整个文件操作，返回即释放授权。
+    ///
+    /// 提交顺序是**刻意**的：写回原图 → 历史落盘 → 才删压缩输出和备份目录。
+    /// 反过来（先删备份再写历史）一旦历史写失败，历史会显示「已压缩」而备份已经没了 ——
+    /// 用户看到一条永远恢复不了的记录。现在最坏只留下一个没人引用的孤儿目录。
     pub fn restore(
         &self,
         entry: &HistoryEntry,
@@ -638,6 +1013,12 @@ impl HistoryStore {
             if !force && Self::has_conflict(entry) {
                 return Err(RestoreError::Conflict);
             }
+            let backup = entry
+                .backup_path
+                .as_ref()
+                .map(PathBuf::from)
+                .filter(|path| path.exists())
+                .ok_or(RestoreError::BackupGone)?;
             let target = PathBuf::from(&entry.source_path);
             let parent = target
                 .parent()
@@ -651,14 +1032,20 @@ impl HistoryStore {
             let _guard = access
                 .acquire(&parent, reauth)
                 .ok_or(RestoreError::AccessDenied)?;
-            self.restore_backup_files(entry)?;
+            Self::write_backup_back_to_source(&backup, &target)
+                .map_err(RestoreError::Io)?;
             drop(_guard);
+            if let Err(error) = self.mark_restored(&ids) {
+                // 文件已经回到原图，但状态没落盘：备份必须留着，用户重试即可收敛。
+                return Err(RestoreError::Io(format!(
+                    "文件已恢复，但历史记录状态保存失败（{error}），原图备份已保留"
+                )));
+            }
+            Self::remove_generated_output(entry);
             if let Some(dir) = backup_dir {
-                // 备份在 AppData 内，不需要沙盒授权。
+                // 备份在 AppData 内，不需要沙盒授权。删不掉只是孤儿，下次启动扫。
                 let _ = fs::remove_dir_all(dir);
             }
-            self.mark_restored(&ids)
-                .map_err(RestoreError::Io)?;
             Ok(ids)
         } else {
             // 后缀/目录模式原图从未被改动：撤销 = 删掉这次生成的压缩结果。
@@ -689,10 +1076,48 @@ fn canonical_path(path: &Path) -> String {
         .into_owned()
 }
 
+/// 两个路径指的是不是同一个文件。
+///
+/// 记录里的 `source_path` 是规范路径，`output_path` 是当时那个字符串 —— macOS 上
+/// `/var/…` 与 `/private/var/…`、任何软链目录都会让两者字面不等。同格式 replace 的
+/// 压缩输出**就是**源文件本身，判成"另一个文件"会在恢复之后把刚写回的原图删掉。
+pub(crate) fn same_file(a: &Path, b: &Path) -> bool {
+    a == b || canonical_path(a) == canonical_path(b)
+}
+
 /// 备份 key = 备份目录名；目录名 = backups/<key>/original.<ext>。
 fn backup_key_of(backup_path: Option<&str>) -> Option<String> {
     let dir = Path::new(backup_path?).parent()?;
     dir.file_name()?.to_str().map(str::to_owned)
+}
+
+/// 只有测试用：一条指向 `source`、覆盖模式为 replace 的历史记录。
+#[cfg(test)]
+pub(crate) fn sample_entry(source: &Path, backup: &Path, id: &str) -> HistoryEntry {
+    let created_at = now_millis();
+    HistoryEntry {
+        id: id.into(),
+        created_at,
+        expires_at: created_at + DAY_MILLIS * 3,
+        source_path: source.to_string_lossy().into_owned(),
+        output_path: Some(source.to_string_lossy().into_owned()),
+        file_name: source
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "image".into()),
+        output_mode: "replace".into(),
+        original_size: 100,
+        compressed_size: file_size(source),
+        savings: 60.0,
+        out_type: "png".into(),
+        algorithm: "test".into(),
+        backup_path: Some(backup.to_string_lossy().into_owned()),
+        status: HistoryStatus::Compressed,
+        restored_at: None,
+        output_modified_at: file_mtime_millis(source),
+        source_exists: true,
+        backup_exists: true,
+    }
 }
 
 #[cfg(test)]
@@ -978,14 +1403,140 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_history_file_reopens_as_empty_history() {
+    fn corrupt_history_never_deletes_backups() {
         let dir = tempfile::tempdir().unwrap();
         let store = store_in(dir.path());
+        let source = sample_source(dir.path(), "a.png", b"true-original");
+        let backup = store.ensure_backup(&source).unwrap();
+        fs::write(&source, b"compressed").unwrap();
         fs::write(store.history_path(), b"{ half-written").unwrap();
-        assert!(store.list().is_empty());
+
+        // 重启后第一件事就是启动清理：损坏的历史绝不能被当成"空历史"，
+        // 否则所有备份看起来无人引用，一次不报错的启动就把原图全删了。
+        let report = store.cleanup_expired(3);
+        assert_eq!(report.removed_entries, 0);
+        assert_eq!(report.removed_backups, 0);
+        assert!(dir_of_backup(&backup).exists());
+        assert_eq!(fs::read(&backup).unwrap(), b"true-original");
+        assert!(store.list().iter().any(|entry| entry.status == HistoryStatus::RecoveryAvailable));
+        // 损坏现场要留档，不能悄悄被 [] 覆盖掉。
+        let quarantined = PathBuf::from(report.quarantined_to.unwrap());
+        assert_eq!(fs::read(&quarantined).unwrap(), b"{ half-written");
+    }
+
+    #[test]
+    fn corrupt_history_rebuilds_a_restore_entry_from_the_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let source = sample_source(dir.path(), "a.png", b"true-original");
+        let backup = store.ensure_backup(&source).unwrap();
+        fs::write(&source, b"compressed").unwrap();
+        fs::write(store.history_path(), b"not json at all").unwrap();
+        drop(store);
+
+        // 换一个新实例 = 重启一次：读不到老历史，就从备份重建能一键恢复的入口。
+        let store = store_in(dir.path());
+        let rows = store.list();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].status, HistoryStatus::RecoveryAvailable);
+        assert_eq!(rows[0].original_size, 13, "备份里那份才是真正原图");
+        assert_eq!(rows[0].compressed_size, 10);
+        assert!(rows[0].backup_exists);
+        // 重建条目不该一上来就误报「压缩后又被改过」：不 force 也必须能恢复。
+        assert!(!HistoryStore::has_conflict(&rows[0]));
+
+        store
+            .restore(&rows[0], false, open_access().as_ref(), &mut || false)
+            .unwrap();
+        assert_eq!(fs::read(&source).unwrap(), b"true-original");
+        assert!(!dir_of_backup(&backup).exists());
+        assert_eq!(store.list()[0].status, HistoryStatus::Restored);
+    }
+
+    #[test]
+    fn a_missing_history_file_is_not_corruption() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
         let source = sample_source(dir.path(), "a.png", b"x");
         let backup = store.ensure_backup(&source).unwrap();
-        store.add(entry_for(&source, &backup, now_millis())).unwrap();
-        assert_eq!(store.list().len(), 1);
+        assert!(!store.cleanup_is_locked());
+        // 全新安装（没有任何历史）时，无人引用的孤儿备份照常被回收。
+        let report = store.cleanup_expired(3);
+        assert_eq!(report.removed_backups, 1);
+        assert!(!dir_of_backup(&backup).exists());
+    }
+
+    #[test]
+    fn backup_keys_are_stable_across_store_instances() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.png");
+        fs::write(&path, b"x").unwrap();
+        let first = HistoryStore::backup_key(&path);
+        let second = HistoryStore::backup_key(&path.canonicalize().unwrap());
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 16);
+        // FNV-1a 64 的已知测试向量：换算法会在这里炸，而不是在用户升级之后。
+        assert_eq!(HistoryStore::stable_hash(""), "cbf29ce484222325");
+        assert_eq!(HistoryStore::stable_hash("a"), "af63dc4c8601ec8c");
+        assert_ne!(first, HistoryStore::legacy_backup_key(&path));
+    }
+
+    #[test]
+    fn a_backup_made_under_the_legacy_hash_key_is_still_reused() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let source = sample_source(dir.path(), "a.png", b"true-original");
+        // 模拟升级前老 key 写的备份目录（只有 original，没有来历记录）。
+        let legacy = HistoryStore::legacy_backup_key(&source);
+        let legacy_dir = dir.path().join("history").join(BACKUPS_DIR).join(&legacy);
+        fs::create_dir_all(&legacy_dir).unwrap();
+        let legacy_backup = legacy_dir.join("original.png");
+        fs::write(&legacy_backup, b"true-original").unwrap();
+
+        // 第二次压缩必须复用那份老备份，而不是把压缩结果当成原图存进新目录。
+        fs::write(&source, b"compressed").unwrap();
+        assert_eq!(store.ensure_backup(&source).unwrap(), legacy_backup);
+        assert_eq!(fs::read(&legacy_backup).unwrap(), b"true-original");
+    }
+
+    #[test]
+    fn the_history_cap_evicts_the_oldest_rows_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let source = sample_source(dir.path(), "a.png", b"x");
+        let backup = store.ensure_backup(&source).unwrap();
+        let mut entries = Vec::new();
+        for index in 0..5 {
+            let mut entry = entry_for(&source, &backup, 1_000 + index);
+            entry.id = format!("row-{index}");
+            entries.push(entry);
+        }
+
+        let evicted = store.trim_to_cap(&mut entries, 3);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(evicted.len(), 2);
+        assert!(entries.iter().all(|entry| entry.id.starts_with("row-")));
+        assert!(evicted.iter().any(|entry| entry.id == "row-0"));
+        assert!(evicted.iter().any(|entry| entry.id == "row-1"));
+        // 还没超上限时一条都不动。
+        assert!(store.trim_to_cap(&mut entries, 9).is_empty());
+    }
+
+    #[test]
+    fn a_backup_shared_with_a_surviving_row_survives_eviction() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let source = sample_source(dir.path(), "a.png", b"x");
+        let backup = store.ensure_backup(&source).unwrap();
+        let mut entries = Vec::new();
+        for index in 0..2 {
+            let mut entry = entry_for(&source, &backup, 1_000 + index);
+            entry.id = format!("row-{index}");
+            entries.push(entry);
+        }
+        // 两条记录共用同一份备份：淘汰最老的那条也不能把备份删了。
+        let evicted = store.trim_to_cap(&mut entries, 1);
+        store.drop_backups_of(&evicted, &entries);
+        assert!(dir_of_backup(&backup).exists());
     }
 }
