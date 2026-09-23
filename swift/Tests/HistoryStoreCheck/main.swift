@@ -962,8 +962,9 @@ do {
     group.enter()
     DispatchQueue.global().async {
         // 已取消：哪怕闸门关着，也不该在这儿等下去。
-        let permit = scheduler.acquire(cancelled: { true })
-        if permit != nil { meter.begin(); meter.end() }
+        if case .acquired(let permit) = scheduler.acquireOutcome(cancelled: { true }) {
+            meter.begin(); meter.end(); permit.release()
+        }
         group.leave()
     }
     _ = group.wait(timeout: .now() + 2)
@@ -976,7 +977,9 @@ do {
     let running = DispatchGroup()
     running.enter()
     DispatchQueue.global().async {
-        scheduler.acquire(cancelled: { false })?.release()
+        if case .acquired(let permit) = scheduler.acquireOutcome(cancelled: { false }) {
+            permit.release()
+        }
         running.leave()
     }
     Thread.sleep(forTimeInterval: 0.1)
@@ -1117,9 +1120,12 @@ do {
     let thirdGroup = DispatchGroup()
     thirdGroup.enter()
     DispatchQueue.global().async {
-        if let permit = scheduler.acquire(cancelled: { false }) {
+        if case .acquired(let permit) = scheduler.acquireOutcome(cancelled: { false }) {
             third.mark("permit")
             permit.release()
+        }
+        if case .stopped = scheduler.acquireOutcome(cancelled: { false }) {
+            third.mark("stopped")
         }
         third.mark("exited")
         thirdGroup.leave()
@@ -1133,11 +1139,20 @@ do {
     _ = thirdGroup.wait(timeout: .now() + 2)
     check(waitUntil { third.has("exited") }, "停止后等待中的文件自己退出，不再开工")
     check(!third.has("permit"), "被停止作废的文件不许开工")
-    check(scheduler.acquire(cancelled: { false }) == nil, "停止后闸门对后来者是关的")
+    check(third.has("stopped"), "等闸门的文件拿到的必须是 stopped（队列里它还是 pending）")
+    if case .stopped = scheduler.acquireOutcome(cancelled: { false }) {
+        check(true, "停止后闸门对后来者是关的")
+    } else {
+        check(false, "停止后闸门对后来者是关的")
+    }
 
     // 停止不是暂停：误调 resume() 也不许把批次放回来。
     scheduler.resume()
-    check(scheduler.acquire(cancelled: { false }) == nil, "停止不可逆：resume 不放行")
+    if case .stopped = scheduler.acquireOutcome(cancelled: { false }) {
+        check(true, "停止不可逆：resume 不放行")
+    } else {
+        check(false, "停止不可逆：resume 不放行")
+    }
     check(scheduler.phase == .stopping, "resume 之后状态仍是 stopping")
 
     _ = running.wait(timeout: .now() + 3)
@@ -1165,9 +1180,12 @@ do {
     let waitingGroup = DispatchGroup()
     waitingGroup.enter()
     DispatchQueue.global().async {
-        if let permit = scheduler.acquire(cancelled: { false }) {
+        if case .acquired(let permit) = scheduler.acquireOutcome(cancelled: { false }) {
             waiting.mark("permit")
             permit.release()
+        }
+        if case .stopped = scheduler.acquireOutcome(cancelled: { false }) {
+            waiting.mark("stopped")
         }
         waiting.mark("exited")
         waitingGroup.leave()
@@ -1181,13 +1199,80 @@ do {
     check(waitUntil { waiting.has("exited") },
           "暂停中停止：等待者必须退出（判定顺序 取消 → 停止 → 暂停，不能反过来）")
     check(!waiting.has("permit"), "停止作废的文件不许开工")
+    check(waiting.has("stopped"), "暂停中停止：等待者拿到 stopped，而不是被当成取消")
     check(scheduler.activeJobs == 1, "在跑的那个照旧跑完")
     held.release()
     scheduler.endBatch()
     check(scheduler.phase == .idle, "暂停中停止也要回到 idle")
 }
 
+// ─── 29. 队列状态与会话状态分家（与 Tauri 前端同语义）─────────────────────
+//
+// 「停止」= 结束这一轮、保留剩余任务；「取消」= 把这个文件移出队列。
+// 老实现两者共用一个 .cancelled，于是停止之后剩下的图全部变成"已跳过"，
+// 用户再也压不动它们 —— 这一组就是钉住那个不再发生。
+print("[29] 队列状态与会话状态分家")
+do {
+    // 持久状态只有六种，取消不再是其中之一。
+    let persisted: [QueueStatus] = [.pending, .running, .done, .failed, .removed, .restored]
+    check(persisted.map(\.rawValue) == ["pending", "running", "done", "failed", "removed", "restored"],
+          "队列持久状态就是这六个字面量")
+    check(QueueStatus(rawValue: "cancelled") == nil,
+          "cancelled 不再是队列状态：停止不算取消，取消用 removed")
+    check(QueueItem(path: "/a.png", fileName: "a.png", fileSize: 1).status == .pending,
+          "新导入的项从 pending 开始")
+
+    // 进度是队列的派生值：只数 pending/running/done/failed。
+    let progress = QueueProgress(items: [
+        QueueItem(path: "/1.png", fileName: "1.png", fileSize: 0, status: .done),
+        QueueItem(path: "/2.png", fileName: "2.png", fileSize: 0, status: .failed),
+        QueueItem(path: "/3.png", fileName: "3.png", fileSize: 0, status: .pending),
+        QueueItem(path: "/4.png", fileName: "4.png", fileSize: 0, status: .removed),
+        QueueItem(path: "/5.png", fileName: "5.png", fileSize: 0, status: .restored),
+    ])
+    check(progress.total == 3, "removed / restored 不计入队列总数（实际 \(progress.total)）")
+    check(progress.processed == 2, "失败也算处理过，否则进度永远到不了终点")
+    check(progress.pending == 1 && progress.failed == 1 && progress.done == 1,
+          "四类计数各就各位")
+    check(progress.fraction > 0.66 && progress.fraction < 0.67, "进度 = 已处理 / 总数")
+    check(QueueProgress(items: []).fraction == 0, "空队列进度为 0，不除零")
+    // 关键：停止之后剩下的 pending 仍然算在分母里 —— 进度不会从 2/3 掉回 0/1。
+    check(progress.summaryText == "2 / 3 已处理 · 失败 1", "摘要把失败数说出来")
+}
+
+// ─── 30. 压缩设置的静态默认值（与 Tauri 线同语义）─────────────────────────
+//
+// 用户导入后先看到的应该是「压缩设置 + 当前参数摘要」这一行，想改再点开。
+// Tauri 线在 index.html 的 #settingsPanel 上写死 collapsed（tests/settings-collapse.cjs 钉住），
+// Swift 线对应 settingsExpanded 的初值 —— 这里读源码确认它仍是 false，
+// 且没有任何地方把它自动置真（那会让"默认折叠"在某条路径上悄悄失效）。
+print("[30] 压缩设置默认折叠")
+do {
+    let appStateSource = try String(
+        contentsOfFile: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/OctoShrinkSwift/ViewModels/AppState.swift").path,
+        encoding: .utf8)
+    check(appStateSource.contains("@Published var settingsExpanded = false"),
+          "settingsExpanded 初值必须是 false（默认折叠）")
+    check(!appStateSource.contains("settingsExpanded = true"),
+          "AppState 里不许有任何自动展开设置面板的路径")
+    check(appStateSource.contains("settingsExpanded.toggle()") == false,
+          "展开 / 收起只由视图层的点击驱动，AppState 自己不切换")
+    let contentSource = try String(
+        contentsOfFile: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/OctoShrinkSwift/Views/ContentView.swift").path,
+        encoding: .utf8)
+    check(contentSource.contains("appState.settingsExpanded.toggle()"),
+          "只有点标题那一下才切换（ContentView 的 SettingsPanelView 里）")
+}
+
 print(failures == 0
-      ? "\n✓ Swift 历史 / 备份 / 暂停 / 停止 / CPU 上限自检全部通过"
+      ? "\n✓ Swift 历史 / 备份 / 暂停 / 停止 / 队列进度 / 设置默认折叠 / CPU 上限自检全部通过"
       : "\n✗ Swift 自检失败 \(failures) 项")
 exit(failures == 0 ? 0 : 1)

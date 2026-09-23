@@ -2,7 +2,7 @@
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
-const { installStateMachine } = require('./app-slices.cjs');
+const { installStateMachine, installQueueCore, installQueueRowPainter } = require('./app-slices.cjs');
 
 function makeEl(tag) {
   let html = '';
@@ -59,7 +59,12 @@ const toasts = [];
 
 const context = vm.createContext({
   console, Set, Map, Promise, JSON, Math, Date, Number, String, Array, Object, isNaN,
-  files: ['/Pictures/a.png', '/Pictures/b.png'], results: [], fileRows: {},
+  files: ['/Pictures/a.png', '/Pictures/b.png'], fileRows: {},
+  queueItems: new Map(['/Pictures/a.png', '/Pictures/b.png'].map(path => [path, {
+    path, state: 'done', result: null, originalSize: 2048576,
+  }])),
+  compressBtnText: makeEl('span'), startCompressBtn: makeEl('button'),
+  compressBtnFill: makeEl('div'),
   processingMode: 'advanced',
   confirm: () => confirmAnswer,
   document: {
@@ -71,7 +76,10 @@ const context = vm.createContext({
   iconMarkup: name => '<svg>' + name + '</svg>',
   showToast: message => toasts.push(message),
   copyTextToClipboard: () => true,
-  updateQueueSummary() {}, emitCompareResultsChanged() {}, showResults() {},
+  // updateQueueSummary / renderStartButton / applyQueueView 都是真实实现（队列那一段），
+  // 只把 CPU 摘要补成空串 —— 这个测试不关心它。
+  cpuLimitText: () => '',
+  emitCompareResultsChanged() {}, showResults() {},
   renderRestoredActions() {},
   applyQueueView() {}, updateBulkActionButtons() {}, setPauseButtonVisible() {},
   renderPauseControls() {}, initUpdatePanel() {},
@@ -98,6 +106,8 @@ const context = vm.createContext({
 const source = require('./app-slices.cjs').source;
 const slice = (from, to) => source.slice(source.indexOf(from), source.indexOf(to));
 installStateMachine(context);
+installQueueCore(context);
+installQueueRowPainter(context);
 vm.runInContext(slice('function basename(', 'function imageFileSrc('), context);
 vm.runInContext(slice('function formatBytes(', '// ─── 页面导航'), context);
 vm.runInContext(slice('var VIEWS = ', '// ─── 压缩状态机'), context);
@@ -229,25 +239,30 @@ const actionsOf = row => row.children[4].children.map(btn => btn.dataset.history
   // 主队列的「恢复原图」必须走同一个后端服务：前端只交 filePath，路径由后端从历史里取。
   restoreReply = { success: true, conflict: false, filePath: '/Pictures/a.png', historyIds: ['e1'] };
   const rowA = makeEl('div');
-  rowA.classList.add('done');
   context.fileRows['/Pictures/a.png'] = rowA;
-  context.results = [{ file: '/Pictures/a.png', success: true, backupPath: '/app/backup/a.png', outputPath: '/Pictures/a.png' }];
+  context.queueItems.set('/Pictures/a.png', {
+    path: '/Pictures/a.png', state: 'done', originalSize: 2048576,
+    result: { file: '/Pictures/a.png', success: true, backupPath: '/app/backup/a.png', outputPath: '/Pictures/a.png' },
+  });
   await context.restoreOriginal('/Pictures/a.png');
   assert.deepEqual(Object.keys(last('restore_original')[1]).sort(), ['filePath', 'force'], '主队列只交 filePath');
-  assert.equal(context.results.length, 0, 'restored file leaves the result set');
-  assert.equal(rowA.classList.contains('restored'), true, '队列行标记为已恢复');
-  assert.equal(rowA.classList.contains('done'), false);
+  assert.equal(context.queueItems.get('/Pictures/a.png').state, 'restored', '恢复过的项离开结果集');
+  assert.equal(context.queueItems.get('/Pictures/a.png').result, null, '结果一并清掉');
   assert.equal(rowA.querySelector('.queue-item-status').textContent, '已恢复');
 
   // 恢复全部：一次后端调用，按后端回报的文件逐行标记。
   const rowB = makeEl('div');
-  rowB.classList.add('done');
   context.fileRows['/Pictures/b.png'] = rowB;
-  context.results = [
-    { file: '/Pictures/a.png', success: true },
-    { file: '/Pictures/b.png', success: true },
-    { file: '/Pictures/c.png', success: false },
-  ];
+  // 队列里三条：两条成功可恢复、一条失败（失败的那条不该被带走）。
+  context.queueItems = new Map([
+    ['/Pictures/a.png', { path: '/Pictures/a.png', state: 'done', originalSize: 1,
+      result: { file: '/Pictures/a.png', success: true } }],
+    ['/Pictures/b.png', { path: '/Pictures/b.png', state: 'done', originalSize: 1,
+      result: { file: '/Pictures/b.png', success: true } }],
+    ['/Pictures/c.png', { path: '/Pictures/c.png', state: 'failed', originalSize: 1,
+      result: { file: '/Pictures/c.png', success: false } }],
+  ]);
+  context.files = ['/Pictures/a.png', '/Pictures/b.png', '/Pictures/c.png'];
   invoked.length = 0;
   restoreAllReply = { success: true, restored: 2, failed: 0, message: '已恢复 2 个文件',
     restoredFiles: ['/Pictures/a.png', '/Pictures/b.png'] };
@@ -255,14 +270,16 @@ const actionsOf = row => row.children[4].children.map(btn => btn.dataset.history
   const all = last('restore_all');
   assert.equal(all[1].results.length, 3, '整批交给后端，前端不再逐个拼参数');
   assert.ok(!invoked.some(call => call[0] === 'restore_original'), '恢复全部不再走单文件命令');
-  assert.equal(rowB.classList.contains('restored'), true);
-  assert.deepEqual(context.results.map(item => item.file), ['/Pictures/c.png'], '失败行留在队列里');
+  assert.equal(context.queueItems.get('/Pictures/b.png').state, 'restored');
+  // Array.from：queueResults() 的数组造在 vm 那个 realm 里，跨 realm 比不了原型。
+  assert.deepEqual(Array.from(context.queueResults(), item => item.file),
+    ['/Pictures/c.png'], '失败行留在队列里');
 
   // 页面切换只动 display：队列数据必须原样留着。
   context.showView('history');
   await flush();
   assert.equal(context.currentView, 'history');
-  assert.deepEqual(context.files, ['/Pictures/a.png', '/Pictures/b.png']);
+  assert.deepEqual(context.files, ['/Pictures/a.png', '/Pictures/b.png', '/Pictures/c.png']);
   assert.equal(ids.mainView.style.display, 'none');
   assert.equal(ids.historyView.style.display, '');
   context.showView('settings');

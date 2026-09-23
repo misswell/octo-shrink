@@ -153,9 +153,24 @@ function toggleSettings() {
 }
 
 // State
+//
+// 队列 = 唯一真相。`queueItems` 记住每个文件**此刻**处于哪一步，
+// `files` 只是它在界面上的顺序（同一批路径，按导入先后排列）。
+//
+// 老实现里"这个文件还需不需要处理"要靠 DOM class（row.classList.contains('cancelled')）、
+// 一个 results[] 数组和一个批次计数器互相推测 —— 停止、继续、重新导入三次之后
+// 三份数据就对不上了（这正是"停止后剩下的图再也压不动"的来源）。现在只认 queueItems。
+//
+// 持久状态只有六种（暂停 / 停止是**会话**的状态，不写进这里）：
+//   pending   还需要压缩（首次没开始、暂停中等待、停止后留待下一轮、新导入 —— 都是它）
+//   running   真的在压
+//   done      压完了（成功）
+//   failed    压完了（失败），只有显式「重试」才会回到 pending
+//   removed   用户把它移出了队列
+//   restored  用户把这次压缩撤销了（原图回来了），要压得重新点
 let files = [];
 let inputPaths = [];
-let results = [];
+var queueItems = new Map();
 // isCompressing / compressionPaused 都在「压缩状态机」那一节声明：
 // 它们是 compressionState 的派生镜像，唯一的写入口是 setCompressionState。
 let pendingAutoCompress = false;
@@ -197,6 +212,8 @@ function processingActionText(stage) {
   var systemMode = processingMode === 'system';
   if (stage === 'progress') return systemMode ? '转换中…' : '压缩中…';
   if (stage === 'done') return systemMode ? '转换完成' : '压缩完成';
+  // 「继续」= 队列里还有没处理的（停止之后又重新开始一轮）。
+  if (stage === 'continue') return systemMode ? '继续转换' : '继续压缩';
   return systemMode ? '开始转换' : '开始压缩';
 }
 
@@ -403,17 +420,13 @@ function mergeQueueFiles(newFiles) {
   var added = [];
   uniqueFilePaths(newFiles).forEach(function(filePath) {
     if (known.has(filePath)) return;
-
-    // A removed row is only visual history. Re-adding the path creates a
-    // fresh waiting row instead of resurrecting the old cancelled state.
-    var oldRow = fileRows[filePath];
-    if (oldRow && oldRow.classList.contains('cancelled')) {
-      oldRow.remove();
-      delete fileRows[filePath];
-    }
-
     known.add(filePath);
     files.push(filePath);
+    // 重新导入 = 全新的 pending 项：旧的移除记录在这里被覆盖，
+    // 不会复活成"已跳过"那种再也压不动的状态。
+    queueItems.set(filePath, {
+      path: filePath, state: 'pending', result: null, originalSize: null,
+    });
     added.push(filePath);
   });
   return added;
@@ -477,32 +490,90 @@ function handleFilePaths(filePaths) {
 
 // Global state for compression
 var fileRows = {};
-var cancelledFiles = new Set();
 var queueSortDescending = false;
 var pendingImports = Promise.resolve();
 var queueRevision = 0;
-var activeBatchPaths = [];
-var activeBatchSet = new Set();
-var activeBatchRows = new Map();
-var activeBatchRevision = 0;
-var startButtonTimer = null;
+
+// ─── 队列状态（唯一真相，DOM 只能照着它画）───────────────────────
+// 这一段是"这个文件还需不需要处理"的**唯一**判据，前端测试直接切这段真实代码来跑。
+
+/// 队列状态的读入口。DOM 只能**照着它**画，不许反过来当状态用。
+function queueItem(file) {
+  return queueItems.get(file) || null;
+}
+
+function queueState(file) {
+  var item = queueItems.get(file);
+  return item ? item.state : null;
+}
+
+function setQueueState(file, state) {
+  var item = queueItems.get(file);
+  if (!item) return null;
+  item.state = state;
+  return item;
+}
+
+/// 队列里此刻该处理的文件 = state 为 pending 的那些，按队列顺序。
+/// `requestedPaths` 给"只处理这几个"用（单文件重试）。
+function getPendingQueuePaths(requestedPaths) {
+  var wanted = Array.isArray(requestedPaths) ? new Set(requestedPaths) : null;
+  return files.filter(function(file) {
+    if (wanted && !wanted.has(file)) return false;
+    return queueState(file) === 'pending';
+  });
+}
+
+/// 队列里全部结果（按队列顺序）。压缩产物的一切操作（另存为/对比/恢复/导出）
+/// 都从队列读，不再维护一个平行的 results 数组。
+function queueResults() {
+  var out = [];
+  files.forEach(function(file) {
+    var item = queueItems.get(file);
+    if (item && item.result) out.push(item.result);
+  });
+  return out;
+}
+
+/// 用户看到的总进度。**这是队列的属性，不是某一轮的属性**：
+/// 停止后重新开始一轮时，这一轮的目标会变小（只含 pending），但这里的 total
+/// 一直是整个队列（100 → 100），所以进度绝不会从 40/100 掉回 0/60。
+function getQueueProgress() {
+  var progress = { total: 0, processed: 0, done: 0, failed: 0, running: 0, pending: 0 };
+  files.forEach(function(file) {
+    var item = queueItems.get(file);
+    if (!item) return;
+    // removed / restored 已经离开了这套账：一个被移出队列，一个被用户撤销了。
+    if (item.state === 'removed' || item.state === 'restored') return;
+    progress.total += 1;
+    if (item.state === 'done') progress.done += 1;
+    else if (item.state === 'failed') progress.failed += 1;
+    else if (item.state === 'running') progress.running += 1;
+    else if (item.state === 'pending') progress.pending += 1;
+  });
+  // failed 也算"处理过"：它确实跑完了一次，只是没成。否则 98 成功 + 2 失败
+  // 的队列会永远停在 98%，那条进度条就成了假的。
+  progress.processed = progress.done + progress.failed;
+  return progress;
+}
 
 function updateQueueSummary() {
   var summary = document.getElementById('queueSummary');
   if (!summary) return;
-  var queued = new Set(files);
-  var completed = new Set(results.filter(function(result) {
-    return result && queued.has(result.file);
-  }).map(function(result) { return result.file; }));
-  if (isCompressing || completed.size > 0) {
-    summary.textContent = completed.size + ' / ' + queued.size + ' 已完成'
+  var p = getQueueProgress();
+  if (p.total === 0) {
+    summary.textContent = files.length + ' 个文件';
+  } else {
+    // 「已处理」而不是「已完成」：失败的文件也算处理过，说"完成"会把失败藏起来。
+    summary.textContent = p.processed + ' / ' + p.total + ' 已处理'
+      + (p.failed > 0 ? ' · 失败 ' + p.failed : '')
       + compressionStateSuffix()
       + cpuLimitText();
-  } else {
-    summary.textContent = files.length + ' 个文件';
   }
   updateBulkActionButtons();
   applyQueueView();
+  renderQueueProgressFill();
+  renderStartButton();
 }
 
 /// 摘要里跟着阶段走的那一小段。只有「已暂停 / 正在停止」两种，
@@ -514,12 +585,23 @@ function compressionStateSuffix() {
   return '';
 }
 
+/// 进度条填充宽度 = 已处理 / 总数。不靠 CSS 动画假装有进度：
+/// 停止之后它停在真实比例上，继续时从这个比例接着长。
+function renderQueueProgressFill() {
+  var fill = document.getElementById('compressBtnFill');
+  if (!fill) return;
+  var p = getQueueProgress();
+  fill.style.width = p.total === 0 ? '0%' : (p.processed / p.total * 100) + '%';
+}
+
 function updateBulkActionButtons() {
   var restoreBtn = document.getElementById('restoreAllBtn');
   if (!restoreBtn) return;
-  var hasRestorable = results.some(function(r) { return r && r.success; });
+  var hasRestorable = queueResults().some(function(r) { return r && r.success; });
   restoreBtn.style.display = hasRestorable ? 'inline-flex' : 'none';
 }
+
+// ─── 队列渲染（排序 / 视图 / 每一行的画法）──────────────────────
 
 // CPU 上限的展示口径：后端负责算生效值，前端只渲染"上限 / 可用并行数"。
 // 这里没有任何绑核语义 —— 数字只是"同时允许几份 CPU 并行压缩工作"。
@@ -556,17 +638,18 @@ function applyQueueView() {
     direction.innerHTML = iconMarkup(queueSortDescending ? 'sort-desc' : 'sort-asc', true) + (queueSortDescending ? ' 降序' : ' 升序');
     direction.setAttribute('aria-label', queueSortDescending ? '当前降序，点击切换升序' : '当前升序，点击切换降序');
   }
-  var byFile = new Map(results.map(function(result) { return [result.file, result]; }));
-  var states = ['failed', 'compressing', 'waiting', 'done', 'restored', 'cancelled'];
+  // 排序键也全部从 queueItems 读：DOM class 只负责画，不参与任何判断。
+  var states = ['failed', 'running', 'pending', 'done', 'restored', 'removed'];
   var entries = files.map(function(file, index) {
     var row = fileRows[file];
-    var result = byFile.get(file);
+    var item = queueItems.get(file);
+    var result = item && item.result;
     var value = index;
     if (key === 'name') value = basename(file);
-    if (key === 'original') value = result ? result.originalSize : row && row.originalSize;
+    if (key === 'original') value = result ? result.originalSize : item && item.originalSize;
     if (key === 'compressed') value = result && result.success ? result.compressedSize : null;
     if (key === 'ratio') value = result && result.success ? result.savings : null;
-    if (key === 'status') value = states.findIndex(function(state) { return row && row.classList.contains(state); });
+    if (key === 'status') value = states.indexOf(item ? item.state : 'pending');
     return { file: file, row: row, index: index, value: value };
   });
   entries.sort(function(a, b) {
@@ -581,11 +664,13 @@ function applyQueueView() {
   });
   var visible = 0;
   Object.keys(fileRows).forEach(function(file) {
-    if (!files.includes(file)) fileRows[file].hidden = failedOnly;
+    // 「只看失败」也按 queueItems 判，不按 DOM class：类名只是画出来的结果，
+    // 拿它当判据，一旦某处忘了同步 class，筛出来的东西就是错的。
+    var failedRow = queueState(file) === 'failed';
+    fileRows[file].hidden = !files.includes(file) || (failedOnly && !failedRow);
   });
   entries.forEach(function(entry, index) {
     if (!entry.row) return;
-    entry.row.hidden = failedOnly && !entry.row.classList.contains('failed');
     if (!entry.row.hidden) visible++;
     if (list.children[index] !== entry.row) list.insertBefore(entry.row, list.children[index] || null);
   });
@@ -622,9 +707,10 @@ async function renderFileQueue() {
     try {
       const sizes = await invoke('get_file_sizes', { filePaths: newFiles });
       for (var j = 0; j < newFiles.length; j++) {
+        var item = queueItems.get(newFiles[j]);
         var row = fileRows[newFiles[j]];
-        if (row && sizes[j] !== undefined) row.originalSize = sizes[j];
-        if (row && sizes[j] !== undefined && row.classList.contains('waiting')) {
+        if (item && sizes[j] !== undefined) item.originalSize = sizes[j];
+        if (row && sizes[j] !== undefined && (!item || item.state === 'pending')) {
           var sizeEl = row.querySelector('.queue-item-size');
           if (sizeEl) sizeEl.textContent = formatBytes(sizes[j]);
         }
@@ -634,9 +720,93 @@ async function renderFileQueue() {
   }
 }
 
+/// 把一个队列项此刻的状态**画**到它那一行上：图标、文案、尺寸、操作按钮。
+/// 唯一的方向是 queueItems → DOM；DOM class 不许反过来影响任何判断。
+function paintQueueRow(filePath) {
+  var row = fileRows[filePath];
+  var item = queueItems.get(filePath);
+  if (!row || !item) return;
+  var state = item.state;
+  ['pending', 'running', 'done', 'failed', 'restored', 'removed'].forEach(function(name) {
+    row.classList.toggle(name, name === state);
+  });
+  // 兼容既有样式表里的 .waiting / .compressing 两个名字。
+  row.classList.toggle('waiting', state === 'pending');
+  row.classList.toggle('compressing', state === 'running');
+
+  var rmBtn = row.querySelector('.queue-item-remove');
+  if (rmBtn) rmBtn.style.display = state === 'pending' ? '' : 'none';
+
+  var icon = row.querySelector('.queue-item-icon');
+  var sizeEl = row.querySelector('.queue-item-size');
+  var statusEl = row.querySelector('.queue-item-status');
+  var actions = row.querySelector('.queue-item-actions');
+  var errIcon = actions ? actions.querySelector('.error-info-btn') : null;
+  if (statusEl) {
+    // 只改文案节点，保住里面那个已经挂上去的错误图标。
+    statusEl.textContent = '';
+  }
+  if (actions) actions.innerHTML = '';
+
+  var result = item.result;
+  if (state === 'done' && result) {
+    if (icon) icon.innerHTML = iconMarkup('check', true);
+    if (sizeEl) {
+      sizeEl.textContent = formatBytes(result.originalSize) + ' → ' + formatBytes(result.compressedSize);
+    }
+    if (statusEl) {
+      statusEl.textContent = (result.savings >= 0 ? '-' : '+') + Math.abs(result.savings).toFixed(1) + '%';
+      if (result.error) appendErrorIcon(statusEl, result);
+    }
+    renderQueueResultActions(row, result);
+    return;
+  }
+  if (state === 'failed' && result) {
+    if (icon) icon.innerHTML = iconMarkup('error', true);
+    if (statusEl) {
+      statusEl.textContent = '失败';
+      appendErrorIcon(statusEl, result);
+    }
+    renderQueueResultActions(row, result);
+    return;
+  }
+  if (state === 'restored') {
+    if (icon) icon.innerHTML = iconMarkup('restore', true);
+    if (statusEl) statusEl.textContent = '已恢复';
+    renderRestoredActions(row, filePath);
+    return;
+  }
+
+  if (state === 'removed') {
+    if (icon) icon.innerHTML = iconMarkup('minus', true);
+    if (statusEl) statusEl.textContent = '已移除';
+  }
+  // pending 的行此刻该写什么，交给同一张状态表（暂停时是「已暂停」）。
+  renderTaskStatus(row, state === 'pending' ? waitingRowStatus() : state);
+  // 重新排队（重试 / 继续压缩）时把尺寸还原成原图大小：
+  // 上一轮那个「1.2MB → 800KB」留在这儿就是在报一个已经不成立的结果。
+  if (sizeEl) sizeEl.textContent = item.originalSize ? formatBytes(item.originalSize) : '';
+}
+
+/// 失败行上那个小三角：鼠标悬停有 title，点一下把完整错误说出来。
+/// （此前这里调的 showErrorDetail 根本没定义过，点一下就是抛异常。）
+function showErrorDetail(filePath, message) {
+  showToast(basename(filePath) + ': ' + message);
+}
+
+function appendErrorIcon(statusEl, result) {
+  if (!statusEl || !result.error) return;
+  var errIcon = document.createElement('span');
+  errIcon.className = 'error-info-btn';
+  errIcon.title = result.error;
+  errIcon.innerHTML = iconMarkup('warning', true);
+  errIcon.onclick = function(e) { e.stopPropagation(); showErrorDetail(result.file, result.error); };
+  statusEl.appendChild(errIcon);
+}
+
 function createQueueRow(filePath) {
   var row = document.createElement('div');
-  row.className = 'file-queue-item waiting';
+  row.className = 'file-queue-item';
   row.dataset.file = filePath;
   var name = basename(filePath);
   row.innerHTML =
@@ -649,26 +819,32 @@ function createQueueRow(filePath) {
     '<div class="progress-file-bar"></div>';
   var nameEl = row.querySelector('.queue-item-name');
   if (nameEl) nameEl.textContent = name;
-  // 新行也走同一张状态表：暂停途中追加进来的文件，不该显示成「等待中」还转着圈。
-  renderTaskStatus(row, waitingRowStatus());
   var rmBtn = row.querySelector('.queue-item-remove');
   rmBtn.addEventListener('click', function(e) {
     e.stopPropagation();
-    if (row.classList.contains('waiting')) {
-      if (isCompressing) {
-        cancelledFiles.add(filePath);
-        invoke('cancel_file', { filePath: filePath }).catch(function() {});
-      }
-      var idx = files.indexOf(filePath);
-      if (idx >= 0) files.splice(idx, 1);
-      row.classList.remove('waiting');
-      row.classList.add('cancelled');
-      renderTaskStatus(row, 'removed');
-      row.querySelector('.queue-item-remove').style.display = 'none';
-      updateQueueSummary();
-    }
+    removeQueueFile(filePath);
   });
+  paintQueueRow(filePath);
   return row;
+}
+
+/// 把一个文件移出队列。**只有等待中（还没开始）的可以移**：已经在压的那一行
+/// 没有 × 按钮，因为半路扔掉一个正在跑的编码器会留下写了一半的产物。
+function removeQueueFile(filePath) {
+  if (queueState(filePath) !== 'pending') return;
+  if (isCompressing) {
+    // 后端也要知道：它可能正堵在闸门上等着，得让那个 worker 自己退出。
+    invoke('cancel_file', { filePath: filePath }).catch(function() {});
+  }
+  setQueueState(filePath, 'removed');
+  var idx = files.indexOf(filePath);
+  if (idx >= 0) files.splice(idx, 1);
+  var row = fileRows[filePath];
+  if (row) {
+    if (row.parentNode) row.parentNode.removeChild(row);
+    delete fileRows[filePath];
+  }
+  updateQueueSummary();
 }
 
 function renderQueueResultActions(row, result) {
@@ -830,29 +1006,21 @@ function clearAllFiles() {
   if (files.length === 0 && !isCompressing) return;
   if (!confirm('确定要清空全部 ' + files.length + ' 个文件吗？')) return;
 
-  // Keep the active invocation alive until the backend returns. Marking the
-  // UI idle here would allow a second batch to overlap the first one.
+  // 正在跑的那次 invoke 不能提前作废：这里只把队列**标记**成不要了，
+  // 真正把它收回来的仍然是发起它的那次调用（它会在 finally 里收尾）。
   var wasCompressing = isCompressing;
   queueRevision++;
-  if (wasCompressing) {
-    activeBatchPaths.forEach(function(filePath) { cancelledFiles.add(filePath); });
+  if (wasCompressing && executionSession) {
     // 一次调用取消整批：逐个 invoke 会让每个请求都顺手动一次暂停闸门，
     // 队列会在清空过程中被重新放行。
-    invoke('cancel_batch', { filePaths: activeBatchPaths }).catch(function() {});
+    invoke('cancel_batch', { filePaths: executionSession.targetPaths.slice() }).catch(function() {});
   }
 
   files = [];
   inputPaths = [];
-  results = [];
+  queueItems = new Map();
   fileRows = {};
-  if (!wasCompressing) cancelledFiles.clear();
   pendingAutoCompress = false;
-  if (!wasCompressing) {
-    activeBatchPaths = [];
-    activeBatchSet.clear();
-    activeBatchRows.clear();
-    activeBatchRevision = 0;
-  }
   var queuePanel = document.getElementById('queuePanel');
   if (queuePanel) queuePanel.style.display = 'none';
   settingsPanel.style.display = 'block';
@@ -866,33 +1034,58 @@ function clearAllFiles() {
 }
 
 // ─── Compression ────────────────────────────────────────────────
+
+// ─── 执行会话（一轮）─────────────────────────────────────────────
+// 一次执行会话**不是队列**：队列是长期存在的（导入 100 张就在那儿），
+// 会话是"用户按下开始 / 继续压缩"到"这一轮结束"之间那一段。
+//
+// 两者分开是这套行为稳定的前提：
+//  - 队列（queueItems）决定"这个文件还需不需要处理"；
+//  - 会话决定"当前这一轮在不在跑、跑的是哪些文件"；
+//  - 每一轮的目标是开始时拍下的快照（targetPaths），中途导入不会塞进来；
+//  - 界面的总进度属于**队列**，所以停止后重新开始一轮，进度绝不会归零。
+
+var executionSession = null;
+var sessionSeq = 0;
+
+/// 开一轮：目标 = 调用方给的这批（只会是 pending），并记下当时的队列版本。
+function beginExecutionSession(targetPaths) {
+  sessionSeq += 1;
+  executionSession = {
+    id: 'session-' + sessionSeq + '-' + Date.now(),
+    queueRevision: queueRevision,
+    targetPaths: targetPaths.slice(),
+    phase: COMPRESSION_RUNNING,
+  };
+  return executionSession;
+}
+
+function endExecutionSession() {
+  executionSession = null;
+}
+
+/// 这条事件属不属于当前这一轮。带上会话号之后，"上一轮迟到的收尾事件"
+/// 再也污染不了下一轮 —— 光靠 queueRevision 挡不住"同一队列里的两轮"。
+function eventBelongsToCurrentSession(data) {
+  return !!(executionSession && data && data.sessionId === executionSession.id);
+}
+
+// ─── 压缩主流程 ─────────────────────────────────────────────────
+
 async function startCompression(isIncrement) {
   return startCompressionForPaths(isIncrement, null);
 }
 
-function getPendingQueuePaths(candidatePaths) {
-  var done = new Set(results.map(function(result) { return result && result.file; }));
-  var seen = new Set();
-  return uniqueFilePaths(candidatePaths).filter(function(filePath) {
-    if (seen.has(filePath) || done.has(filePath) || !files.includes(filePath)) return false;
-    seen.add(filePath);
-    return true;
-  });
-}
-
 async function startCompressionForPaths(isIncrement, requestedPaths) {
   if (isCompressing) return;
-  var candidates = Array.isArray(requestedPaths) ? requestedPaths.slice() : files.slice();
-  if (candidates.length === 0) return;
+  // 只提交 pending：已经压完的绝不重压，失败的要用户显式点「重试」。
+  var batchPaths = getPendingQueuePaths(requestedPaths);
+  if (batchPaths.length === 0) return;
 
   // 先占住批次位（静默）：真正开跑之前还有几步可能提前 return，
   // 那几步里不该亮出"暂停/停止"按钮和「压缩中…」。
   setCompressionState(COMPRESSION_RUNNING, true);
   var runRevision = queueRevision;
-  if (startButtonTimer) {
-    clearTimeout(startButtonTimer);
-    startButtonTimer = null;
-  }
 
   var hasOutputAccess = false;
   try {
@@ -922,8 +1115,8 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
     updateQueueSummary();
     return;
   }
-
-  var batchPaths = getPendingQueuePaths(candidates);
+  // 队列在等待这几步的工夫被清空了：这一轮没有目标，直接收场。
+  batchPaths = batchPaths.filter(function(filePath) { return queueState(filePath) === 'pending'; });
   if (batchPaths.length === 0) {
     setCompressionState(COMPRESSION_IDLE, true);
     updateQueueSummary();
@@ -932,93 +1125,84 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
 
   var batchOptions = config.options;
   currentCompressOptions = batchOptions;
-  activeBatchPaths = batchPaths.slice();
-  activeBatchSet = new Set(batchPaths);
-  activeBatchRows = new Map(batchPaths.map(function(filePath) {
-    return [filePath, fileRows[filePath]];
-  }));
-  activeBatchRevision = runRevision;
-  var batchSettled = new Set();
+  var session = beginExecutionSession(batchPaths);
+  var settled = new Set();
 
   var queueStats = document.getElementById('queueStats');
   if (queueStats) queueStats.style.display = 'flex';
   updateStats();
 
-  cancelledFiles.clear();
   updateQueueSummary();
 
-  var startBtn = document.getElementById('startCompressBtn');
-  if (startBtn) {
-    startBtn.disabled = true;
-    startBtn.classList.remove('done');
-    startBtn.classList.add('compressing');
-  }
-  // 一批开始 = 未暂停、未停止；按钮与文案全部由状态机说了算。
+  // 一轮开始 = 未暂停、未停止；按钮与文案全部由状态机说了算。
   setCompressionState(COMPRESSION_RUNNING);
   setPauseButtonVisible(true);
+  session.phase = COMPRESSION_RUNNING;
 
   renderFileQueue();
 
-  // Progress handler - updates existing rows in place
+  /// 事件 → 队列状态。**每一层判据都来自 queueItems**，不看 DOM class：
+  /// 从前"这一行是不是被取消过"要靠 row.classList.contains('cancelled')，
+  /// 结果停止一轮再继续时，新事件全被那行旧 class 挡在门外。
   const progressHandler = (data) => {
-    if (runRevision !== queueRevision || activeBatchRevision !== runRevision) return;
-    var file = data.file, result = data.result, status = data.status;
-    if (!activeBatchSet.has(file)) return;
-    var row = fileRows[file];
-    // A row can be removed and re-added while the backend is still working.
-    // Only the row captured for this batch may consume its late events.
-    if (!row || !files.includes(file) || row.classList.contains('cancelled') || activeBatchRows.get(file) !== row) return;
+    if (!data) return;
+    // 会话身份先对齐：上一轮迟到的 deferred / cancelled 事件绝不许碰这一轮。
+    if (!executionSession || data.sessionId !== executionSession.id) return;
+    if (runRevision !== queueRevision) return;
+    var file = data.file;
+    var item = queueItems.get(file);
+    if (!item) return;
 
-    if (status === 'starting' && row) {
-      row.classList.remove('waiting');
-      row.classList.add('compressing');
-      renderTaskStatus(row, 'running');
-      var rmBtn = row.querySelector('.queue-item-remove');
-      if (rmBtn) rmBtn.style.display = 'none';
+    if (data.status === 'starting') {
+      if (item.state === 'pending') item.state = 'running';
+      settled.delete(file);
+      paintQueueRow(file);
       applyQueueView();
+      updateQueueSummary();
+      return;
     }
 
-    if (result && !batchSettled.has(result.file)) {
-      batchSettled.add(result.file);
-      if (!row) return;
-      row.classList.remove('compressing');
-      row.classList.add(result.success ? 'done' : 'failed');
-      row.querySelector('.queue-item-icon').innerHTML = iconMarkup(result.success ? 'check' : 'error', true);
-      var rmBtnDone = row.querySelector('.queue-item-remove');
-      if (rmBtnDone) rmBtnDone.style.display = 'none';
-      var sizeEl = row.querySelector('.queue-item-size');
-      if (result.success && sizeEl) {
-        sizeEl.textContent = formatBytes(result.originalSize) + ' → ' + formatBytes(result.compressedSize);
-      }
-      var savingsText = result.success
-        ? (result.savings >= 0 ? '-' : '+') + Math.abs(result.savings).toFixed(1) + '%'
-        : '失败';
-      row.querySelector('.queue-item-status').textContent = savingsText;
-      // 如果有错误信息，添加警告图标
-      if (result.error) {
-        var statusEl = row.querySelector('.queue-item-status');
-        var errIcon = document.createElement('span');
-        errIcon.className = 'error-info-btn';
-        errIcon.title = result.error;
-        errIcon.innerHTML = iconMarkup('warning', true);
-        errIcon.onclick = function(e) { e.stopPropagation(); showErrorDetail(result.file, result.error); };
-        statusEl.appendChild(errIcon);
-      }
+    if (data.status === 'completed' || data.status === 'failed') {
+      var result = data.result;
+      if (!result || settled.has(result.file)) return;
+      settled.add(result.file);
       result.compressOptions = batchOptions;
-      results = results.filter(function(existing) { return existing.file !== result.file; });
-      results.push(result);
-      renderQueueResultActions(row, result);
+      item.result = result;
+      item.state = result.success ? 'done' : 'failed';
+      paintQueueRow(file);
       updateStats();
       updateQueueSummary();
       emitCompareResultsChanged();
+      return;
     }
 
-    if (status === 'cancelled' && row && !batchSettled.has(file)) {
-      batchSettled.add(file);
-      row.classList.add('cancelled');
-      renderTaskStatus(row, 'cancelled');
+    if (data.status === 'cancelled') {
+      // 用户明确把它移出了队列：它本轮到此为止，不回到 pending。
+      if (settled.has(file)) return;
+      settled.add(file);
+      item.state = 'removed';
+      var idx = files.indexOf(file);
+      if (idx >= 0) files.splice(idx, 1);
+      var row = fileRows[file];
+      if (row) {
+        if (row.parentNode) row.parentNode.removeChild(row);
+        delete fileRows[file];
+      }
       updateQueueSummary();
+      return;
     }
+
+    if (data.status === 'deferred') {
+      // 整批被停止，这一轮没轮到它：**状态保持 pending**，
+      // 下一次「继续压缩」自然还会带上它。行上照旧写「等待中」。
+      if (item.state === 'running') return;
+      paintQueueRow(file);
+      updateQueueSummary();
+      return;
+    }
+
+    // queued：只是告诉大家它排上了，状态仍然是 pending。
+    paintQueueRow(file);
   };
 
   var unlisten = function() {};
@@ -1027,17 +1211,22 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
     unlisten = await listen('compress-progress', function(event) {
       progressHandler(event.payload);
     });
-    var backendResults = await invoke(config.useSmartIpc ? 'compress_smart' : 'compress_files', {
+    var sessionResult = await invoke(config.useSmartIpc ? 'compress_smart' : 'compress_files', {
+      sessionId: session.id,
       filePaths: batchPaths,
       options: batchOptions,
     });
-    // The event is the live path, while the return value is a recovery path
-    // for a backend that completed without delivering one of its events.
-    if (Array.isArray(backendResults)) {
-      backendResults.forEach(function(result) {
-        progressHandler({ file: result.file, status: '', result: result });
+    // 事件是实时路径，返回值是补救路径：某一轮结束了却没有把事件送到时，
+    // 靠它把结果补齐（会话号对不上就直接不认）。
+    var results = sessionResult && Array.isArray(sessionResult.results) ? sessionResult.results : [];
+    results.forEach(function(result) {
+      progressHandler({
+        sessionId: sessionResult.sessionId,
+        file: result.file,
+        status: result.success ? 'completed' : 'failed',
+        result: result,
       });
-    }
+    });
     if (runRevision === queueRevision) {
       updateStats();
       showResults();
@@ -1047,30 +1236,14 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
     showToast((processingMode === 'system' ? '转换出错: ' : '压缩出错: ') + (err.message || err));
   } finally {
     try { unlisten(); } catch (e) {}
-    if (activeBatchRevision === runRevision) {
-      activeBatchPaths = [];
-      activeBatchSet.clear();
-      activeBatchRows.clear();
-      activeBatchRevision = 0;
-    }
-    // 用户按了停止：这一批就地结束，绝不被"自动压缩"再拉起来跑下一批。
+    if (executionSession === session) endExecutionSession();
+    // 用户按了停止：这一轮就地结束，绝不被"自动压缩"再拉起来跑下一批。
     var stoppedByUser = compressionState === COMPRESSION_STOPPING;
     setCompressionState(COMPRESSION_IDLE);
-    cancelledFiles.clear();
     setPauseButtonVisible(false);
-    if (startBtn) {
-      startBtn.classList.remove('compressing');
-      startBtn.classList.add('done');
-      var btnText = document.getElementById('compressBtnText');
-      if (btnText) btnText.innerHTML = '<svg class="symbol-icon"><use href="#icon-check"/></svg> ' + processingActionText('done');
-      startButtonTimer = setTimeout(function() {
-        startButtonTimer = null;
-        startBtn.classList.remove('done');
-        startBtn.disabled = false;
-        if (btnText) btnText.innerHTML = '<svg class="symbol-icon"><use href="#icon-compress"/></svg> ' + processingActionText('idle');
-      }, 2000);
-    }
-    var shouldContinue = !stoppedByUser && pendingAutoCompress && getPendingQueuePaths(files).length > 0;
+    updateQueueSummary();
+    var shouldContinue = !stoppedByUser && pendingAutoCompress
+      && getPendingQueuePaths().length > 0;
     pendingAutoCompress = false;
     if (shouldContinue) {
       startCompression(true);
@@ -1085,7 +1258,8 @@ function updateStats() {
   let totalOriginal = 0;
   let totalCompressed = 0;
 
-  for (const r of results) {
+  const all = queueResults();
+  for (const r of all) {
     if (r.success) {
       totalOriginal += r.originalSize || 0;
       totalCompressed += r.compressedSize || 0;
@@ -1106,28 +1280,26 @@ function showResults() {
   resultsList.innerHTML = '';
 }
 
+/// 单个文件重新压一次 = 把它放回 pending，然后开一轮只含它的会话。
+/// 失败文件走的就是这条路（显式「重试」），普通「继续压缩」不碰失败项。
 async function compressOneFile(filePath) {
   if (isCompressing) return;
-  const row = fileRows[filePath];
-  if (!row) return;
-  results = results.filter(function(r) { return r.file !== filePath; });
+  var item = queueItems.get(filePath);
+  if (!item) return;
+  item.result = null;
+  item.state = 'pending';
+  paintQueueRow(filePath);
   emitCompareResultsChanged();
-
-  row.classList.remove('waiting', 'done', 'failed', 'restored', 'cancelled');
-  row.classList.add('compressing');
-  renderTaskStatus(row, 'running');
-  var actions = row.querySelector('.queue-item-actions');
-  if (actions) actions.innerHTML = '';
-  var rmBtn = row.querySelector('.queue-item-remove');
-  if (rmBtn) rmBtn.style.display = 'none';
   await startCompressionForPaths(true, [filePath]);
-  if (results.some(function(result) { return result.file === filePath && result.success; })) {
+  var after = queueItems.get(filePath);
+  if (after && after.state === 'done') {
     showToast('已重新压缩: ' + basename(filePath));
   }
 }
 
 async function saveResult(filePath) {
-  const result = results.find(r => r.file === filePath);
+  const item = queueItems.get(filePath);
+  const result = item && item.result;
   if (!result || !result.outputPath) {
     showToast('无法保存：找不到压缩文件');
     return;
@@ -1140,7 +1312,8 @@ async function saveResult(filePath) {
 
 function openInFinder(filePath) {
   // Reveal the compressed output if available, else the original
-  const result = results.find(r => r.file === filePath);
+  const item = queueItems.get(filePath);
+  const result = item && item.result;
   const target = (result && result.outputPath) ? result.outputPath : filePath;
   invoke('open_in_finder', { filePath: target });
 }
@@ -1151,7 +1324,6 @@ var RESTORE_CONFLICT_TEXT = '这个文件在压缩后又被修改过。\n恢复�
 /// 恢复成功后的统一收尾：主队列、历史页、对比窗口都只走这里。
 /// skipRefresh 供批量恢复使用，避免每个文件重绘一次结果列表。
 function afterRestore(filePath, skipRefresh) {
-  results = results.filter(function(r) { return r.file !== filePath; });
   markQueueRowRestored(filePath);
   if (skipRefresh) return;
   showResults();
@@ -1178,8 +1350,9 @@ async function restoreOriginal(filePath, force) {
     return;
   }
   // 「这条记录到底是什么模式」以后端说的为准：缓存里的 result 可能已经不是这一批的了。
+  var cachedItem = queueItems.get(filePath);
   var mode = outcome.outputMode
-    || (results.find(function(r) { return r.file === filePath; }) || {}).outputMode;
+    || (cachedItem && cachedItem.result ? cachedItem.result.outputMode : null);
   showToast(mode === 'replace'
     ? '已恢复原图: ' + basename(filePath)
     : '已删除这次压缩结果: ' + basename(filePath));
@@ -1187,20 +1360,21 @@ async function restoreOriginal(filePath, force) {
 }
 
 function markQueueRowRestored(filePath) {
-  var row = fileRows[filePath];
-  if (!row) return;
-  row.classList.remove('done', 'failed', 'compressing');
-  row.classList.add('restored');
-  renderTaskStatus(row, 'restored');
-  renderRestoredActions(row, filePath);
+  var item = queueItems.get(filePath);
+  if (item) {
+    item.result = null;
+    item.state = 'restored';
+  }
+  paintQueueRow(filePath);
 }
 
 async function restoreAllOriginals() {
-  if (results.length === 0) return;
+  var stash = queueResults();
+  if (stash.length === 0) return;
   if (!confirm('确定要恢复全部已压缩成功的原图吗？')) return;
   var outcome;
   try {
-    outcome = await invoke('restore_all', { results: results.slice() });
+    outcome = await invoke('restore_all', { results: stash.slice() });
   } catch (error) {
     showToast('恢复失败: ' + (error.message || error));
     return;
@@ -1215,31 +1389,24 @@ async function restoreAllOriginals() {
 }
 
 async function exportAll() {
-  if (results.length === 0) return;
-  const suffix = getResultOutputSuffix(results[0]);
-  const count = await invoke('export_all', { results: results, outputSuffix: suffix });
+  var stash = queueResults();
+  if (stash.length === 0) return;
+  const suffix = getResultOutputSuffix(stash[0]);
+  const count = await invoke('export_all', { results: stash, outputSuffix: suffix });
   showToast('已导出 ' + count + ' 个文件到原目录（' + suffix + ' 后缀）');
 }
 
 function clearResults() {
   var wasCompressing = isCompressing;
   queueRevision++;
-  if (wasCompressing) {
-    activeBatchPaths.forEach(function(filePath) { cancelledFiles.add(filePath); });
-    invoke('cancel_batch', { filePaths: activeBatchPaths }).catch(function() {});
+  if (wasCompressing && executionSession) {
+    invoke('cancel_batch', { filePaths: executionSession.targetPaths.slice() }).catch(function() {});
   }
-  results = [];
   files = [];
   inputPaths = [];
+  queueItems = new Map();
   fileRows = {};
-  if (!wasCompressing) cancelledFiles.clear();
   pendingAutoCompress = false;
-  if (!wasCompressing) {
-    activeBatchPaths = [];
-    activeBatchSet.clear();
-    activeBatchRows.clear();
-    activeBatchRevision = 0;
-  }
   resultsList.innerHTML = '';
   resultsPanel.style.display = 'none';
   var queuePanel = document.getElementById('queuePanel');
@@ -1338,18 +1505,21 @@ function stopButtonText(stopping) {
 }
 
 /// 队列行的图标 + 文案，一处说了算 —— 不许再散落 `innerHTML = '<span class="spinner">'`。
-/// status: 'waiting' | 'running' | 'paused' | 'stopping' | 'cancelled' | 'removed' | 'restored'
+/// 入参是**队列状态**（pending / running / done / failed / removed / restored）
+/// 或会话状态（paused / stopping）。停止不改变队列状态：被延后的文件仍然是
+/// pending，界面上照旧写「等待中」，因为它真的还在等下一轮。
 function taskStatusMarkup(status) {
   switch (status) {
     case 'running':
+      // 会话已经暂停 / 正在停止，但它真的还在跑：照实写「收尾中…」并留着 spinner。
+      // 把一张确实在压缩的图假装成停下来，比让它多转一会儿圈更糟。
+      if (compressionState === COMPRESSION_PAUSED || compressionState === COMPRESSION_STOPPING) {
+        return { icon: '<span class="progress-file-spinner"></span>', text: '收尾中…' };
+      }
       return { icon: '<span class="progress-file-spinner"></span>', text: processingActionText('progress') };
     case 'paused':
       // 暂停不用"停住的转圈"：一个静止的圆环看着像卡死，暂停图标才是它的意思。
       return { icon: iconMarkup('pause', true), text: '已暂停' };
-    case 'stopping':
-      return { icon: iconMarkup('minus', true), text: '已跳过' };
-    case 'cancelled':
-      return { icon: iconMarkup('minus', true), text: '已跳过' };
     case 'removed':
       return { icon: iconMarkup('minus', true), text: '已移除' };
     case 'restored':
@@ -1368,18 +1538,24 @@ function renderTaskStatus(row, status) {
   if (text) text.textContent = markup.text;
 }
 
-/// 还在排队的行此刻该显示什么：暂停时不该还写着「等待中」并转着圈，
-/// 停止时它们已经注定被跳过。
+/// 还没开始的行此刻该显示什么：暂停时不该还写着「等待中」。
+/// **停止时它仍然是 pending**（下一轮还会带上），所以照旧是「等待中」——
+/// 「已跳过」那种写法是把"这一轮没轮到"说成了"这个文件出局了"。
 function waitingRowStatus() {
-  if (compressionState === COMPRESSION_STOPPING) return 'stopping';
-  return compressionPaused ? 'paused' : 'waiting';
+  return compressionPaused ? 'paused' : 'pending';
 }
 
 function repaintWaitingRows() {
-  if (!activeBatchRows) return;
-  activeBatchRows.forEach(function(row) {
-    if (!row || !row.classList || !row.classList.contains('waiting')) return;
-    renderTaskStatus(row, waitingRowStatus());
+  files.forEach(function(filePath) {
+    if (queueState(filePath) === 'running') {
+      // 正在跑的行在暂停 / 停止时写「收尾中…」，那才是它此刻的真面目。
+      var runningRow = fileRows[filePath];
+      if (runningRow) renderTaskStatus(runningRow, 'running');
+      return;
+    }
+    if (queueState(filePath) !== 'pending') return;
+    var row = fileRows[filePath];
+    if (row) renderTaskStatus(row, waitingRowStatus());
   });
 }
 
@@ -1409,14 +1585,53 @@ function renderPauseControls() {
   if (stopText) stopText.innerHTML = stopButtonText(stopping);
   if (stopBtn) {
     stopBtn.disabled = !isCompressing || stopping;
-    stopBtn.title = '停止：等待中的文件会跳过，正在压缩的文件会先完成';
-  }
-  var btnText = document.getElementById('compressBtnText');
-  if (btnText && isCompressing) {
-    btnText.innerHTML = progressButtonMarkup();
+    stopBtn.title = '停止：正在处理的文件会先完成，其余文件保留在队列中';
   }
   repaintWaitingRows();
   updateQueueSummary();
+}
+
+/// 主按钮。三件事一起看：**会话在不在跑**（compressionState）、
+/// **还有没有要处理的**（队列 pending）、**有没有失败的**（队列 failed）。
+/// 从前的 finally 一律写死「压缩完成 ✓」，停止之后明明还剩 58 张也照写不误。
+function renderStartButton() {
+  var startBtn = document.getElementById('startCompressBtn');
+  if (!startBtn) return;
+  var btnText = document.getElementById('compressBtnText');
+  var icon = '<svg class="symbol-icon"><use href="#icon-compress"/></svg> ';
+  startBtn.classList.toggle('compressing', isCompressing);
+  startBtn.classList.toggle('paused', compressionState === COMPRESSION_PAUSED);
+  startBtn.classList.toggle('stopping', compressionState === COMPRESSION_STOPPING);
+  startBtn.classList.remove('done');
+
+  if (isCompressing) {
+    startBtn.disabled = true;
+    if (btnText) btnText.innerHTML = progressButtonMarkup();
+    return;
+  }
+  // 这一轮结束了：按钮该说什么，全看队列还剩什么。
+  startBtn.disabled = false;
+  var p = getQueueProgress();
+  if (!btnText) return;
+  if (p.pending > 0 && p.processed > 0) {
+    // 停止 / 中途收场之后：还有活没干完，主按钮就是「继续压缩」。
+    btnText.innerHTML = icon + processingActionText('continue');
+    return;
+  }
+  if (p.pending > 0) {
+    btnText.innerHTML = icon + processingActionText('idle');
+    return;
+  }
+  if (p.total > 0 && p.failed > 0) {
+    btnText.innerHTML = iconMarkup('warning', true) + ' 处理完成 · ' + p.failed + ' 个失败';
+    return;
+  }
+  if (p.total > 0) {
+    startBtn.classList.add('done');
+    btnText.innerHTML = '<svg class="symbol-icon"><use href="#icon-check"/></svg> ' + processingActionText('done');
+    return;
+  }
+  btnText.innerHTML = icon + processingActionText('idle');
 }
 
 function setPauseButtonVisible(visible) {
@@ -1441,16 +1656,17 @@ async function toggleCompressionPause() {
   }
 }
 
-/// 停止整批：等待中的文件全部作废，已经在压的几个跑完各自收尾。
+/// 停止**这一轮**：还没轮到的文件不再启动，已经在压的几个跑完各自收尾。
 ///
-/// 停止之后**不许**自动续跑下一批（pendingAutoCompress 在这里就清掉）：
+/// 停止不是取消：没轮到的文件留在队列里（仍然是 pending），主按钮随后变成
+/// 「继续压缩」。停止之后**不许**自动续跑下一轮（pendingAutoCompress 在这里就清掉）：
 /// 用户刚说"停下"，再被"自动压缩"拉起来就是没听他说话。
 async function stopCompression() {
   if (!isCompressing || compressionState === COMPRESSION_STOPPING) return;
   var previous = compressionState;
   pendingAutoCompress = false;
   setCompressionState(COMPRESSION_STOPPING);
-  showToast('正在停止：等待中的文件会跳过，正在压缩的文件会先完成');
+  showToast('正在停止：正在处理的文件会先完成，其余文件保留在队列中');
   try {
     // 闸门在后端焊死，不需要把路径一条条传过去。
     await invoke('stop_compression');
@@ -1938,7 +2154,7 @@ async function saveCpuThreadLimit(limit) {
 // 本侧只负责组装载荷、打开/聚焦窗口，并把结果集变化推送给该窗口。
 
 function comparableResults() {
-  return results.filter(function(r) { return r && r.success; });
+  return queueResults().filter(function(r) { return r && r.success; });
 }
 
 function openCompare(result) {
@@ -1956,8 +2172,8 @@ function openCompare(result) {
 }
 
 function openCompareByFile(filePath) {
-  const result = results.find(r => r.file === filePath);
-  if (result) openCompare(result);
+  const item = queueItems.get(filePath);
+  if (item && item.result) openCompare(item.result);
 }
 
 // 结果集变化（恢复/清空/压缩完成等）时推送快照，对比窗口据此刷新或置空
@@ -1971,10 +2187,10 @@ listen('compare-recompressed', function(event) {
   const payload = event.payload || {};
   const updated = payload.result;
   if (!payload.filePath || !updated) return;
-  const idx = results.findIndex(function(r) { return r.file === payload.filePath; });
-  if (idx < 0) return;
-  const existing = results[idx];
-  results[idx] = Object.assign({}, existing, updated, {
+  const item = queueItems.get(payload.filePath);
+  if (!item || !item.result) return;
+  const existing = item.result;
+  item.result = Object.assign({}, existing, updated, {
     // compress_single writes a temporary preview. Keep the real output
     // and backup metadata so Restore still targets the original result.
     outputPath: existing.outputPath,

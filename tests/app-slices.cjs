@@ -16,9 +16,34 @@ function slice(from, to) {
   return source.slice(start, end);
 }
 
+/// 「队列状态（唯一真相）」整段：queueItems + 派生进度 + 队列摘要。
+/// 任何跟"这个文件还需不需要处理"有关的判断都必须从这里读，所以测试也只切这里。
+function queueCore() {
+  return slice('// ─── 队列状态（唯一真相，DOM 只能照着它画）', '// ─── 队列渲染（排序 / 视图 / 每一行的画法）');
+}
+
+/// 「把队列项画到那一行上」整段：paintQueueRow + 错误图标。
+/// 方向只有一个：queueItems → DOM；这一段是唯一允许写行内状态的地方。
+function queueRowPainter() {
+  return slice('/// 把一个队列项此刻的状态', 'function createQueueRow(');
+}
+
+/// 「执行会话（一轮）」整段：executionSession + 会话身份判定。
+function sessionModel() {
+  return slice('// ─── 执行会话（一轮）', '// ─── 压缩主流程');
+}
+
 /// 「压缩状态机 … 暂停 / 继续 / 停止」整段：状态变量 + 写入口 + 三个按钮的动作。
 function stateMachine() {
   return slice('// ─── 压缩状态机', '// ─── 历史记录页');
+}
+
+function installQueueCore(context) {
+  vm.runInContext(queueCore(), context);
+}
+
+function installQueueRowPainter(context) {
+  vm.runInContext(queueRowPainter(), context);
 }
 
 /// 把状态机装进测试上下文。必须在其他切片之前调用：它声明
@@ -27,4 +52,15 @@ function installStateMachine(context) {
   vm.runInContext(stateMachine(), context);
 }
 
-module.exports = { source, slice, stateMachine, installStateMachine };
+/// 把执行会话装进上下文。必须在状态机之后（beginExecutionSession 读 compressionState）。
+function installSessionModel(context) {
+  vm.runInContext(sessionModel(), context);
+}
+
+module.exports = {
+  source, slice,
+  queueCore, installQueueCore,
+  queueRowPainter, installQueueRowPainter,
+  sessionModel, installSessionModel,
+  stateMachine, installStateMachine,
+};

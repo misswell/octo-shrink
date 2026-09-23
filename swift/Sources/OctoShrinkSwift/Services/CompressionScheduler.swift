@@ -147,32 +147,48 @@ final class CompressionScheduler: @unchecked Sendable {
     /// 条件变量 + 250ms 超时兜底：即使漏掉一次唤醒，最坏情况只是延迟几百毫秒，
     /// 而不是永久卡住整个批次。
     func acquire() -> Permit {
-        acquire(cancelled: { false })!
+        if case .acquired(let permit) = acquireOutcome(cancelled: { false }) {
+            return permit
+        }
+        // 调用点都保证闸门开着；真走到这里说明调度器状态坏了，不能假装拿到了名额。
+        fatalError("调度器已停止，不该走到这里")
     }
 
-    /// 带退出条件的等待：`cancelled()` 为真、或整批已「停止」时**不拿名额**、返回 nil。
+    /// 等闸门的三种结局。**必须分开**，不能再像老实现那样用 `Permit?` 一个 nil
+    /// 同时表示"这个文件被用户取消"和"整批被停止"：
     ///
-    /// 判断顺序不能改，与 Rust 的 `acquire_or_cancelled` 一致：
+    /// - `.cancelled`：用户明确把**这个文件**移出队列，它真的不该再被压。
+    /// - `.stopped`：用户停的是**这一轮**。这个文件仍然该压，只是本轮没轮到它 ——
+    ///   队列里保持 `pending`，下一次「继续压缩」自然带上。
+    enum AcquireOutcome {
+        case acquired(Permit)
+        case cancelled
+        case stopped
+    }
+
+    /// 带退出条件的等待：`cancelled()` 为真、或整批已「停止」时**不拿名额**。
+    ///
+    /// 判断顺序不能改，与 Rust 的 `acquire` 一致：
     /// 取消 → 停止 → 暂停/名额。取消排最前，是为了让"暂停中被取消的文件"能立刻退出；
     /// 停止排在暂停之前，是为了让"暂停中按停止"能真的结束整批，而不是继续堵在
     /// 关着的闸门上等用户点「继续」（那正是「停止」的反面）。
-    func acquire(cancelled: () -> Bool) -> Permit? {
+    func acquireOutcome(cancelled: () -> Bool) -> AcquireOutcome {
         condition.lock()
         while true {
             if cancelled() {
                 condition.unlock()
-                return nil
+                return .cancelled
             }
             if stopping {
                 condition.unlock()
-                return nil
+                return .stopped
             }
             if !paused && active < maxParallelism { break }
             _ = condition.wait(until: Date(timeIntervalSinceNow: 0.25))
         }
         active += 1
         condition.unlock()
-        return Permit(scheduler: self)
+        return .acquired(Permit(scheduler: self))
     }
 
     fileprivate func release() {

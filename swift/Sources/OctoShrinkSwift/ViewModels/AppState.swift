@@ -88,10 +88,12 @@ final class AppState: ObservableObject {
     @Published var items: [QueueItem] = []
     @Published var options = CompressOptions()
     @Published private(set) var isCompressing = false
-    @Published var compressProgress: Double = 0
-    @Published var compressCurrent = 0
-    @Published var compressTotal = 0
-    @Published var compressDoneText = ""
+    /// 队列进度：**派生值**，不是某一轮的计数器。
+    /// 停止之后重新开始一轮时，这一轮的目标变小了（只含 pending），
+    /// 但用户看到的总进度不该从 40/100 掉回 0/60 —— 所以它属于队列，不属于批次。
+    var compressProgress: Double { queueProgress.fraction }
+    /// 当前这个按钮上该写什么（开始 / 继续 / 完成 / 处理完成·N 失败）。
+    @Published private(set) var compressButtonText = ""
 
     // 设置 UI
     @Published var settingsExpanded = false
@@ -370,7 +372,7 @@ final class AppState: ObservableObject {
                 if bv == nil { return true }
                 result = av! < bv!
             case .status:
-                let order: [QueueStatus: Int] = [.failed: 0, .compressing: 1, .waiting: 2, .done: 3, .restored: 4, .removed: 5, .cancelled: 6]
+                let order: [QueueStatus: Int] = [.failed: 0, .running: 1, .pending: 2, .done: 3, .restored: 4, .removed: 5]
                 result = (order[a.status] ?? 9) < (order[b.status] ?? 9)
             }
             return sortAscending ? result : !result
@@ -401,7 +403,18 @@ final class AppState: ObservableObject {
     var failedCount: Int { items.filter { $0.status == .failed }.count }
     /// 只要有成功结果即可恢复（与 Tauri 展示「恢复全部原图」的条件一致）
     var hasRestorable: Bool { items.contains { $0.result?.success == true } }
-    var pendingCount: Int { items.filter { $0.status == .waiting || $0.status == .failed }.count }
+    /// 还要压的文件数。失败的不算 —— 它们得用户显式点「重试」。
+    var pendingCount: Int { items.filter { $0.status == .pending }.count }
+
+    /// 队列进度的唯一算处（与 Tauri 前端 `getQueueProgress` 逐条对齐）。
+    var queueProgress: QueueProgress { QueueProgress(items: items) }
+    /// 队列规模：removed / restored 已经离开了这套账（一个被移出，一个被撤销）。
+    var queueTotal: Int { queueProgress.total }
+    /// 已处理 = 成功 + 失败。失败也算处理过，否则 98 成功 + 2 失败的队列
+    /// 会永远停在 98%，那条进度条就成了假的。
+    var processedCount: Int { queueProgress.processed }
+    /// 摘要里的「42 / 100 已处理 · 失败 2」（失败为 0 时不写那一段）。
+    var queueSummaryText: String { queueProgress.summaryText }
 
     var comparableResults: [CompressResult] {
         items.compactMap(\.result).filter { $0.success }
@@ -541,8 +554,8 @@ final class AppState: ObservableObject {
         let existing = Set(items.map(\.path))
         var added = 0
         for path in expanded where !existing.contains(path) {
-            // 已移除的行只是历史展示，重新加入时创建全新的等待行
-            if let idx = items.firstIndex(where: { $0.path == path && ($0.status == .removed || $0.status == .cancelled) }) {
+            // 已移除 / 已恢复的行只是历史展示，重新加入时创建全新的 pending 行
+            if let idx = items.firstIndex(where: { $0.path == path && ($0.status == .removed || $0.status == .restored) }) {
                 items.remove(at: idx)
             }
             let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64) ?? 0
@@ -636,7 +649,7 @@ final class AppState: ObservableObject {
         // 堵在闸门上的 worker 得被叫醒才会发现"自己要处理的文件已经不在队列里"。
         scheduler.wakeWaiters()
         if let idx = items.firstIndex(where: { $0.path == path }) {
-            if items[idx].status == .waiting || items[idx].status == .compressing {
+            if items[idx].status == .pending || items[idx].status == .running {
                 items[idx].status = .removed
             }
         }
@@ -644,18 +657,24 @@ final class AppState: ObservableObject {
 
     // MARK: - Batch compress
 
+    /// 「开始压缩」/「继续压缩」—— 同一个入口。
+    ///
+    /// **只处理 pending**：已经压完的绝不重压，失败的要用户显式点「重试」，
+    /// 否则一个坏文件会被「继续压缩 → 自动续队列 → 再失败」反复重试。
+    /// 停止之后剩下的文件仍然是 pending，所以这个入口天然就是「继续压缩」。
     func startCompress() {
         guard !isCompressing else { return }
         if options.outputMode == .folder && options.outputDir == nil {
             showToast("请先选择输出目录")
             return
         }
-        let pending = items.filter { $0.status == .waiting || $0.status == .failed }
+        let pending = items.filter { $0.status == .pending }
         guard !pending.isEmpty else { return }
         runBatch(paths: pending.map(\.path))
     }
 
-    /// 重试单个文件（与 Tauri compressOneFile 对齐：只处理该文件）
+    /// 重试单个文件（与 Tauri compressOneFile 对齐：只处理该文件）。
+    /// 失败 / 已恢复的行靠它回到 pending，普通「继续压缩」不碰这两种。
     func retryFile(path: String) {
         guard !isCompressing else { return }
         guard options.outputMode != .folder || options.outputDir != nil else {
@@ -663,7 +682,7 @@ final class AppState: ObservableObject {
             return
         }
         if let idx = items.firstIndex(where: { $0.path == path }) {
-            items[idx].status = .waiting
+            items[idx].status = .pending
             items[idx].result = nil
         }
         runBatch(paths: [path])
@@ -684,16 +703,20 @@ final class AppState: ObservableObject {
     private func setCompressionPhase(_ next: CompressionPhase) {
         compressionPhase = next
         isCompressing = next != .idle
+        updateCompressButtonText()
     }
 
+    /// 跑一轮执行会话：**只处理传进来的这些文件**（调用方只提交 pending）。
+    ///
+    /// 这里绝不重置任何进度：总体进度是队列的派生值（`compressProgress`），
+    /// 停止 / 继续都不会把它清零 —— 老实现每次进这里都写一遍
+    /// `compressTotal = paths.count; compressCurrent = 0`，于是"停止后继续"
+    /// 会把 40/100 变成 0/60，那是用户最直接能看到的那种错。
     private func runBatch(paths: [String]) {
         guard !paths.isEmpty else { return }
 
         setCompressionPhase(.running)
-        compressTotal = paths.count
-        compressCurrent = 0
-        compressProgress = 0
-        compressDoneText = ""
+        compressButtonText = ""
         cancelBox.removeAll()
 
         var opts = options
@@ -701,7 +724,6 @@ final class AppState: ObservableObject {
         let useSmart = options.processingMode == .advanced
             && (options.smartMode || effectiveOutputFormat != .original)
 
-        let counter = CounterBox()
         let group = DispatchGroup()
         let queue = DispatchQueue(label: "octoshrink.compress", attributes: .concurrent)
         // 新批次从未暂停、未停止开始，不继承上一批的状态；上限取设置页当前值。
@@ -719,46 +741,47 @@ final class AppState: ObservableObject {
                 // 暂停中或 CPU 名额已满就堵在这里；拿到名额的一刻闸门一定是开着的。
                 // 已经在跑的文件会正常完成（不 kill、不 SIGSTOP）。
                 // 被取消的文件在闸门**之前**就自己退出，不需要谁替它开门。
-                guard let permit = gate.acquire(cancelled: { [self] in self.isCancelled(path) }) else {
-                    DispatchQueue.main.async {
-                        self.updateStatus(path, .cancelled)
-                        self.tick(counter: counter, total: paths.count)
-                    }
+                switch gate.acquireOutcome(cancelled: { [self] in self.isCancelled(path) }) {
+                case .cancelled:
+                    // 用户明确把它移出了队列：它本轮到此为止，不回到 pending。
+                    DispatchQueue.main.async { self.updateStatus(path, .removed) }
                     return
-                }
-                defer { permit.release() }
-                // 「压缩中」只在真正开工这一刻标记，等待中的行保持「等待」。
-                DispatchQueue.main.async {
-                    if let idx = self.items.firstIndex(where: { $0.path == path }),
-                       self.items[idx].status == .waiting {
-                        self.items[idx].status = .compressing
+                case .stopped:
+                    // 整批被停止，这一轮没轮到它：**什么都不做**，队列里它仍然是 pending，
+                    // 下一次「继续压缩」自然带上。绝不写成 .cancelled（那就是"再也压不动"）。
+                    return
+                case .acquired(let permit):
+                    defer { permit.release() }
+                    // 「压缩中」只在真正开工这一刻标记，等待中的行保持「等待」。
+                    DispatchQueue.main.async {
+                        if let idx = self.items.firstIndex(where: { $0.path == path }),
+                           self.items[idx].status == .pending {
+                            self.items[idx].status = .running
+                        }
                     }
-                }
-                let result = Self.compressOneStatic(
-                    path: path, options: opts, useSmart: useSmart,
-                    history: store, transactions: journal, retentionDays: retention
-                )
-                DispatchQueue.main.async {
-                    self.applyResult(path, result: result)
-                    self.tick(counter: counter, total: paths.count)
+                    let result = Self.compressOneStatic(
+                        path: path, options: opts, useSmart: useSmart,
+                        history: store, transactions: journal, retentionDays: retention
+                    )
+                    DispatchQueue.main.async { self.applyResult(path, result: result) }
                 }
             }
         }
 
         group.notify(queue: .main) { [self] in
             gate.endBatch()
-            // 用户按过停止：这一批就地结束，绝不许被"自动压缩"再拉起来跑下一批。
+            // 用户按过停止：这一轮就地结束，绝不许被"自动压缩"再拉起来跑下一轮。
             let stoppedByUser = compressionStopping
             setCompressionPhase(.idle)
-            self.compressDoneText = options.processingMode == .system ? "转换完成" : "压缩完成"
+            // 按钮写什么看**队列**：还剩 pending 就是「继续压缩」，
+            // 全压完才是完成文案。老实现一律写「压缩完成」，停止之后明明还剩
+            // 58 张也照写不误 —— 那是把"这一轮停了"说成"队列干完了"。
+            updateCompressButtonText()
             cancelBox.removeAll()
             refreshHistory()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [self] in
-                compressDoneText = ""
-            }
-            // 自动续队列
-            let stillPending = items.filter { $0.status == .waiting || $0.status == .failed }
-            if pendingAutoCompress && !stillPending.isEmpty && !stoppedByUser {
+            // 自动续队列：只续 pending（失败的重试要用户自己点）。
+            let stillPending = items.contains { $0.status == .pending }
+            if pendingAutoCompress && stillPending && !stoppedByUser {
                 pendingAutoCompress = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
                     self.startCompress()
@@ -769,10 +792,32 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func tick(counter: CounterBox, total: Int) {
-        counter.increment()
-        compressCurrent = counter.value
-        compressProgress = total > 0 ? Double(counter.value) / Double(total) : 0
+    /// 主按钮的文案 —— 与 Tauri 前端 `renderStartButton` 同一套判据：
+    /// 会话在跑就写阶段；跑完了则看队列还剩什么。
+    func updateCompressButtonText() {
+        if isCompressing {
+            switch compressionPhase {
+            case .paused: compressButtonText = options.processingMode == .system ? "暂停中…" : "暂停中…"
+            case .stopping: compressButtonText = "正在停止…"
+            default: compressButtonText = options.processingMode == .system ? "转换中…" : "压缩中…"
+            }
+            return
+        }
+        if pendingCount > 0 && processedCount > 0 {
+            compressButtonText = options.processingMode == .system ? "继续转换" : "继续压缩"
+            return
+        }
+        if pendingCount > 0 {
+            compressButtonText = options.processingMode == .system ? "开始转换" : "开始压缩"
+            return
+        }
+        if queueTotal > 0 && failedCount > 0 {
+            compressButtonText = "处理完成 · \(failedCount) 个失败"
+            return
+        }
+        compressButtonText = queueTotal > 0
+            ? (options.processingMode == .system ? "转换完成" : "压缩完成")
+            : (options.processingMode == .system ? "开始转换" : "开始压缩")
     }
 
     /// 暂停 / 继续：闸门只决定「要不要再启动新文件」，绝不打断正在跑的压缩。
@@ -802,15 +847,16 @@ final class AppState: ObservableObject {
         setCompressionPhase(.stopping)
         scheduler.stop()
         scheduler.wakeWaiters()
-        showToast("正在停止：等待中的文件会跳过，正在压缩的文件会先完成")
+        showToast("正在停止：正在处理的文件会先完成，其余文件保留在队列中")
     }
 
-    /// 取消全部：等待中/压缩中的行标记为已跳过（与 Tauri 的 cancelled 状态一致）
+    /// 取消全部：把还在等 / 正在跑的行都移出队列（与 Tauri 的 removed 一致）。
+    /// 这是**文件级**的破坏性操作，与「停止」不同 —— 停止是保留剩余任务的。
     func cancelAll() {
         for i in items.indices {
-            if items[i].status == .waiting || items[i].status == .compressing {
+            if items[i].status == .pending || items[i].status == .running {
                 cancelBox.insert(items[i].path)
-                items[i].status = .cancelled
+                items[i].status = .removed
             }
         }
         // 先记账再叫醒等待者；暂停状态不动 —— 取消不是「继续」。
@@ -820,8 +866,8 @@ final class AppState: ObservableObject {
     func cancelFile(path: String) {
         cancelBox.insert(path)
         if let idx = items.firstIndex(where: { $0.path == path }),
-           items[idx].status == .compressing || items[idx].status == .waiting {
-            items[idx].status = .cancelled
+           items[idx].status == .running || items[idx].status == .pending {
+            items[idx].status = .removed
         }
         scheduler.wakeWaiters()
     }
@@ -1292,6 +1338,8 @@ final class AppState: ObservableObject {
 }
 
 /// 简单的线程安全计数盒（批次进度跨线程累加）
+/// 只用来记"这一轮跑过几个"的诊断盒子。总体进度不再由它算
+/// （见 `AppState.compressProgress`：那是队列的派生值）。
 final class CounterBox: @unchecked Sendable {
     private var _value = 0
     private let lock = NSLock()

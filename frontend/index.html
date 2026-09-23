@@ -195,7 +195,7 @@
         </button>
         <button class="btn btn-small btn-secondary" id="stopCompressBtn" type="button"
           onclick="stopCompression()" style="display:none;"
-          title="停止：等待中的文件会跳过，正在压缩的文件会先完成">
+          title="停止：正在处理的文件会先完成，其余文件保留在队列中">
           <span class="pause-btn-text" id="stopBtnText">
             <svg class="symbol-icon symbol-icon-small"><use href="#icon-stop"/></svg>
             停止
@@ -204,8 +204,9 @@
       </div>
     </div>
 
-    <!-- Settings Panel -->
-    <div class="settings-panel" id="settingsPanel" style="display:none;">
+    <!-- Settings Panel：默认折叠（用户导入后先看到一行标题 + 当前设置摘要，
+         想改再点开）。展开状态只由 toggleSettings() 响应点击切换，不许有代码自动展开。 -->
+    <div class="settings-panel collapsed" id="settingsPanel" style="display:none;">
       <div class="settings-header" onclick="toggleSettings()">
         <h3>
           <svg class="symbol-icon"><use href="#icon-sliders"/></svg>

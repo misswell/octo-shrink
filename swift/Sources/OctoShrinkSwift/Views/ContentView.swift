@@ -454,7 +454,7 @@ struct QueuePanelView: View {
                 }
                 .buttonStyle(SecondaryButtonStyle())
                 .disabled(appState.compressionStopping)
-                .help("停止：等待中的文件会跳过，正在压缩的文件会先完成")
+                .help("停止：正在处理的文件会先完成，其余文件保留在队列中")
             }
         }
         .padding(.horizontal, AppMetrics.sectionHPadding)
@@ -462,8 +462,10 @@ struct QueuePanelView: View {
     }
 
     private var queueSummaryText: String {
-        if appState.isCompressing || appState.doneCount > 0 {
-            return "\(appState.doneCount) / \(appState.items.count) 已完成"
+        // 「已处理」而不是「已完成」，且分母是**队列**：停止后剩下的 pending
+        // 仍然算在总数里，所以摘要不会从 42 / 100 跳成 42 / 58。
+        if appState.isCompressing || appState.processedCount > 0 {
+            return appState.queueSummaryText
                 + appState.compressionPhaseSummary
                 + appState.cpuSummaryText
         }
@@ -509,7 +511,7 @@ struct FileRowView: View {
 
             actions
 
-            if item.status == .waiting {
+            if item.status == .pending {
                 Button {
                     appState.removeItem(path: item.path)
                 } label: {
@@ -538,12 +540,12 @@ struct FileRowView: View {
                 .fill(Color.primary.opacity(0.05))
                 .frame(width: 24, height: 24)
             switch item.status {
-            case .waiting:
+            case .pending:
                 // 暂停时换成暂停图标：转圈动画还在转，用户就以为没暂停。
                 Image(systemName: appState.compressionPaused ? "pause.fill" : "photo")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
-            case .compressing:
+            case .running:
                 ProgressView()
                     .scaleEffect(0.5)
                     .frame(width: 24, height: 24)
@@ -555,7 +557,7 @@ struct FileRowView: View {
                 Image(systemName: "xmark")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundColor(.red)
-            case .removed, .cancelled:
+            case .removed:
                 Image(systemName: "minus")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundColor(.secondary)
@@ -647,7 +649,7 @@ struct FileRowView: View {
     // .file-queue-item 状态底色
     private var rowBackground: Color {
         switch item.status {
-        case .compressing: return Color.accentColor.opacity(0.12)
+        case .running: return Color.accentColor.opacity(0.12)
         case .done: return Color.green.opacity(0.08)
         case .failed: return Color.red.opacity(0.08)
         default: return Color.clear
@@ -657,8 +659,8 @@ struct FileRowView: View {
     // waiting 0.8 / cancelled·removed 0.4 / restored 0.7
     private var rowOpacity: Double {
         switch item.status {
-        case .waiting: return 0.8
-        case .removed, .cancelled: return 0.4
+        case .pending: return 0.8
+        case .removed: return 0.4
         case .restored: return 0.7
         default: return 1
         }
@@ -667,22 +669,25 @@ struct FileRowView: View {
     private var statusText: String {
         switch item.status {
         // 暂停中排队的行写「已暂停」而不是「等待中」：它们此刻真的不会前进。
-        case .waiting: return appState.compressionPaused ? "已暂停" : "等待中"
-        case .compressing: return appState.options.processingMode == .system ? "转换中…" : "压缩中…"
+        // 停止不改变队列状态：被延后的文件仍然是 pending，所以这里还是「等待中」。
+        case .pending: return appState.compressionPaused ? "已暂停" : "等待中"
+        case .running:
+            // 会话已经暂停 / 正在停止，但它真的还在跑：照实写「收尾中…」。
+            if appState.compressionPaused || appState.compressionStopping { return "收尾中…" }
+            return appState.options.processingMode == .system ? "转换中…" : "压缩中…"
         case .done:
             if let r = item.result { return r.savingsSignedText }
             return "完成"
         case .failed: return "失败"
         case .removed: return "已移除"
-        case .cancelled: return "已跳过"
         case .restored: return "已恢复"
         }
     }
 
     private var statusColor: Color {
         switch item.status {
-        case .waiting, .removed, .cancelled, .restored: return Color(nsColor: .tertiaryLabelColor)
-        case .compressing: return .accentColor
+        case .pending, .removed, .restored: return Color(nsColor: .tertiaryLabelColor)
+        case .running: return .accentColor
         case .done: return .green
         case .failed: return .red
         }
@@ -694,21 +699,9 @@ struct FileRowView: View {
 struct CompressButton: View {
     @EnvironmentObject var appState: AppState
 
-    private var buttonText: String {
-        if appState.isCompressing {
-            // 暂停 / 停止时进度按钮只换文案，不新增控件（与 Tauri 一致）。
-            // 文案跟着 compressionPhase 走，不看 isCompressing 一个布尔值。
-            switch appState.compressionPhase {
-            case .paused: return "暂停中…"
-            case .stopping: return "正在停止…"
-            default: return appState.options.processingMode == .system ? "转换中…" : "压缩中…"
-            }
-        }
-        if !appState.compressDoneText.isEmpty {
-            return appState.compressDoneText
-        }
-        return appState.options.processingMode == .system ? "开始转换" : "开始压缩"
-    }
+    /// 文案由 AppState 按**队列**算（还剩 pending → 继续压缩；全压完 → 完成）。
+    /// 这里只负责画，不在视图里另算一套。
+    private var buttonText: String { appState.compressButtonText }
 
     private var buttonIcon: String {
         if appState.isCompressing {
@@ -717,7 +710,8 @@ struct CompressButton: View {
                 ? "pause.fill"
                 : "arrow.triangle.2.circlepath"
         }
-        if !appState.compressDoneText.isEmpty { return "checkmark" }
+        if isDone { return "checkmark" }
+        if appState.pendingCount > 0 && appState.processedCount > 0 { return "play.fill" }
         return "arrow.down.circle.fill"
     }
 
@@ -726,11 +720,11 @@ struct CompressButton: View {
             appState.startCompress()
         } label: {
             ZStack(alignment: .leading) {
-                // .compress-btn-fill：压缩中蓝色 35% 脉冲 / 完成时绿色 35%
+                // 填充宽度 = 队列的 已处理 / 总数（派生值，停止 / 继续都不会归零）。
                 GeometryReader { geo in
                     Rectangle()
                         .fill(fillColor)
-                        .frame(width: appState.isCompressing || !appState.compressDoneText.isEmpty
+                        .frame(width: appState.isCompressing || appState.processedCount > 0
                                ? geo.size.width * appState.compressProgress
                                : 0)
                         .animation(.easeOut(duration: 0.3), value: appState.compressProgress)
@@ -756,10 +750,17 @@ struct CompressButton: View {
         }
         .buttonStyle(.plain)
         .disabled(appState.isCompressing || appState.pendingCount == 0)
-        .animation(.easeOut(duration: 0.2), value: appState.compressDoneText)
+        .animation(.easeOut(duration: 0.2), value: appState.compressButtonText)
     }
 
-    private var isDone: Bool { !appState.compressDoneText.isEmpty }
+    /// 全队列处理完（没有待处理的）才算"完成态"：停止之后还剩 pending，
+    /// 这时候按钮必须还是「继续压缩」，不能显示成绿的完成。
+    private var isDone: Bool {
+        !appState.isCompressing
+            && appState.pendingCount == 0
+            && appState.processedCount > 0
+            && appState.failedCount == 0
+    }
 
     private var fillColor: Color {
         if isDone { return Color.green.opacity(0.35) }

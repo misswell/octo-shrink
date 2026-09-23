@@ -207,9 +207,17 @@ body {
   z-index: 0;
 }
 .compress-progress-btn.compressing .compress-btn-fill {
-  width: 100%;
+  /* 宽度由 JS 按"已处理 / 总数"写死，这里只管动起来。
+     不写 width: 100% —— 那会让进度条永远满格，用户就再也看不出压到哪了。 */
   background: rgba(70,130,255,.35);
   animation: compress-pulse 1.5s ease-in-out infinite;
+}
+/* 暂停 / 停止收尾时：进度停在真实比例上，动画也要停下来 ——
+   还在闪的进度条就是用户判断"到底暂停没有"的依据。 */
+.compress-progress-btn.paused .compress-btn-fill,
+.compress-progress-btn.stopping .compress-btn-fill {
+  animation: none;
+  background: rgba(70,130,255,.28);
 }
 .compress-progress-btn.done .compress-btn-fill {
   width: 100%;
@@ -769,11 +777,12 @@ body {
   transition: background 0.15s;
   border: 0.5px solid transparent;
 }
-.file-queue-item.waiting { opacity: 0.8; }
-.file-queue-item.compressing { background: var(--bg-selected); }
+.file-queue-item.waiting, .file-queue-item.pending { opacity: 0.8; }
+.file-queue-item.compressing, .file-queue-item.running { background: var(--bg-selected); }
 .file-queue-item.done { background: var(--queue-done-bg); }
 .file-queue-item.failed { background: var(--queue-failed-bg); }
-.file-queue-item.cancelled { opacity: 0.4; }
+/* 移除的行不再留在队列里（removeQueueFile 会摘掉整行），这条给复活场景兜底。 */
+.file-queue-item.removed, .file-queue-item.cancelled { opacity: 0.4; }
 .file-queue-item.restored { opacity: 0.7; }
 .file-queue-item .queue-item-icon {
   width: 24px;
@@ -790,7 +799,8 @@ body {
 .file-queue-item.done .queue-item-icon { color: var(--success); }
 .file-queue-item.failed .queue-item-icon { color: var(--danger); }
 .file-queue-item.restored .queue-item-icon { color: var(--text-tertiary); }
-.file-queue-item.compressing .queue-item-icon { color: var(--accent); }
+.file-queue-item.compressing .queue-item-icon,
+.file-queue-item.running .queue-item-icon { color: var(--accent); }
 .file-queue-item .queue-item-name {
   flex: 1;
   overflow: hidden;
@@ -816,8 +826,10 @@ body {
   align-items: center;
   gap: 2px;
 }
-.file-queue-item.waiting .queue-item-status { color: var(--text-tertiary); }
-.file-queue-item.compressing .queue-item-status { color: var(--accent); }
+.file-queue-item.waiting .queue-item-status,
+.file-queue-item.pending .queue-item-status { color: var(--text-tertiary); }
+.file-queue-item.compressing .queue-item-status,
+.file-queue-item.running .queue-item-status { color: var(--accent); }
 .file-queue-item.done .queue-item-status { color: var(--success); }
 .file-queue-item.failed .queue-item-status { color: var(--danger); }
 .file-queue-item .queue-item-actions {

@@ -83,15 +83,23 @@ struct CompressResult: Identifiable {
     }
 }
 
+/// 队列项的持久状态 —— **只有这六种**。
+///
+/// 暂停 / 停止是**这一轮执行**的状态（`CompressionPhase`），不是文件的状态：
+/// 被停止挡在门外的文件照旧是 `pending`，下一轮「继续压缩」自然还会带上它。
+/// 老实现用 `cancelled` 同时表达"用户把它移出队列"和"停止时这一轮没轮到它"，
+/// 于是停止之后剩下的图全都变成"已跳过"，再也压不动 —— 这两件事必须分开。
 enum QueueStatus: String {
-    case waiting = "waiting"
-    case compressing = "compressing"
+    /// 还需要压缩：第一次没开始、暂停中等待、停止后留待下一轮、新导入，都是它。
+    case pending = "pending"
+    /// 真的在压。
+    case running = "running"
     case done = "done"
+    /// 压完了但失败。只有显式「重试」才会回到 pending，普通「继续压缩」不碰它。
     case failed = "failed"
-    /// 用户从队列里移除（等待中移除）
+    /// 用户把它移出了队列。
     case removed = "removed"
-    /// 压缩过程中被取消 / 跳过
-    case cancelled = "cancelled"
+    /// 用户把这次压缩撤销了（原图回来了）。要压得重新点。
     case restored = "restored"
 }
 
@@ -100,8 +108,45 @@ struct QueueItem: Identifiable {
     var path: String
     var fileName: String
     var fileSize: Int64
-    var status: QueueStatus = .waiting
+    var status: QueueStatus = .pending
     var result: CompressResult?
+}
+
+/// 队列进度 —— **队列的派生值**，不是某一轮的计数器。
+///
+/// 主界面显示的永远是它（与 Tauri 前端 `getQueueProgress` 同一套判据）。
+/// 停止之后重新开始一轮时，那一轮的目标会变小（只含 pending），
+/// 但这里的 total 始终是整个队列，所以进度不会从 40/100 掉回 0/60。
+struct QueueProgress {
+    var total = 0
+    var done = 0
+    var failed = 0
+    var running = 0
+    var pending = 0
+
+    /// 已处理 = 成功 + 失败。失败的文件确实跑完了一次，只是没成 ——
+    /// 不算它的话，98 成功 + 2 失败的队列会永远停在 98%。
+    var processed: Int { done + failed }
+    var fraction: Double { total > 0 ? Double(processed) / Double(total) : 0 }
+
+    /// 摘要那一行（失败为 0 时不写那一段）。
+    var summaryText: String {
+        failed > 0 ? "\(processed) / \(total) 已处理 · 失败 \(failed)" : "\(processed) / \(total) 已处理"
+    }
+
+    init(items: [QueueItem]) {
+        for item in items {
+            // removed / restored 已经离开了这套账：一个被移出队列，一个被用户撤销了。
+            switch item.status {
+            case .removed, .restored: continue
+            case .done: done += 1
+            case .failed: failed += 1
+            case .running: running += 1
+            case .pending: pending += 1
+            }
+            total += 1
+        }
+    }
 }
 
 func detectImageType(path: String) -> String {

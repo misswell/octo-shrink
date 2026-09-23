@@ -82,6 +82,20 @@ pub struct ParallelPermit {
     scheduler: std::sync::Arc<CompressionScheduler>,
 }
 
+/// 等闸门等的三种结局。**必须分开**，不能再像老实现那样用 `Option` 一个 `None`
+/// 同时表示"这个文件被用户取消"和"整批被停止"：
+///
+/// - `Cancelled`：用户明确把**这个文件**移出队列（点 ×、清空队列）。它真的不该再被压。
+/// - `Stopped`：用户停的是**这一轮**。这个文件仍然该压，只是本轮没轮到它 ——
+///   队列里保持 `pending`，下一次「继续压缩」自然带上。
+///
+/// 两者混在一起，就是"停止后 70 张图全部变成已跳过、再也没法继续"的根源。
+pub enum AcquireOutcome {
+    Acquired(ParallelPermit),
+    Cancelled,
+    Stopped,
+}
+
 /// 上限的最小值 —— 0 会让一个任务都启动不了。
 pub const MIN_PARALLELISM: usize = 1;
 
@@ -111,7 +125,7 @@ impl CompressionScheduler {
     ///
     /// 与"取消某个文件"是两件事：`cancel_file` 要逐条记账（`cancel_queue`），
     /// 停止只是把闸门焊死 —— 后来者不需要谁替它记账，自己就会在
-    /// `acquire_or_cancelled` 里看见 `stopping` 并退出。
+    /// `acquire` 里看见 `stopping` 并拿到 `AcquireOutcome::Stopped`。
     ///
     /// 绝不 kill 正在跑的进程：那会留下写了一半的临时文件、悬空的覆盖事务和
     /// 对不上账的历史，正是「宁可慢一点也不能弄丢原图」要避免的。
@@ -197,39 +211,51 @@ impl CompressionScheduler {
     ///
     /// 老实现是"等信号量 → 再查一次暂停"两步，因为信号量不知道暂停。
     /// 现在两者在同一次 CAS 里判断，拿到 permit 的那一刻必然既没暂停也没超载。
+    /// 测试专用：先拿一份预算，不关心演出条件（闸门一定是开的）。
     #[cfg(test)]
-    pub async fn acquire(self: &std::sync::Arc<Self>) -> ParallelPermit {
+    pub async fn acquire_permit(self: &std::sync::Arc<Self>) -> ParallelPermit {
         // 这里传一个永远为假的取消判据：调用方不关心取消，只是要闸门开。
-        self.acquire_or_cancelled(|| false)
-            .await
-            .expect("这个调用永远不会返回 Cancelled")
+        match self.acquire(|| false).await {
+            AcquireOutcome::Acquired(permit) => permit,
+            // 测试里的调用点都保证闸门开着；真出现说明用例自己写错了。
+            AcquireOutcome::Cancelled | AcquireOutcome::Stopped => {
+                unreachable!("这个调用永远不会返回 Cancelled / Stopped")
+            }
+        }
     }
 
-    /// 拿一份 CPU 预算，等待期间 `cancelled()` 变真、或批次被「停止」，就立刻退出等待并返回 None。
+    /// 拿一份 CPU 预算；等待期间 `cancelled()` 变真、或批次被「停止」，就退出等待。
     ///
-    /// 判断顺序是刻意的，**不能改**：先查取消 → 再查停止 → 最后才是暂停/名额。
+    /// 判定顺序是刻意的，**不能改**：取消 → 停止 → 暂停/名额。
     /// - 取消排最前：`paused == true` 且这个文件已被取消时，worker 能马上退出，
     ///   而暂停状态原样保留给其余还在排队的文件。
     /// - 停止排在暂停之前：暂停中按下停止，等待者必须能看见"整批已停"并退出，
     ///   否则它们会一直堵在关着的闸门上，直到用户点「继续」——那正是「停止」的反面。
-    pub async fn acquire_or_cancelled<F>(
-        self: &std::sync::Arc<Self>,
-        mut cancelled: F,
-    ) -> Option<ParallelPermit>
+    ///
+    /// 三种结局必须分开回给调用方（`AcquireOutcome`）：取消是"这个文件不再参与队列"，
+    /// 停止是"这一轮没轮到它，队列里它还是 pending"，两者的收尾动作完全相反。
+    pub async fn acquire<F>(self: &std::sync::Arc<Self>, mut cancelled: F) -> AcquireOutcome
     where
         F: FnMut() -> bool,
     {
         loop {
-            if cancelled() || self.is_stopping() {
-                return None;
+            if cancelled() {
+                return AcquireOutcome::Cancelled;
+            }
+            if self.is_stopping() {
+                return AcquireOutcome::Stopped;
             }
             if let Some(permit) = self.try_acquire() {
                 // 拿到的这一刻才被取消 / 才点了停止：还回预算，这个文件不压。
-                if cancelled() || self.is_stopping() {
+                if cancelled() {
                     drop(permit);
-                    return None;
+                    return AcquireOutcome::Cancelled;
                 }
-                return Some(permit);
+                if self.is_stopping() {
+                    drop(permit);
+                    return AcquireOutcome::Stopped;
+                }
+                return AcquireOutcome::Acquired(permit);
             }
             let notified = self.notify.notified();
             let _ = tokio::time::timeout(Duration::from_millis(250), notified).await;
@@ -270,15 +296,60 @@ impl Drop for ParallelPermit {
 pub const COMPARE_WINDOW_LABEL: &str = "compare";
 
 // ─── Progress event payload ─────────────────────────────────────
+/// 单个文件的进度状态。**用枚举而不是字符串**：老实现里"完成了但失败"和"被跳过"
+/// 都靠一个空字符串 + 有没有 result 去猜，前端只能反过来推。
+///
+/// - `Queued`：这一轮开始了，它排在队列里。
+/// - `Starting`：真的开工了（已经拿到闸门名额）。
+/// - `Completed` / `Failed`：跑完了，`result` 里带着明细。
+/// - `Cancelled`：用户明确把这个文件移出了队列 —— 它不再参与本轮，也不该再回队列。
+/// - `Deferred`：整批被「停止」，这一轮没轮到它 —— **队列里它仍然是 pending**，
+///   下一次「继续压缩」会带上它。它没有 `result`，因为它压根没执行。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProgressStatus {
+    Queued,
+    Starting,
+    Completed,
+    Failed,
+    Cancelled,
+    Deferred,
+}
+
+/// 一条进度事件。`session_id` 是这一轮执行会话的标识：**逐条事件都带着它**，
+/// 前端据此彻底阻断跨会话污染（上一轮迟到的 deferred 事件不许影响下一轮）。
+///
+/// `session_total` / `session_processed` 只描述**这一轮**（诊断用）：
+/// 界面上的总进度由前端的队列状态派生（见 frontend/app.js 的 getQueueProgress），
+/// 不是这个计数 —— 停止后重新开始一轮时，sessionTotal 会变小，而队列进度不该变小。
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct ProgressPayload {
-    total: usize,
-    current: usize,
+pub struct ProgressPayload {
+    session_id: String,
     file: String,
-    status: String,
+    status: ProgressStatus,
+    /// 本轮的目标文件数（停止后重新开始的那一轮只数 pending）。
+    session_total: usize,
+    /// 本轮真正处理完的数量 + 明确取消的数量；`Deferred` **不增加**它。
+    session_processed: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     result: Option<CompressResult>,
+}
+
+/// 一轮执行的收尾报告。只用于诊断：界面总进度看队列，不看这里。
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CompressionSessionResult {
+    session_id: String,
+    /// 真正跑过的文件数（= results.len()）。
+    attempted: usize,
+    completed: usize,
+    failed: usize,
+    /// 因为「停止」这一轮没轮到的文件数 —— 它们在队列里仍然是 pending。
+    deferred: usize,
+    /// 被用户明确取消（移出队列）的文件数。
+    cancelled: usize,
+    results: Vec<CompressResult>,
 }
 
 /// 批次阶段变化的载荷。
@@ -699,18 +770,26 @@ fn take_cancelled(cancel_queue: &Mutex<HashSet<String>>, file_path: &str) -> boo
 // CAS 里判断，拿到 permit 的那一刻闸门必然是开的。老实现要"等信号量 → 再查一次暂停"，
 // 因为信号量不知道暂停这回事。
 
+/// 跑一轮执行会话：只处理传进来的这些文件（前端的「继续压缩」只提交 pending）。
+///
+/// 一轮的流程（与前端 Session 一一对应）：
+/// `begin_batch` → 逐个文件过闸门 → 拿到名额的开工 → 等所有真正在跑的收尾 →
+/// `end_batch` → 回报本轮结果。
+/// 被「停止」挡在闸门外的文件发 `deferred` 事件后就地结束，**不进 results**：
+/// 它们没执行过，队列里仍然是 pending，下一轮自然带上。
 async fn compress_batch(
     app: &AppHandle,
     state: &AppState,
+    session_id: String,
     file_paths: Vec<String>,
     options: CompressOptions,
     use_smart: bool,
-) -> Vec<CompressResult> {
+) -> CompressionSessionResult {
     // Keep cancellations that arrive between the frontend's start request and
     // this command's first poll. The queue is cleared after all workers exit,
     // so a completed batch cannot leak cancellation state into the next one.
     let all_files = collect_image_files(&file_paths);
-    let total = all_files.len();
+    let session_total = all_files.len();
 
     // 沙盒版只对用户刚选中的路径持有授权：趁现在还能访问，把这批输入存成书签，
     // 否则重启后历史记录指向的位置再也读不到。
@@ -734,10 +813,11 @@ async fn compress_batch(
         let _ = app.emit(
             "compress-progress",
             ProgressPayload {
-                total,
-                current: 0,
+                session_id: session_id.clone(),
                 file: fp.clone(),
-                status: "queued".into(),
+                status: ProgressStatus::Queued,
+                session_total,
+                session_processed: 0,
                 result: None,
             },
         );
@@ -755,27 +835,52 @@ async fn compress_batch(
     let history = state.history_store.clone();
     let transactions = state.transactions.clone();
     let results_arc = Arc::new(Mutex::new(Vec::<CompressResult>::new()));
-    let processed_arc = Arc::new(Mutex::new(0usize));
+    // 本轮真正处理完的数量 + 明确取消的数量。`deferred` 绝不加它：
+    // 没执行过的文件不算处理过，否则"停止后继续"的进度会凭空多出一截。
+    let processed_arc = Arc::new(AtomicUsize::new(0));
+    let deferred = Arc::new(AtomicUsize::new(0));
+    let cancelled_count = Arc::new(AtomicUsize::new(0));
+    let session_id_arc = Arc::new(session_id.clone());
 
     let mut handles: Vec<(tokio::task::JoinHandle<()>, String)> = Vec::new();
     for file_path in all_files {
         // 闸门：暂停或名额满了就在这里等，拿到的瞬间两者都已满足。
         // 等待期间这个文件被取消就直接退出，**绝不因此解除暂停**。
-        let permit = match control
-            .acquire_or_cancelled(|| take_cancelled(cancel_queue, &file_path))
-            .await
-        {
-            Some(permit) => permit,
-            None => {
-                let mut pr = processed_arc.lock().await;
-                *pr += 1;
+        let outcome = control
+            .acquire(|| take_cancelled(cancel_queue, &file_path))
+            .await;
+        let permit = match outcome {
+            AcquireOutcome::Acquired(permit) => permit,
+            // 用户明确把这个文件移出队列：报一条 cancelled，它本轮到此为止。
+            AcquireOutcome::Cancelled => {
+                let done = processed_arc.fetch_add(1, Ordering::SeqCst) + 1;
+                cancelled_count.fetch_add(1, Ordering::SeqCst);
                 let _ = app_arc.emit(
                     "compress-progress",
                     ProgressPayload {
-                        total,
-                        current: *pr,
+                        session_id: session_id_arc.to_string(),
                         file: file_path.clone(),
-                        status: "cancelled".into(),
+                        status: ProgressStatus::Cancelled,
+                        session_total,
+                        session_processed: done,
+                        result: None,
+                    },
+                );
+                continue;
+            }
+            // 整批被停止：这一轮没轮到它。**不生成任何 result、也不计入 session_processed**，
+            // 只告诉前端"这一个是 deferred"——它在前端的队列里仍然是 pending。
+            AcquireOutcome::Stopped => {
+                deferred.fetch_add(1, Ordering::SeqCst);
+                let done = processed_arc.load(Ordering::SeqCst);
+                let _ = app_arc.emit(
+                    "compress-progress",
+                    ProgressPayload {
+                        session_id: session_id_arc.to_string(),
+                        file: file_path.clone(),
+                        status: ProgressStatus::Deferred,
+                        session_total,
+                        session_processed: done,
                         result: None,
                     },
                 );
@@ -785,14 +890,15 @@ async fn compress_batch(
 
         // Emit "starting" only after the worker is available.
         {
-            let pr = processed_arc.lock().await;
+            let pr = processed_arc.load(Ordering::SeqCst);
             let _ = app_arc.emit(
                 "compress-progress",
                 ProgressPayload {
-                    total,
-                    current: *pr,
+                    session_id: session_id_arc.to_string(),
                     file: file_path.clone(),
-                    status: "starting".into(),
+                    status: ProgressStatus::Starting,
+                    session_total,
+                    session_processed: pr,
                     result: None,
                 },
             );
@@ -805,13 +911,13 @@ async fn compress_batch(
         let transactions_c = transactions.clone();
         let results_c = results_arc.clone();
         let processed_c = processed_arc.clone();
+        let session_id_c = session_id_arc.clone();
         let fp = file_path.clone();
 
         let fp_for_track = fp.clone();
         handles.push((tokio::spawn(async move {
             let _permit = permit; // 持有信号量直到压缩完成
 
-            eprintln!("[DEBUG] spawn task started for: {}", fp);
             let path = PathBuf::from(&fp);
             let engine_result = if use_smart {
                 engine::compress_smart(&path, &opts).await
@@ -837,17 +943,21 @@ async fn compress_batch(
                 result.error = Some(error.user_message());
             }
 
-            eprintln!("[DEBUG] spawn task done for: {} success={}", fp, result.success);
             {
-                let mut pr = processed_c.lock().await;
-                *pr += 1;
+                let done = processed_c.fetch_add(1, Ordering::SeqCst) + 1;
+                let status = if result.success {
+                    ProgressStatus::Completed
+                } else {
+                    ProgressStatus::Failed
+                };
                 let _ = app_c.emit(
                     "compress-progress",
                     ProgressPayload {
-                        total,
-                        current: *pr,
+                        session_id: session_id_c.to_string(),
                         file: fp.clone(),
-                        status: "".into(),
+                        status,
+                        session_total,
+                        session_processed: done,
                         result: Some(result.clone()),
                     },
                 );
@@ -862,30 +972,16 @@ async fn compress_batch(
     for (handle, fp) in handles {
         if let Err(e) = handle.await {
             eprintln!("[ERROR] compression task panicked for {}: {:?}", fp, e);
-            let mut pr = processed_arc.lock().await;
-            *pr += 1;
+            let done = processed_arc.fetch_add(1, Ordering::SeqCst) + 1;
             let _ = app_arc.emit(
                 "compress-progress",
                 ProgressPayload {
-                    total,
-                    current: *pr,
+                    session_id: session_id_arc.to_string(),
                     file: fp.clone(),
-                    status: "".into(),
-                    result: Some(CompressResult {
-                        success: false,
-                        file: fp,
-                        original_size: 0,
-                        compressed_size: 0,
-                        savings: 0.0,
-                        original_size_formatted: "0 B".into(),
-                        compressed_size_formatted: "0 B".into(),
-                        out_type: "unknown".into(),
-                        algorithm: "none".into(),
-                        error: Some("压缩过程发生内部错误".into()),
-                        output_path: None,
-                        backup_path: None,
-                        output_mode: None,
-                    }),
+                    status: ProgressStatus::Failed,
+                    session_total,
+                    session_processed: done,
+                    result: Some(failed_result(fp)),
                 },
             );
         }
@@ -896,7 +992,35 @@ async fn compress_batch(
     state.compression.end_batch();
     emit_compression_state(app, &state.compression);
     let final_results = results_arc.lock().await.clone();
-    final_results
+    let completed = final_results.iter().filter(|r| r.success).count();
+    let failed = final_results.len() - completed;
+    CompressionSessionResult {
+        session_id,
+        attempted: final_results.len(),
+        completed,
+        failed,
+        deferred: deferred.load(Ordering::SeqCst),
+        cancelled: cancelled_count.load(Ordering::SeqCst),
+        results: final_results,
+    }
+}
+
+fn failed_result(file: String) -> CompressResult {
+    CompressResult {
+        success: false,
+        file,
+        original_size: 0,
+        compressed_size: 0,
+        savings: 0.0,
+        original_size_formatted: "0 B".into(),
+        compressed_size_formatted: "0 B".into(),
+        out_type: "unknown".into(),
+        algorithm: "none".into(),
+        error: Some("压缩过程发生内部错误".into()),
+        output_path: None,
+        backup_path: None,
+        output_mode: None,
+    }
 }
 
 // ─── Tauri commands ─────────────────────────────────────────────
@@ -967,25 +1091,28 @@ pub fn expand_image_files(file_paths: Vec<String>) -> Vec<String> {
     collect_image_files(&file_paths)
 }
 
+/// 一轮执行会话的入口。`session_id` 由前端生成并原样回传，所有进度事件都带着它 ——
+/// 前端据此把"上一轮迟到的收尾事件"和"这一轮正在进行的事件"彻底分开。
 #[tauri::command]
 pub async fn compress_files(
     app: AppHandle,
     state: State<'_, AppState>,
+    session_id: String,
     file_paths: Vec<String>,
     options: CompressOptions,
-) -> Result<Vec<CompressResult>, String> {
-    eprintln!("[DEBUG] compress_files invoked: {} files, quality={}", file_paths.len(), options.quality);
-    Ok(compress_batch(&app, state.inner(), file_paths, options, false).await)
+) -> Result<CompressionSessionResult, String> {
+    Ok(compress_batch(&app, state.inner(), session_id, file_paths, options, false).await)
 }
 
 #[tauri::command]
 pub async fn compress_smart(
     app: AppHandle,
     state: State<'_, AppState>,
+    session_id: String,
     file_paths: Vec<String>,
     options: CompressOptions,
-) -> Result<Vec<CompressResult>, String> {
-    Ok(compress_batch(&app, state.inner(), file_paths, options, true).await)
+) -> Result<CompressionSessionResult, String> {
+    Ok(compress_batch(&app, state.inner(), session_id, file_paths, options, true).await)
 }
 
 #[tauri::command]
@@ -1094,11 +1221,14 @@ pub fn resume_compression(app: AppHandle, state: State<'_, AppState>) -> Compres
     state.compression.state()
 }
 
-/// 停止整批：等待中的文件全部作废，正在压的几个跑完，批次收尾后回到 idle。
+/// 停止**这一轮**：还没轮到的文件不再启动，正在压的几个跑完，本轮收尾后回到 idle。
+///
+/// 停止**不是取消**：没轮到的文件各自收到一条 `deferred` 事件，队伍里仍然是 pending，
+/// 用户点「继续压缩」时新一轮会把它们带上（见 `AcquireOutcome`）。
 ///
 /// 不需要前端把路径传进来 —— 闸门自己认得 `stopping`，排在后面的文件
-/// 一个个在 `acquire_or_cancelled` 里自行退出（它们会各自收到一次 cancelled 事件）。
-/// 这也是"停止"比"逐个取消"更可靠的地方：不存在"部分已停、部分还在排队"的中间态。
+/// 一个个在 `acquire` 里自行退出。这也是"停止"比"逐个取消"更可靠的地方：
+/// 不存在"部分已停、部分还在排队"的中间态。
 #[tauri::command]
 pub fn stop_compression(app: AppHandle, state: State<'_, AppState>) -> CompressionState {
     state.compression.stop();
@@ -1635,6 +1765,15 @@ mod tests {
         false
     }
 
+    /// `AcquireOutcome` 不是 PartialEq（permit 没法比），断言只看它落在哪一支。
+    fn outcome_name(outcome: AcquireOutcome) -> &'static str {
+        match outcome {
+            AcquireOutcome::Acquired(_) => "acquired",
+            AcquireOutcome::Cancelled => "cancelled",
+            AcquireOutcome::Stopped => "stopped",
+        }
+    }
+
     /// 上限就是上限：limit=3 时任何时刻最多 3 份在跑；暂停只拦新任务，不 interrupt 已开跑的。
     ///
     /// 用 work_gate（0 号牌的信号量）当"任务什么时候算跑完"的手动开关，避免靠 sleep 猜时序。
@@ -1657,7 +1796,7 @@ mod tests {
                 let mut running = Vec::new();
                 for _ in 0..10 {
                     // 闸门：暂停或名额满了就等在这里。
-                    let permit = scheduler.acquire().await;
+                    let permit = scheduler.acquire_permit().await;
                     let running_now = started.fetch_add(1, Ordering::SeqCst) + 1;
                     peak.fetch_max(running_now, Ordering::SeqCst);
                     let work_gate = work_gate.clone();
@@ -1723,13 +1862,13 @@ mod tests {
         let scheduler = std::sync::Arc::new(CompressionScheduler::new(2));
         scheduler.begin_batch();
         // 先占满两个名额 —— 这两个就是"正在压缩的图片"。
-        let first = scheduler.acquire().await;
-        let second = scheduler.acquire().await;
+        let first = scheduler.acquire_permit().await;
+        let second = scheduler.acquire_permit().await;
         assert_eq!(scheduler.active(), 2);
 
         let waiter = {
             let scheduler = scheduler.clone();
-            tokio::spawn(async move { scheduler.acquire_or_cancelled(|| false).await.is_some() })
+            tokio::spawn(async move { outcome_name(scheduler.acquire(|| false).await) })
         };
         tokio::task::yield_now().await;
         assert!(!waiter.is_finished(), "名额满了，第三个文件就该在闸门上等");
@@ -1738,19 +1877,22 @@ mod tests {
         assert_eq!(scheduler.state(), CompressionState::Stopping);
         assert_eq!(
             waiter.await.unwrap(),
-            false,
+            "stopped",
             "停止后等待中的文件必须自己退出，不能等到名额空出来再开工"
         );
         assert_eq!(scheduler.active(), 2, "已经在跑的两个不许被抢走名额");
-        assert!(
-            scheduler.acquire_or_cancelled(|| false).await.is_none(),
+        // 必须报 Stopped 而不是 Cancelled：这个文件该留在队列里等下一轮。
+        assert_eq!(
+            outcome_name(scheduler.acquire(|| false).await),
+            "stopped",
             "停止后闸门对后来者是关的"
         );
 
         // 关键：停止不是暂停。即使有人误调 resume()，批次的闸门也不该重新打开。
         scheduler.resume();
-        assert!(
-            scheduler.acquire_or_cancelled(|| false).await.is_none(),
+        assert_eq!(
+            outcome_name(scheduler.acquire(|| false).await),
+            "stopped",
             "停止不可逆：resume() 不许把停止的批次放回来"
         );
         assert_eq!(scheduler.state(), CompressionState::Stopping);
@@ -1767,21 +1909,22 @@ mod tests {
     async fn stopping_while_paused_finishes_the_batch_instead_of_waiting_for_resume() {
         let scheduler = std::sync::Arc::new(CompressionScheduler::new(1));
         scheduler.begin_batch();
-        let running = scheduler.acquire().await;
+        let running = scheduler.acquire_permit().await;
         scheduler.pause();
         assert_eq!(scheduler.state(), CompressionState::Paused);
 
         let waiter = {
             let scheduler = scheduler.clone();
-            tokio::spawn(async move { scheduler.acquire_or_cancelled(|| false).await.is_some() })
+            tokio::spawn(async move { outcome_name(scheduler.acquire(|| false).await) })
         };
         tokio::task::yield_now().await;
         assert!(!waiter.is_finished(), "暂停时等待者必须被拦住");
 
         scheduler.stop();
         assert_eq!(scheduler.state(), CompressionState::Stopping);
-        assert!(
-            !waiter.await.unwrap(),
+        assert_eq!(
+            waiter.await.unwrap(),
+            "stopped",
             "暂停中停止：等待者必须退出（判断顺序是 取消 → 停止 → 暂停，不能反过来）"
         );
         assert_eq!(scheduler.active(), 1, "在跑的那个照旧跑完");
@@ -1802,6 +1945,77 @@ mod tests {
         scheduler.begin_batch();
         assert_eq!(scheduler.state(), CompressionState::Running);
         assert!(!scheduler.is_stopping(), "新一批必须从「未停止」开始");
+    }
+
+    /// 「停止」与「取消」必须给出两种结局：前者是"这一轮没轮到"，后者是"这个文件出局"。
+    ///
+    /// 混成一个 `None` 时，`compress_batch` 只能统一报 cancelled，于是"停止后 70 张图
+    /// 全变成已跳过、再也没法继续"——那是把批次级的动作记成了文件级的终态。
+    #[tokio::test]
+    async fn stopping_defers_a_waiting_file_while_removing_it_cancels_it() {
+        let scheduler = std::sync::Arc::new(CompressionScheduler::new(1));
+        let queue = std::sync::Arc::new(Mutex::new(HashSet::new()));
+        scheduler.begin_batch();
+        let held = scheduler.acquire_permit().await;
+
+        // ① 停止：等待者拿到的必须是 Stopped（它该留在队列里等下一轮）。
+        let deferred = {
+            let scheduler = scheduler.clone();
+            tokio::spawn(async move { outcome_name(scheduler.acquire(|| false).await) })
+        };
+        tokio::task::yield_now().await;
+        assert!(!deferred.is_finished(), "名额占满时它就该在闸门上等");
+        scheduler.stop();
+        assert_eq!(
+            deferred.await.unwrap(),
+            "stopped",
+            "停止只结束这一轮，文件不算被取消"
+        );
+
+        // ② 取消：新一批里把文件移出队列，拿到的必须是 Cancelled。
+        scheduler.end_batch();
+        scheduler.begin_batch();
+        queue.lock().unwrap().insert("/gone.png".to_string());
+        assert_eq!(
+            outcome_name(
+                scheduler
+                    .acquire(|| take_cancelled(&queue, "/gone.png"))
+                    .await
+            ),
+            "cancelled",
+            "用户移出队列的文件必须报 Cancelled，而不是 Stopped"
+        );
+
+        // ③ 两者同时成立时「取消」优先：用户点过 × 的文件本来就不该再压。
+        queue.lock().unwrap().insert("/both.png".to_string());
+        scheduler.stop();
+        assert_eq!(
+            outcome_name(
+                scheduler
+                    .acquire(|| take_cancelled(&queue, "/both.png"))
+                    .await
+            ),
+            "cancelled",
+            "判断顺序是 取消 → 停止"
+        );
+        drop(held);
+        scheduler.end_batch();
+    }
+
+    /// 进度状态的字面量就是前端的判据（app.js 的 progressHandler）：改一个字母
+    /// 前端就会把「跑完了」当成未知状态，界面停在转圈上。
+    #[test]
+    fn the_progress_status_wire_format_is_what_the_frontend_matches() {
+        for (status, wire) in [
+            (ProgressStatus::Queued, "\"queued\""),
+            (ProgressStatus::Starting, "\"starting\""),
+            (ProgressStatus::Completed, "\"completed\""),
+            (ProgressStatus::Failed, "\"failed\""),
+            (ProgressStatus::Cancelled, "\"cancelled\""),
+            (ProgressStatus::Deferred, "\"deferred\""),
+        ] {
+            assert_eq!(serde_json::to_string(&status).unwrap(), wire);
+        }
     }
 
     /// 前端认的是四个字面量（app.js 的 COMPRESSION_STATES 与事件载荷）：序列化结果必须
@@ -1834,20 +2048,23 @@ mod tests {
             let scheduler = scheduler.clone();
             let queue = queue.clone();
             tokio::spawn(async move {
-                scheduler
-                    .acquire_or_cancelled(|| take_cancelled(&queue, "/gone.png"))
-                    .await
+                outcome_name(
+                    scheduler
+                        .acquire(|| take_cancelled(&queue, "/gone.png"))
+                        .await,
+                )
             })
         };
         let staying = {
             let scheduler = scheduler.clone();
-            tokio::spawn(async move { scheduler.acquire().await })
+            tokio::spawn(async move { scheduler.acquire_permit().await })
         };
 
-        let exited = match tokio::time::timeout(Duration::from_millis(500), leaving).await {
-            Ok(Ok(None)) => true,
-            _ => false,
-        };
+        // 必须是 Cancelled 而不是 Stopped：用户移出队列的文件本轮到此为止。
+        let exited = matches!(
+            tokio::time::timeout(Duration::from_millis(500), leaving).await,
+            Ok(Ok(name)) if name == "cancelled"
+        );
         assert!(
             exited,
             "被取消的文件必须立刻退出等待，而不是拿着名额去压缩"
@@ -1874,13 +2091,13 @@ mod tests {
         let scheduler = std::sync::Arc::new(CompressionScheduler::new(1));
         scheduler.begin_batch();
         // 先占满唯一的名额，下一个任务就会堵在闸门上。
-        let held = scheduler.acquire().await;
+        let held = scheduler.acquire_permit().await;
         scheduler.pause();
 
         let waiter = {
             let scheduler = scheduler.clone();
             tokio::spawn(async move {
-                let permit = scheduler.acquire().await;
+                let permit = scheduler.acquire_permit().await;
                 drop(permit);
                 true
             })
@@ -1900,7 +2117,7 @@ mod tests {
         scheduler.begin_batch();
         let mut permits = Vec::new();
         for _ in 0..8 {
-            permits.push(scheduler.acquire().await);
+            permits.push(scheduler.acquire_permit().await);
         }
         assert_eq!(scheduler.active(), 8);
 
@@ -1924,13 +2141,13 @@ mod tests {
     async fn raising_the_limit_wakes_waiting_workers_immediately() {
         let scheduler = std::sync::Arc::new(CompressionScheduler::new(2));
         scheduler.begin_batch();
-        let held = vec![scheduler.acquire().await, scheduler.acquire().await];
+        let held = vec![scheduler.acquire_permit().await, scheduler.acquire_permit().await];
 
         let waiters: Vec<_> = (0..4)
             .map(|_| {
                 let scheduler = scheduler.clone();
                 tokio::spawn(async move {
-                    let permit = scheduler.acquire().await;
+                    let permit = scheduler.acquire_permit().await;
                     drop(permit);
                 })
             })
@@ -1951,7 +2168,7 @@ mod tests {
     async fn one_permit_serialises_the_whole_batch() {
         let scheduler = std::sync::Arc::new(CompressionScheduler::new(1));
         scheduler.begin_batch();
-        let held = scheduler.acquire().await;
+        let held = scheduler.acquire_permit().await;
         assert!(scheduler.try_acquire().is_none(), "limit=1 时任何时刻只能有一个任务");
         drop(held);
         assert!(scheduler.try_acquire().is_some());

@@ -2,7 +2,7 @@
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
-const { installStateMachine } = require('./app-slices.cjs');
+const { installStateMachine, installQueueCore } = require('./app-slices.cjs');
 
 function field(extra) {
   return Object.assign({
@@ -20,7 +20,8 @@ function field(extra) {
 }
 
 const elements = {
-  queueSummary: field(), compressBtnText: field(),
+  queueSummary: field(), compressBtnText: field(), compressBtnFill: field(),
+  startCompressBtn: field(),
   pauseCompressBtn: field(), pauseBtnText: field(), restoreAllBtn: field(),
   cpuDevice: field(), cpuCoreInfo: field(), cpuSchedulingNote: field(),
   cpuLimitSlider: field({ value: '3' }), cpuLimitValue: field(), cpuLimitAuto: field(),
@@ -32,9 +33,13 @@ const context = vm.createContext({
   console: { log: console.log, warn: console.warn, error: message => calls.push(['error', message]) },
   Set, Map, Promise, JSON, Math, String, Number, parseInt, Object, Array,
   files: Array.from({ length: 20 }, (_, i) => `/img-${i}.png`),
-  results: [], processingMode: 'advanced',
+  queueItems: new Map(Array.from({ length: 20 }, (_, i) => [`/img-${i}.png`, {
+    path: `/img-${i}.png`, state: 'pending', result: null, originalSize: null,
+  }])),
+  processingMode: 'advanced',
   document: { getElementById: id => elements[id] || null },
   applyQueueView() {}, showToast(message) { calls.push(['toast', message]); },
+  iconMarkup: name => '<svg><use href="#icon-' + name + '"></use></svg>',
   loadRetentionSetting: async () => {},
   invoke: async (command, args) => {
     calls.push([command, args]);
@@ -58,6 +63,8 @@ const source = require('./app-slices.cjs').source;
 const slice = (from, to) => source.slice(source.indexOf(from), source.indexOf(to));
 vm.runInContext(slice('function updateQueueSummary(', 'function toggleQueueSortDirection('), context);
 vm.runInContext(slice('function processingActionText(', 'function setProcessingMode('), context);
+installQueueCore(context);
+vm.runInContext(slice('function renderStartButton(', 'function setPauseButtonVisible('), context);
 installStateMachine(context);
 context.setCompressionState('running', true);
 vm.runInContext(slice('// ─── 设置页：CPU 使用上限', '// ─── Comparison（独立原生窗口）'), context);
@@ -95,13 +102,13 @@ const winArm = {
 
   // 队列摘要：自动时只说"CPU 自动"，不假装知道具体数字。
   context.updateQueueSummary();
-  assert.equal(elements.queueSummary.textContent, '0 / 20 已完成 · CPU 自动');
+  assert.equal(elements.queueSummary.textContent, '0 / 20 已处理 · CPU 自动');
   context.setCompressionState('paused', true);
   context.updateQueueSummary();
-  assert.equal(elements.queueSummary.textContent, '0 / 20 已完成 · 已暂停 · CPU 自动');
+  assert.equal(elements.queueSummary.textContent, '0 / 20 已处理 · 已暂停 · CPU 自动');
   context.setCompressionState('stopping', true);
   context.updateQueueSummary();
-  assert.equal(elements.queueSummary.textContent, '0 / 20 已完成 · 正在停止 · CPU 自动',
+  assert.equal(elements.queueSummary.textContent, '0 / 20 已处理 · 正在停止 · CPU 自动',
     '停止收尾时摘要要说"正在停止"，不能说还在跑');
   context.setCompressionState('running', true);
 
@@ -111,7 +118,7 @@ const winArm = {
   assert.equal(last('set_cpu_thread_limit')[1].limit, 4);
   assert.equal(elements.cpuLimitValue.textContent, '4 / 10');
   context.updateQueueSummary();
-  assert.equal(elements.queueSummary.textContent, '0 / 20 已完成 · CPU 4/10');
+  assert.equal(elements.queueSummary.textContent, '0 / 20 已处理 · CPU 4/10');
   await context.saveCpuThreadLimit(null);
   assert.equal(elements.cpuLimitValue.textContent, '自动（3）');
   assert.ok(last('set_cpu_thread_limit') && lastLimit() === null, '自动必须传 null，不是 0');
@@ -136,7 +143,7 @@ const winArm = {
   assert.match(elements.cpuLimitValue.textContent, /^4 \/ 12$/);
   assert.equal(elements.cpuSchedulingNote.style.display, 'none', 'Intel 无 P/E 核可调度');
   context.updateQueueSummary();
-  assert.equal(elements.queueSummary.textContent, '0 / 20 已完成 · CPU 4/12');
+  assert.equal(elements.queueSummary.textContent, '0 / 20 已处理 · CPU 4/12');
 
   // ── Windows ARM64：同为 aarch64，不能被认成 Apple Silicon ──
   status = winArm;
