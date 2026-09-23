@@ -1276,7 +1276,7 @@ function showView(name) {
   if (settingsBtn) settingsBtn.classList.toggle('active', view === 'settings');
   // 每次进入都重新读盘：历史是后端状态，不能只信启动时那份快照。
   if (view === 'history') refreshHistory();
-  if (view === 'settings') { loadRetentionSetting(); loadCpuSetting(); }
+  if (view === 'settings') { loadRetentionSetting(); loadCpuSetting(); initUpdatePanel(); }
 }
 
 // ─── 暂停 / 继续 ────────────────────────────────────────────────
@@ -1887,17 +1887,32 @@ function toggleTitlebarInfo() {
   info.style.display = 'inline-flex';
   var ver = document.getElementById('titlebarInfoVersion');
   if (ver) ver.textContent = 'v' + (window.appVersion || '2.0.0') + ' ' + BUILD_VARIANT;
-  var btn = document.getElementById('aboutUpdateBtn');
-  if (btn && BUILD_VARIANT !== 'Direct') btn.style.display = 'none';
+}
+
+/// 更新面板在设置页里，但启动时的静默检查可能先于用户进设置页就发现了新版本，
+/// 所以元素一律先按产物线摆好，谁先来谁写。
+/// App Store 版不加载 updater 插件 —— 那一行直接不出现，改说一句实话，
+/// 而不是留一个按下去只会失败的按钮。
+function initUpdatePanel() {
+  var version = document.getElementById('updateVersion');
+  // 版本号是异步取的：没取到之前宁可留 HTML 里的「—」，别显示半截「 Direct」。
+  if (version && window.appVersion) version.textContent = 'v' + window.appVersion + ' ' + BUILD_VARIANT;
+  var isDirect = BUILD_VARIANT === 'Direct';
+  var checkRow = document.getElementById('updateCheckRow');
+  var directNote = document.getElementById('updateDirectNote');
+  var appStoreNote = document.getElementById('updateAppStoreNote');
+  if (checkRow) checkRow.style.display = isDirect ? '' : 'none';
+  if (directNote) directNote.style.display = isDirect ? '' : 'none';
+  if (appStoreNote) appStoreNote.style.display = isDirect ? 'none' : '';
 }
 
 function getUpdateStatusEl() {
-  return document.getElementById('aboutUpdateStatus');
+  return document.getElementById('updateStatus');
 }
 
 async function manualCheckUpdate() {
-  var btn = document.getElementById('aboutUpdateBtn');
-  if (!btn || btn.dataset.mode === 'downloading') return;
+  var btn = document.getElementById('updateCheckBtn');
+  if (!btn || btn.dataset.downloading === '1') return;
   var statusEl = getUpdateStatusEl();
   btn.disabled = true;
   btn.textContent = '检查中';
@@ -1923,12 +1938,15 @@ async function manualCheckUpdate() {
 
 function startUpdateDownload(btn, statusEl, version) {
   btn.dataset.downloading = '1';
-  var tbUpdate = document.getElementById('titlebarUpdate');
-  var tbText = document.getElementById('titlebarUpdateText');
+  var row = document.getElementById('updateDownloadRow');
+  var text = document.getElementById('updateProgressText');
+  var fill = document.getElementById('updateProgressFill');
+  // 标题栏那根窗口级进度条照旧推：下载中途切回队列页也看得见动静。
   var tbBar = document.getElementById('titlebarProgress');
-  if (tbUpdate) tbUpdate.style.display = 'inline-flex';
+  if (row) row.style.display = '';
+  if (fill) fill.style.width = '0%';
   if (tbBar) tbBar.style.width = '0%';
-  if (tbText) tbText.textContent = '下载中 0%';
+  if (text) text.textContent = '下载中 0%';
   if (statusEl) statusEl.textContent = '';
   btn.disabled = true;
 
@@ -1936,37 +1954,44 @@ function startUpdateDownload(btn, statusEl, version) {
   listen('update-progress', function(event) {
     var pct = event.payload || 0;
     if (tbBar) tbBar.style.width = pct + '%';
-    if (tbText) tbText.textContent = '下载中 ' + pct + '%';
+    if (fill) fill.style.width = pct + '%';
+    if (text) text.textContent = '下载中 ' + pct + '%';
   }).then(function(fn) { unlistenFn = fn; });
 
   invoke('install_update')
     .then(function() {
-      if (tbText) tbText.textContent = '安装中…';
+      if (text) text.textContent = '安装中…';
+      if (fill) fill.style.width = '100%';
       if (tbBar) tbBar.style.width = '100%';
     })
     .catch(function(err) {
       if (unlistenFn) unlistenFn();
       if (btn.dataset.downloading !== '1') return;
       btn.dataset.downloading = '';
-      if (tbUpdate) tbUpdate.style.display = 'none';
-      if (tbBar) tbBar.style.width = '0%';
+      endUpdateDownload();
       btn.disabled = false;
       btn.textContent = '立即更新';
-        var cancelled = String(err).indexOf('取消') >= 0;
-        if (statusEl) statusEl.textContent = cancelled
-          ? 'v' + version + ' 可用'
-         : '更新失败';
-     });
+      var cancelled = String(err).indexOf('取消') >= 0;
+      if (statusEl) statusEl.textContent = cancelled ? 'v' + version + ' 可用' : '更新失败';
+    });
+}
+
+/// 下载停下来了（取消、失败都算）：面板那一行收起来，窗口进度条归零。
+/// 成功安装时不调用它 —— 那一刻界面正等着被替换掉。
+function endUpdateDownload() {
+  var row = document.getElementById('updateDownloadRow');
+  var fill = document.getElementById('updateProgressFill');
+  var tbBar = document.getElementById('titlebarProgress');
+  if (row) row.style.display = 'none';
+  if (fill) fill.style.width = '0%';
+  if (tbBar) tbBar.style.width = '0%';
 }
 
 function cancelUpdateDownload() {
   invoke('cancel_update').catch(function(){});
-  var tbUpdate = document.getElementById('titlebarUpdate');
-  var tbBar = document.getElementById('titlebarProgress');
-  var btn = document.getElementById('aboutUpdateBtn');
+  endUpdateDownload();
+  var btn = document.getElementById('updateCheckBtn');
   var statusEl = getUpdateStatusEl();
-  if (tbUpdate) tbUpdate.style.display = 'none';
-  if (tbBar) tbBar.style.width = '0%';
   if (btn && btn.dataset.downloading === '1') {
     btn.dataset.downloading = '';
     btn.disabled = false;
@@ -1981,7 +2006,7 @@ async function checkDirectUpdate() {
   try {
     const update = await invoke('check_for_update');
     if (!update) return;
-    var btn = document.getElementById('aboutUpdateBtn');
+    var btn = document.getElementById('updateCheckBtn');
     if (btn) {
       var statusEl = getUpdateStatusEl();
       btn.textContent = '立即更新';
@@ -2100,6 +2125,7 @@ function loadCompressSettings() {
   updateQualitySlider();
   invoke('get_app_version').then(v => {
     window.appVersion = v;
+    initUpdatePanel();
     setTimeout(checkDirectUpdate, 1500);
   }).catch(() => {});
 })();

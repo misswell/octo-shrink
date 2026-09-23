@@ -71,18 +71,11 @@
    <div class="titlebar-drag" data-tauri-drag-region>
      <img src="octo-icon-light.png" data-light-src="octo-icon-light.png" data-dark-src="octo-icon-dark.png" class="titlebar-icon-img" alt="章小压">
      <span class="titlebar-text">OctoShrink</span>
-      <span class="titlebar-update" id="titlebarUpdate" style="display:none;">
-        <span class="titlebar-update-text" id="titlebarUpdateText">下载中 0%</span>
-        <button class="titlebar-update-cancel" onclick="cancelUpdateDownload()" aria-label="取消下载"><svg class="symbol-icon symbol-icon-small" aria-hidden="true"><use href="#icon-close"/></svg></button>
-      </span>
    </div>
     <div class="titlebar-progress" id="titlebarProgress" style="width:0%"></div>
   <div class="titlebar-actions">
      <span class="titlebar-info" id="titlebarInfo" style="display:none;">
        <span class="titlebar-info-version" id="titlebarInfoVersion"></span>
-       <span class="titlebar-info-status" id="aboutUpdateStatus"></span>
-      <a class="titlebar-info-link" href="https://github.com/misswell/octo-shrink/releases/latest" target="_blank" rel="noopener noreferrer" title="打开 GitHub Release 页面">下载页面</a>
-      <button class="titlebar-info-btn" id="aboutUpdateBtn" onclick="manualCheckUpdate()">检查更新</button>
       <button class="titlebar-info-btn" onclick="resetSettings()">还原默认设置</button>
      </span>
      <button class="tb-btn" id="historyViewBtn" onclick="showView('history')" title="历史记录">
@@ -492,6 +485,43 @@
           限制 OctoShrink 同时使用的 CPU 并行能力。<br>
           较低的数值会降低压缩速度，但可为其他应用保留更多性能。
           <span id="cpuSchedulingNote" style="display:none;"><br>系统会自动在性能核与能效核之间调度任务。</span>
+        </p>
+      </div>
+    </div>
+
+    <div class="settings-panel">
+      <div class="settings-header view-section-header">
+        <h3>更新</h3>
+      </div>
+      <div class="settings-body">
+        <div class="settings-row">
+          <label>当前版本</label>
+          <div class="update-col">
+            <span class="update-version" id="updateVersion">—</span>
+            <span class="update-status" id="updateStatus"></span>
+          </div>
+        </div>
+        <div class="settings-row" id="updateCheckRow" style="display:none;">
+          <label>在线更新</label>
+          <div class="update-col">
+            <button class="btn btn-small" type="button" id="updateCheckBtn" onclick="manualCheckUpdate()">检查更新</button>
+            <a class="update-link" href="https://github.com/misswell/octo-shrink/releases/latest"
+              target="_blank" rel="noopener noreferrer" title="打开 GitHub Release 页面">Release 页面</a>
+          </div>
+        </div>
+        <div class="settings-row" id="updateDownloadRow" style="display:none;">
+          <label>下载进度</label>
+          <div class="update-col">
+            <div class="update-progress"><div class="update-progress-fill" id="updateProgressFill"></div></div>
+            <span class="update-progress-text" id="updateProgressText">下载中 0%</span>
+            <button class="btn btn-small" type="button" onclick="cancelUpdateDownload()">取消</button>
+          </div>
+        </div>
+        <p class="settings-copy" id="updateDirectNote" style="display:none;">
+          检查更新只访问 GitHub Releases；发现新版本要点「立即更新」才会下载，图片始终不离开这台机器。
+        </p>
+        <p class="settings-copy" id="updateAppStoreNote" style="display:none;">
+          本版本由 Mac App Store 分发，更新由 App Store 统一管理，应用内不再检查版本。
         </p>
       </div>
     </div>

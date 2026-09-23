@@ -125,31 +125,6 @@ body {
   transition: width .15s ease-out;
   z-index: 101;
 }
-.titlebar-update {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-left: 8px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  -webkit-app-region: no-drag;
-}
-.titlebar-update-text { white-space: nowrap; }
-.titlebar-update-cancel {
-  width: 14px; height: 14px;
-  border: none;
-  border-radius: 50%;
-  background: var(--bg-hover);
-  color: var(--text-secondary);
-  font-size: 9px;
-  line-height: 1;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-}
-.titlebar-update-cancel:hover { background: var(--bg-secondary); color: var(--text); }
 .titlebar-traffic-spacer {
   width: 80px;
   height: 100%;
@@ -260,15 +235,6 @@ body {
   -webkit-app-region: no-drag;
 }
 .titlebar-info-version { font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
-.titlebar-info-status { font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
-.titlebar-info-status.has-update { color: var(--accent, #4a9eff); font-weight: 600; }
-.titlebar-info-link {
-  color: var(--accent, #4a9eff);
-  font-size: 11px;
-  text-decoration: none;
-  white-space: nowrap;
-}
-.titlebar-info-link:hover { text-decoration: underline; }
 .titlebar-info-btn {
   padding: 2px 8px;
   border: 1px solid var(--border-color);
@@ -1711,6 +1677,33 @@ body.compare-page .compare-recompress { flex-shrink: 0; }
   line-height: 1.6;
   color: var(--text-secondary);
 }
+
+/* ─── 设置页「更新」─────────────────────────────────────────── */
+.update-col {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 210px;
+}
+.update-version { font-size: 12px; font-weight: 500; color: var(--text); }
+.update-status { font-size: 11px; color: var(--text-secondary); }
+.update-status.has-update { color: var(--accent); font-weight: 600; }
+.update-link { font-size: 11px; color: var(--accent); text-decoration: none; }
+.update-link:hover { text-decoration: underline; }
+.update-progress {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+.update-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width .15s ease-out;
+}
+.update-progress-text { font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
 
 /* ─── 历史列表（密集行，最新在上）─────────────────────────── */
 .history-list {

@@ -74,7 +74,7 @@ const context = vm.createContext({
   updateQueueSummary() {}, emitCompareResultsChanged() {}, showResults() {},
   renderRestoredActions() {},
   applyQueueView() {}, updateBulkActionButtons() {}, setPauseButtonVisible() {},
-  renderPauseControls() {},
+  renderPauseControls() {}, initUpdatePanel() {},
   loadCpuSetting: async () => {},
   invoke: async (command, args) => {
     invoked.push([command, args]);

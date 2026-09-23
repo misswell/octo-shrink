@@ -374,6 +374,7 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - swift/Sources/OctoShrinkSwift/Services/HistoryStore.swift — 同上的 Swift 原生线实现（`HistoryStore.shared` 全进程唯一）
 - swift/Sources/OctoShrinkSwift/Services/OutputTransactionStore.swift — Swift 线的覆盖事务凭证 + `OutputWriteError` / `StagedWrite`
 - tests/history-view.cjs（`npm run test:frontend`）— 前端历史页（每行按钮集合 / 重建条目 / 恢复只交 historyId / 冲突 force 重试 / 不保留档位 / 压缩中拒绝清空）、暂停与 CPU 上限纯逻辑自检
+- tests/update-panel.cjs（`npm run test:frontend`）— 更新面板：控件必须只在设置页容器内、标题栏不许留死样式，Direct 与 App Store 的显隐，下载进度在取消/失败后归零
 - scripts/test_swift_history.sh — Swift 线历史·备份·覆盖事务·恢复·取消与暂停·CPU 上限·历史行按钮自检（真跑文件系统，26 组）
 
 ## App Store 提交完整流程与注意事项
@@ -554,6 +555,7 @@ xcrun altool --upload-app \
 
 - macOS Direct 版通过 `tauri-plugin-updater` 检查 GitHub Release 的 `latest.json`，更新包必须使用项目 updater 私钥签名；仓库只保存 `tauri.conf.json` 中的公钥，私钥不得提交。
 - App Store 版不加载 updater 插件，继续由 Mac App Store 负责更新。
+- **更新 UI 只有一个落点：设置页的「更新」面板**（`frontend/index.html` 里 `#settingsView` 内，标题栏气泡不再放更新入口，只留窗口级 `#titlebarProgress` 进度条）。按产物线分叉的是显隐而不是行为：`initUpdatePanel()` 用 `BUILD_VARIANT` 决定「在线更新」那一行显示给谁 —— Direct 显示检查更新/Release 页面/下载进度，App Store 整行隐藏并改说一句实话。**不许给 App Store 版留一个按下去只会失败的检查更新按钮**（那条线上 `check_for_update` 是空壳）。回归：`tests/update-panel.cjs`（结构 + 两版显隐 + 下载取消后进度归零）。
 - GitHub Release 必须同时提供 macOS arm64、x86_64 与 Universal 2；Universal 内的主程序、CLI 工具和非系统 dylib 都必须包含双架构，不能只合并主程序。
 - Windows 与 Linux 产物继续由 `.github/workflows/release.yml` 并行构建。
 
