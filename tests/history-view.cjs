@@ -2,7 +2,7 @@
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
-const source = fs.readFileSync('frontend/app.js', 'utf8');
+const { installStateMachine } = require('./app-slices.cjs');
 
 function makeEl(tag) {
   let html = '';
@@ -60,7 +60,7 @@ const toasts = [];
 const context = vm.createContext({
   console, Set, Map, Promise, JSON, Math, Date, Number, String, Array, Object, isNaN,
   files: ['/Pictures/a.png', '/Pictures/b.png'], results: [], fileRows: {},
-  isCompressing: false, processingMode: 'advanced',
+  processingMode: 'advanced',
   confirm: () => confirmAnswer,
   document: {
     getElementById: id => ids[id] || null,
@@ -95,10 +95,12 @@ const context = vm.createContext({
     return null;
   },
 });
+const source = require('./app-slices.cjs').source;
 const slice = (from, to) => source.slice(source.indexOf(from), source.indexOf(to));
+installStateMachine(context);
 vm.runInContext(slice('function basename(', 'function imageFileSrc('), context);
 vm.runInContext(slice('function formatBytes(', '// ─── 页面导航'), context);
-vm.runInContext(slice('var VIEWS = ', '// ─── 暂停 / 继续'), context);
+vm.runInContext(slice('var VIEWS = ', '// ─── 压缩状态机'), context);
 vm.runInContext(slice('var RESTORE_CONFLICT_TEXT', 'async function exportAll('), context);
 vm.runInContext(slice('function renderQueueResultActions(', 'function copyCompressLog('), context);
 vm.runInContext(slice('var historyEntries = [];', '// ─── 设置页'), context);
@@ -313,7 +315,7 @@ const actionsOf = row => row.children[4].children.map(btn => btn.dataset.history
 
   // ── 压缩进行中不许清空历史：后端会拒绝，前端先收成不可点，别让人撞报错 ──
   context.historyEntries = [entry({})];
-  context.isCompressing = true;
+  context.setCompressionState('running', true);
   context.renderHistory();
   assert.equal(ids.historyClearBtn.disabled, true, '批次跑着的时候清空按钮必须不可点');
   assert.match(ids.historyClearBtn.title, /压缩进行中/);
@@ -323,7 +325,7 @@ const actionsOf = row => row.children[4].children.map(btn => btn.dataset.history
   assert.ok(!invoked.some(call => call[0] === 'clear_history'), '前端就不该发这次清空');
   assert.match(toasts[toasts.length - 1], /压缩进行中/);
 
-  context.isCompressing = false;
+  context.setCompressionState('idle', true);
   context.renderHistory();
   assert.equal(ids.historyClearBtn.disabled, false, '批次结束后必须恢复可用');
   invoked.length = 0;

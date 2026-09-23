@@ -60,6 +60,7 @@
       <symbol id="icon-sort-desc" viewBox="0 0 24 24"><path d="M6.6 4.4v15.2 M3.2 16.2 6.6 19.6 10 16.2"/><path d="M13.4 5.4h3.4 M13.4 11.4h5.4 M13.4 17.4h7.4"/></symbol>
       <symbol id="icon-pause" viewBox="0 0 24 24"><rect x="6.4" y="4.6" width="3.4" height="14.8" rx="1.5" fill="currentColor" stroke="none"/><rect x="14.2" y="4.6" width="3.4" height="14.8" rx="1.5" fill="currentColor" stroke="none"/></symbol>
       <symbol id="icon-play" viewBox="0 0 24 24"><path d="M8.4 4.9 19.3 12 8.4 19.1Z" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+      <symbol id="icon-stop" viewBox="0 0 24 24"><rect x="6.6" y="6.6" width="10.8" height="10.8" rx="2.2" fill="currentColor" stroke="none"/></symbol>
       <symbol id="icon-history" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.9"/><path d="M12 6.8v5.4l3.7 2.2"/></symbol>
       <symbol id="icon-settings" viewBox="0 0 24 24"><path d="M9.66,1.87 14.34,1.87 15.45,6.02 15.45,6.02 19.61,4.91 21.95,8.96 18.90,12.00 18.90,12.00 21.95,15.04 19.61,19.09 15.45,17.98 15.45,17.98 14.34,22.13 9.66,22.13 8.55,17.98 8.55,17.98 4.39,19.09 2.05,15.04 5.10,12.00 5.10,12.00 2.05,8.96 4.39,4.91 8.55,6.02 8.55,6.02Z"/><circle cx="12" cy="12" r="3.4"/></symbol>
       <symbol id="icon-back" viewBox="0 0 24 24"><path d="M19.6 12H4.4 M10.2 6.2 4.4 12l5.8 5.8"/></symbol>
@@ -190,6 +191,14 @@
           <span class="pause-btn-text" id="pauseBtnText">
             <svg class="symbol-icon symbol-icon-small"><use href="#icon-pause"/></svg>
             暂停
+          </span>
+        </button>
+        <button class="btn btn-small btn-secondary" id="stopCompressBtn" type="button"
+          onclick="stopCompression()" style="display:none;"
+          title="停止：等待中的文件会跳过，正在压缩的文件会先完成">
+          <span class="pause-btn-text" id="stopBtnText">
+            <svg class="symbol-icon symbol-icon-small"><use href="#icon-stop"/></svg>
+            停止
           </span>
         </button>
       </div>

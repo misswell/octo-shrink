@@ -488,6 +488,7 @@ pub fn run() {
             commands::restore_all,
             commands::pause_compression,
             commands::resume_compression,
+            commands::stop_compression,
             commands::get_compression_state,
             commands::cancel_batch,
             commands::list_history,

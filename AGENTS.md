@@ -140,7 +140,7 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - ✅ 输出文件名后缀支持自定义：默认 `_compressed`，两条产物线共用 `outputSuffix`，并对路径分隔符做安全清理
 - ✅ 两条产物线功能对齐：JXL 已从前端输出格式下拉移除（两版一致）；GIF 两版均有压缩功能（Direct gifsicle 减色更优，App Store image crate 重编码，属质量差异非功能差异）
 - ✅ 对比视图已改为独立原生窗口（未发版）：`compare.html` + `compare_window.js`，label="compare"，由 `open_compare_window` 命令创建（Direct 用 tauri:// 内嵌页，App Store 用本地 HTTP 页），自由缩放可大于主窗口、自带红绿灯；载荷经 `pending_compare` 状态 + `take_compare_window_payload` 首屏取回，`compare-open` / `compare-results-changed` 事件双向同步；`on_window_event` 仅在 label=="main" 关闭时 exit(0)；首屏与 resize 均按"适合窗口"fit 适配（先 showPanel 再测量视口，隐藏态测量会得到 0 而回退 100%，大图只显示局部），缩放下限 0.02，重置按钮=重新适配，用户手动缩放后 resize 不再打断
-- ✅ 安全暂停已接入（三线一致）：压缩中可暂停/继续，只拦「还没开始」的文件，绝不 kill 正在跑的 CLI 子进程；进度按钮文案变「暂停中…」，旁边一个小号 [暂停]/[继续]。**取消一个文件只 `wake_waiters()`、绝不 `resume()`**（详见「安全暂停」），整批取消走一次 `cancel_batch`
+- ✅ 安全暂停 / 继续 / 停止已接入（三线一致，一个四态状态机 `idle`/`running`/`paused`/`stopping`）：暂停与停止都只拦「还没开始」的文件，绝不 kill 正在跑的 CLI 子进程；停止是**批次级且不可逆**（`stop_compression` / `stopBatch()`，等待中的作废、在跑的收尾、之后不许自动续跑），前端按钮与队列行文案全部由状态机说了算（暂停时转圈动画必须停）。**取消一个文件只 `wake_waiters()`、绝不 `resume()`**，整批取消走一次 `cancel_batch`（详见「安全暂停 / 继续 / 停止」）
 - ✅ 压缩历史 + 原图保留/恢复已接入（三线一致）：`history.rs::HistoryStore` / Swift `Services/HistoryStore.swift` 落 App Support（**不再是临时目录**），历史页/设置页为主窗口内部视图，恢复统一走一个服务（`restore_original` / `restore_history_entry` / `restore_all` 共用 `HistoryStore::restore`），保留档位为「不保留」（默认，退出时连记录带备份一起清）或 1/3/7/14/30 天（详见「保留期与退出清理」——清理只有一个时机，就是正常退出）
 - ✅ 历史页每一行都有与「压缩完成」那一行对等的按钮（三线一致）：另存为 / 对比查看 / 恢复原图 / 删除这次压缩结果 / 访达 / 复制日志，全部由 `sourceExists`·`backupExists`·`outputExists` 三个读取时现算的派生字段决定，按钮不成立就不画；后缀模式给「删除这次压缩结果」而不是「恢复原图」，清空历史的确认框数得清带走几份原图备份（详见「历史页每一行的按钮」）
 - ✅ 覆盖事务与崩溃安全已接入（**三条线一致**）：`output_transaction.rs::TransactionStore` ↔ Swift `OutputTransactionStore.swift` 在覆盖前记账、`history.add` 落盘后才销账，启动时 `recover()` 补记或自动回滚上次中断的覆盖；`history.json` 严格读取（损坏→隔离 + 按 `backup-meta.json` 重建 `recoveryAvailable` + 本次启动锁死备份 sweep）；`write_output_file` 全链路 `Result`（任一步失败必须把 `CompressResult.success` 翻成 false）；备份 key 从 `DefaultHasher` 迁到 FNV-1a 64（老 key 只读复用/续认，含书签）；`MAX_HISTORY_ENTRIES = 10_000`
@@ -173,7 +173,7 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 | 历史记录与原图备份 | `HistoryStore` 落 `<appdata>/history/history.json` + `<appdata>/history/backups/<key>/`（App Support，跨启动长期保留）；备份 key = **FNV-1a 64 位**（`stable_hash`，跨 rustc 版本稳定），老 `DefaultHasher` key 仍被识别用于续用已有备份与书签 | 同上（沙盒容器内的 App Support）| 备份绝不放 temp_dir/Caches，否则系统清理会丢掉原图；Swift 线用独立根 `~/Library/Application Support/com.misswell.octoshrink.swift`。**标准库从不承诺 `DefaultHasher` 的跨版本稳定性**，一次升级就能让所有备份看起来"无人引用" |
 | 退出清理（唯一的清理时机） | `RunEvent::Exit` → `commands::apply_retention_on_exit` → `HistoryStore::apply_retention_on_exit(retention_days, run_started_at, previous_run_ended_cleanly)`：按当前档位删过期 `HistoryEntry` 和只被它们引用的备份目录；启动路径（`setup` / `AppState.init`）**只结清中断事务和损坏现场，一个备份都不删** | 同上（`applicationWillTerminate`） | 不留常驻计时器，也不在启动删任何东西：崩溃 / 强杀不走退出钩子，现场那份备份可能是唯一的原图；把时机收在退出，用户中途改档位也在同一刻生效。**绝不删用户的 sourcePath / outputPath / 输出目录里的文件**（历史过期 ≠ 用户文件过期） |
 | history.json 读不出来 | **严格读**：文件不存在=空历史（正常）；存在但解析失败=损坏 → 隔离为 `history.corrupt-<millis>.json`（现场绝不许被 `[]` 覆盖）→ 按 `backups/<key>/backup-meta.json` 重建 `status: "recoveryAvailable"` 条目 → 本次运行**禁止一切备份 sweep**（`cleanup_is_locked()`） | 同上 | 老实现 `unwrap_or_default()` 把半个文件当空历史，退出清理就"合法地"删光所有原图备份。重建出的条目没有压缩明细，但保证**原图仍可一键恢复** |
-| 安全暂停 / 取消 | `CompressionScheduler`（`pause_compression` / `resume_compression` / `compression_state` / `cancel_file` / `cancel_batch` / `clear_cancel_queue`）：闸门只拦「还没开始」的文件，正在跑的 CLI 子进程绝不 kill；`Notify` + 250 ms 超时轮询，等待者用 `acquire_or_cancelled` 自带取消退出条件 | 同上（进程内引擎同样只在新任务起点等待）| 两版行为一致；Swift 线为 `CompressionScheduler.acquire(cancelled:)`。**取消只 `wake_waiters()`，绝不 `resume()`** |
+| 安全暂停 / 继续 / 停止 | `CompressionScheduler`（`pause_compression` / `resume_compression` / `stop_compression` / `get_compression_state` / `cancel_file` / `cancel_batch` / `clear_cancel_queue`）：闸门只拦「还没开始」的文件，正在跑的 CLI 子进程绝不 kill；`Notify` + 250 ms 超时轮询，等待者用 `acquire_or_cancelled` 自带退出条件（**判断顺序：取消 → 停止 → 暂停/名额**）；阶段变化经 `compression-state-change` 事件播报 | 同上（进程内引擎同样只在新任务起点等待）| 两版行为一致；Swift 线为 `CompressionScheduler.acquire(cancelled:)` / `AppState.stopBatch()`。**取消只 `wake_waiters()`，绝不 `resume()`** |
 | 对比窗口（compare 独立窗口）| WebviewUrl::App 加载内嵌 compare.html，经 convertFileSrc / read_image_dataurl 读图 | WebviewUrl::External 指向本地 HTTP 服务器 `http://localhost:<port>/compare.html`（`frontend_http_port()`），经 read_image_dataurl（bookmark 授权范围内）读图，窗口创建时 `visible(false)` + on_page_load show 防白屏 | 沙盒阻止 tauri://；两版窗口行为一致，URL 按 feature 分叉 |
 | open_in_finder | Command::new("open").arg("-R") | tauri-plugin-opener（NSWorkspace）| 沙盒禁 spawn Finder |
 | ~/Library/... 访问 | 任意 | 仅 App Support / Caches / Tmp（sandbox 允许子集）| 沙盒 |
@@ -307,14 +307,36 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - 文案硬规定（三线逐字一致）：按天档说「过期的历史记录和原图备份将在关闭应用时自动清理」；「不保留」档说「本次运行的压缩记录和原图备份都会在关闭应用时清理；期间可以随时恢复原图」。切档 toast：`原图备份改为不保留，关闭应用时清理记录和备份` / `原图备份保留 N 天，关闭应用时清理过期项`。**永远不许**写「下次启动时清理」（清理不在启动跑，写了就是假承诺），也**永远不许**写「原图将在 3 天后删除」这类吓人的话，更**永远不许**把备份说成从不存在的功能。
 - 回归：`history.rs` 的 `expired_entries_and_their_backups_are_dropped_when_quitting` / `quitting_with_not_retained_clears_this_runs_rows_and_backups` / `crash_leftovers_get_one_more_session_under_not_retained` / `not_retained_leftovers_are_collected_by_the_next_clean_quit` / `the_clean_exit_marker_is_what_tells_a_crash_apart_from_a_quit` ↔ `scripts/test_swift_history.sh` 第 [3]、[19]、[20] 组 ↔ `tests/history-view.cjs` 的保留档位文案断言。
 
-### 安全暂停
+### 安全暂停 / 继续 / 停止（一个状态机，三条线同一套语义）
 
-- 暂停只拦"还没开始"的文件：闸门在取下一个任务前等待，**绝不 kill / SIGSTOP 正在运行的 CLI 子进程**，也不打断正在跑的进程内引擎。
+**四个阶段**：`idle` / `running` / `paused` / `stopping`。值域是**唯一**的真相来源，前端不许再从"批次还没结束"猜状态：
+
+| 线 | 状态定义 | 播报方式 |
+|---|---|---|
+| Rust（两条 Tauri 线） | `commands.rs::CompressionState`（`#[serde(rename_all="camelCase")]` → `idle`/`running`/`paused`/`stopping`） | `compression-state-change` 事件 + `get_compression_state` / `pause_*` / `resume_*` / `stop_*` 的返回值 |
+| 前端 | `app.js::compressionState`（`COMPRESSION_IDLE/RUNNING/PAUSED/STOPPING`） | 监听上面那条事件 |
+| Swift | `Services/CompressionScheduler.swift::CompressionPhase` | `AppState.compressionPhase`（`@Published private(set)`） |
+
+- **`isCompressing` / `compressionPaused` 是派生镜像，不是第二真相**：前端只有 `setCompressionState()` 能写它们，Swift 只有 `AppState.setCompressionPhase()` 能写。`tests/pause-resume.cjs` 会 grep 源码，状态机那一段之外出现任何 `isCompressing =` / `compressionPaused =` 赋值就算失败。
+- 阶段变化的采纳规则（前端）：非 idle 的状态只在本地确实有批次时采纳；**idle 永远不采纳** —— 批次的收尾由发起它的那次 invoke / `group.notify` 负责，迟到的 idle 不许把一个刚起跑的新批次打回空闲。Swift 同理由 `group.notify` 负责。
+- 暂停与停止都只拦"还没开始"的文件：闸门在取下一个任务前等待，**绝不 kill / SIGSTOP 正在运行的 CLI 子进程**，也不打断正在跑的进程内引擎。**停止不是"更强的暂停"，更不是 kill**：已在跑的那几个跑完各自收尾，批次才结束 —— 半路掐掉会留下写了一半的临时文件、悬空的覆盖事务和对不上账的历史。
 - 等待要有超时（Rust `tokio::sync::Notify` + 250 ms 兜底，防丢唤醒；Swift `CompressionScheduler` 的 `NSCondition.wait(until:)` 0.25 s），否则取消/退出会挂死。
-- 一批开始/结束时必然清除暂停态（Rust `begin_batch()` / `end_batch()`，Swift `beginBatch()` / `endBatch()`）。
+- 一批开始/结束时必然清除暂停与停止态（Rust `begin_batch()` / `end_batch()`，Swift `beginBatch()` / `endBatch()`），否则下一批继承上一批的状态。
 - **取消绝不解除暂停**：`cancel_file` / `cancel_batch` / `clear_cancel_queue` 只 `wake_waiters()`（Rust）/ `wakeWaiters()`（Swift）—— 只把等待者叫醒让它们看见"这个文件已被取消"，闸门仍然是关的。老实现调 `resume()`，结果是"暂停中移除一个文件 → 整批悄悄继续跑"，前端还显示「暂停中…」。
-  防"闸门关着却没人开"的正确做法不是取消时开门，而是**等待者自己带退出条件**：`acquire_or_cancelled(cancelled)`（Rust）在暂停判定之前先查取消，被取消的文件直接结束并上报 `status: "cancelled"`，永不启动；Swift 侧 `acquire(cancelled:)` 同语义。批次结束时 `end_batch()` 必然 `resume()`，所以关着的闸门总有一个人会来开。
-- UI 保持现有密度：进度按钮仍是 `startCompressBtn`，旁边一个小号 `[暂停]/[继续]`，标题文案「暂停中…」，队列摘要追加「 · 已暂停」。不要做成大按钮。
+- **闸门里的判断顺序不可改：取消 → 停止 → 暂停/名额**（Rust `acquire_or_cancelled` / Swift `acquire(cancelled:)`）：
+  - 取消排最前，是"闸门关着却没人开"的正解 —— 等待者自己带退出条件，被取消的文件直接结束并上报 `status: "cancelled"`，永不启动，而不是靠取消操作偷偷开门；
+  - **停止排在暂停之前**，否则"暂停中按停止"的等待者会一直堵在关着的闸门上，直到用户点「继续」——那正是「停止」的反面。
+- **停止是批次级的、且不可逆**：`stop_compression`（Rust，无需传路径）/ `AppState.stopBatch()`（Swift）只做三件事 —— 置 `stopping`、唤醒等待者、`pendingAutoCompress = false`。闸门自己认得 `stopping`，排在后面的文件一个个自行退出（各收到一次 `cancelled` 事件），所以不存在"部分已停、部分还在排队"的中间态。停止后即使有人误调 `resume()` 也不放行。
+- **停止之后不许自动续跑**：`pendingAutoCompress` 在按下停止那一刻就清掉，且批次收尾时 `stoppedByUser` 为真就跳过自动续队列。用户刚说"停下"，再被"自动压缩"拉起来就是没听他说话（`tests/queue-progress.cjs` 有断言）。
+- **状态在界面上要看得出来**：
+  - 进度按钮：`running` → 转圈 +「压缩中…」/「转换中…」；`paused` → **静态暂停图标** +「暂停中…」（转圈动画必须停下 —— 动画还在转就是用户判断"到底暂停没有"的依据）；`stopping` → 转圈 +「正在停止…」（那几个文件真的还在跑）。
+  - 队列行：等待中的行在暂停时显示暂停图标 +「已暂停」，在停止后显示「已跳过」；**真正在跑的行照旧转圈**，因为它确实在跑。
+  - 摘要：`· 已暂停` / `· 正在停止`，**不许**写"还有几个在跑"的数字 —— 那个数字在事件之后就没有下一个事件来更新它了。
+  - 按钮：`running` → [暂停][停止]；`paused` → [继续][停止]；`stopping` → 两个都禁用+「正在停止…」；`idle` → 只有「开始压缩」。
+- 所有行的图标与文案只许出自一张状态表（`app.js::taskStatusMarkup` + `renderTaskStatus`），不许再散落 `innerHTML = '<span class="progress-file-spinner">'`（`tests/pause-resume.cjs` 钉住 spinner 只出现在那张表和进度按钮两处）。
+- UI 保持现有密度：进度按钮仍是 `startCompressBtn`，旁边两个小号按钮 `[暂停]/[继续]` 与 `[停止]`，不要做成大按钮。
+- 回归：`tests/pause-resume.cjs`（四态切换、暂停停动画、停止不可逆、失败回滚、单写入口、spinner 不散落）、`tests/queue-progress.cjs`（停止后不续跑）、`commands.rs` 的 `stopping_the_batch_lets_running_jobs_finish_and_closes_the_gate_for_good` / `stopping_while_paused_finishes_the_batch_instead_of_waiting_for_resume` / `stopping_does_not_leak_into_the_next_batch` / `the_wire_format_is_the_four_state_strings_the_frontend_knows` ↔ `scripts/test_swift_history.sh` 第 [27]、[28] 组。
+- 新增命令按"三处同改"注册（`stop_compression` 就是照这条加的）：`commands.rs` handler + `lib.rs` `invoke_handler!` + `commands.toml` / `capabilities/default.json` 的 `allow-stop-compression`。
 
 ## CPU 使用上限（三条线共用不变量）
 
@@ -376,9 +398,12 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - src-tauri/src/output_transaction.rs — 覆盖事务凭证（`TransactionStore` / `ReplaceTransaction` / `rollback`），启动时 `recover()`
 - swift/Sources/OctoShrinkSwift/Services/HistoryStore.swift — 同上的 Swift 原生线实现（`HistoryStore.shared` 全进程唯一）
 - swift/Sources/OctoShrinkSwift/Services/OutputTransactionStore.swift — Swift 线的覆盖事务凭证 + `OutputWriteError` / `StagedWrite`
-- tests/history-view.cjs（`npm run test:frontend`）— 前端历史页（每行按钮集合 / 重建条目 / 恢复只交 historyId / 冲突 force 重试 / 不保留档位 / 压缩中拒绝清空）、暂停与 CPU 上限纯逻辑自检
+- tests/pause-resume.cjs（`npm run test:frontend`）— 压缩状态机：四态切换与按钮/文案映射、暂停时 loading 必须停、停止不可逆且不自动续跑、IPC 失败回滚、**isCompressing / compressionPaused 只许由 setCompressionState 写**（grep 源码）
+- tests/queue-progress.cjs（`npm run test:frontend`）— 批次生命周期：追加导入不打断当前批次、累计完成量、停止后不复跑
+- tests/app-slices.cjs — 前端单文件脚本的切片助手：状态机那一段的标记只写在这里一处，四个测试共用（免得某个测试的切片范围漂掉，跑的其实不是真实代码）
+- tests/history-view.cjs（`npm run test:frontend`）— 前端历史页（每行按钮集合 / 重建条目 / 恢复只交 historyId / 冲突 force 重试 / 不保留档位 / 压缩中拒绝清空）、CPU 上限纯逻辑自检
 - tests/update-panel.cjs（`npm run test:frontend`）— 更新面板：控件必须只在设置页容器内、标题栏不许留死样式，Direct 与 App Store 的显隐，下载进度在取消/失败后归零
-- scripts/test_swift_history.sh — Swift 线历史·备份·覆盖事务·恢复·取消与暂停·CPU 上限·历史行按钮自检（真跑文件系统，26 组）
+- scripts/test_swift_history.sh — Swift 线历史·备份·覆盖事务·恢复·取消与暂停·停止·CPU 上限·历史行按钮自检（真跑文件系统，28 组）
 
 ## App Store 提交完整流程与注意事项
 

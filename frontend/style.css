@@ -1590,8 +1590,9 @@ body.compare-page .compare-recompress { flex-shrink: 0; }
   font-size: 12px;
 }
 
-/* ─── 暂停按钮（与进度按钮同排，不新增大块 UI）─────────────── */
-.queue-actions #pauseCompressBtn {
+/* ─── 暂停 / 停止按钮（与进度按钮同排，不新增大块 UI）──────── */
+.queue-actions #pauseCompressBtn,
+.queue-actions #stopCompressBtn {
   flex: 0 0 auto;
   justify-content: center;
 }

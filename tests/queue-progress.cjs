@@ -1,14 +1,13 @@
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
-const fs = require('node:fs');
-const source = fs.readFileSync('frontend/app.js', 'utf8');
+const { slice, installStateMachine } = require('./app-slices.cjs');
 const summary = { textContent: '' };
 const runs = [];
 let progress;
 const context = vm.createContext({
   console, Set, Map, Promise,
-  files: [], results: [], inputPaths: [], isCompressing: false, pendingAutoCompress: false,
-  compressionPaused: false, currentView: 'main',
+  files: [], results: [], inputPaths: [], pendingAutoCompress: false,
+  currentView: 'main',
   document: { getElementById: id => id === 'queueSummary' ? summary : null, querySelector: () => null },
   settingsPanel: {style:{}}, resultsPanel: {style:{}},
   statOriginal: {}, statCompressed: {}, totalSavings: {}, totalRate: {},
@@ -20,11 +19,14 @@ const context = vm.createContext({
     return new Promise(resolve => runs.push({ paths: args.filePaths, resolve }));
   },
   formatBytes: String, showToast() {}, iconMarkup() {}, renderQueueResultActions() {}, updateStats() {}, showResults() {},
-  setPauseButtonVisible() {}, renderPauseControls() {}, refreshHistoryIfOpen() {},
+  refreshHistoryIfOpen() {},
   emitCompareResultsChanged() {},
 });
-vm.runInContext(source.slice(source.indexOf('function uniqueFilePaths('), source.indexOf('async function renderFileQueue(')), context);
-vm.runInContext(source.slice(source.indexOf('async function startCompression('), source.indexOf('function updateStats(')), context);
+vm.runInContext(slice('function uniqueFilePaths(', 'async function renderFileQueue('), context);
+// 状态机是真实实现（暂停/停止按钮、阶段镜像都在里面），批次起止要经过它。
+installStateMachine(context);
+context.setCompressionState('idle', true);
+vm.runInContext(slice('async function startCompression(', 'function updateStats('), context);
 context.renderFileQueue = () => context.files.forEach(file => {
   if (context.fileRows[file]) return;
   const classes = new Set(['waiting']);
@@ -75,9 +77,26 @@ const settle = file => progress({ file, result: {file, success:true, savings:10}
   runs[3].resolve([]);
   await flush();
   assert.equal(summary.textContent, '22 / 22 已完成');
+
+  // 用户按了停止：批次就地结束，**绝不许**被"自动压缩"再拉起来跑下一批。
+  const stopPaths = ['/stop-a.png', '/stop-b.png'];
+  await context.handleFilePaths(stopPaths);
+  const stopped = context.startCompression(false);
+  await flush();
+  context.pendingAutoCompress = true;
+  context.setCompressionState('stopping', true);
+  settle(stopPaths[0]);
+  runs[runs.length - 1].resolve([]);
+  await stopped;
+  await flush();
+  const stopRuns = runs.filter(run => run.paths.join('|') === stopPaths.join('|'));
+  assert.equal(stopRuns.length, 1, '停止之后不许自动续跑下一批');
+  assert.equal(context.pendingAutoCompress, false, '停止之后自动压缩必须被清掉');
+  assert.equal(context.compressionState, 'idle', '批次收尾后回到空闲');
+
   context.files = [];
   context.results = [];
   context.updateQueueSummary();
   assert.equal(summary.textContent, '0 个文件');
-  console.log('PASS: append 10 during compression, cumulative completion, persistent final summary');
+  console.log('PASS: append 10 during compression, cumulative completion, persistent final summary, 停止后不续跑');
 })().catch(error => { console.error(error); process.exitCode = 1; });

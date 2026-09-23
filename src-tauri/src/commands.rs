@@ -40,16 +40,36 @@ pub struct AppState {
     pub previous_run_ended_cleanly: bool,
 }
 
-/// 压缩调度器：暂停与 CPU 使用上限共用一个闸门。
+/// 批次阶段。这是前端渲染按钮与状态文案的**唯一**依据（经 `compression-state-change`
+/// 事件下发），前端不再自己从"批次还没结束"猜当前是什么状态。
 ///
-/// 两者语义相同 —— 只决定"要不要再启动新任务"，绝不干预已经在跑的子进程或线程：
-/// 暂停时正在压的那张继续跑完；上限从 8 调到 2 时已有的 8 个也允许跑完，
+/// - `idle`：没有批次在跑。
+/// - `running`：批次在跑，闸门开着。
+/// - `paused`：闸门对"还没开始"的文件关着，已经在跑的继续跑完。
+/// - `stopping`：用户点了停止。闸门对"还没开始"的文件**永久**关闭（暂停中也能停），
+///   已经在跑的跑完，批次收尾后回到 `idle`。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CompressionState {
+    Idle,
+    Running,
+    Paused,
+    Stopping,
+}
+
+/// 压缩调度器：暂停 / 停止与 CPU 使用上限共用一个闸门。
+///
+/// 三者语义相同 —— 只决定"要不要再启动新任务"，绝不干预已经在跑的子进程或线程：
+/// 暂停或停止时正在压的那张继续跑完；上限从 8 调到 2 时已有的 8 个也允许跑完，
 /// 只是不再启动新的。反过来 2 → 8 立刻唤醒等待者。
 ///
 /// 用 Notify + 轮询超时兜底：notify_waiters 与 notified.await 之间存在丢唤醒的
 /// 窗口，超时让最坏情况只是延迟几百毫秒，而不是永久卡住。
 pub struct CompressionScheduler {
     paused: AtomicBool,
+    /// 批次级的「停止」。与文件级的 `cancel_queue` 是两件事：停止不需要逐条记账，
+    /// 闸门本身对后来者永久关闭。
+    stopping: AtomicBool,
     /// 是否有批次在跑，只影响前端显示的 state 文案。
     active_batch: AtomicBool,
     max_parallelism: AtomicUsize,
@@ -69,6 +89,7 @@ impl CompressionScheduler {
     pub fn new(max_parallelism: usize) -> Self {
         Self {
             paused: AtomicBool::new(false),
+            stopping: AtomicBool::new(false),
             active_batch: AtomicBool::new(false),
             max_parallelism: AtomicUsize::new(max_parallelism.max(MIN_PARALLELISM)),
             active: AtomicUsize::new(0),
@@ -86,6 +107,19 @@ impl CompressionScheduler {
         self.notify.notify_waiters();
     }
 
+    /// 停止整批：闸门对"还没开始"的文件永久关闭，已经在跑的跑完各自收尾。
+    ///
+    /// 与"取消某个文件"是两件事：`cancel_file` 要逐条记账（`cancel_queue`），
+    /// 停止只是把闸门焊死 —— 后来者不需要谁替它记账，自己就会在
+    /// `acquire_or_cancelled` 里看见 `stopping` 并退出。
+    ///
+    /// 绝不 kill 正在跑的进程：那会留下写了一半的临时文件、悬空的覆盖事务和
+    /// 对不上账的历史，正是「宁可慢一点也不能弄丢原图」要避免的。
+    pub fn stop(&self) {
+        self.stopping.store(true, Ordering::Release);
+        self.notify.notify_waiters();
+    }
+
     /// 只唤醒等待者，不改动暂停态。
     ///
     /// 与 `resume()` 的区别必须分清：取消一个文件需要正在等的 worker 醒来看到这个取消，
@@ -96,12 +130,17 @@ impl CompressionScheduler {
     }
 
     /// 是否有批次在跑。清空历史这类破坏性操作的硬保护看这个，不看前端状态。
+    /// 用户点了停止但批次还在收尾时它仍然为真 —— 备份还在被认领，历史就不许被清。
     pub fn is_batch_active(&self) -> bool {
         self.active_batch.load(Ordering::Acquire)
     }
 
     pub fn is_paused(&self) -> bool {
         self.paused.load(Ordering::Acquire)
+    }
+
+    pub fn is_stopping(&self) -> bool {
+        self.stopping.load(Ordering::Acquire)
     }
 
     /// 运行中改上限：不回收已在跑的 permit，只影响之后的启动。
@@ -116,34 +155,41 @@ impl CompressionScheduler {
     }
 
     /// 当前正在占用的 CPU 并行份数。UI 展示的是"上限/核数"而不是这个瞬时值，
-    /// 所以只有调度器测试会读它。
+    /// 所以只有调度器测试会读它 —— 事件里也不带它：快照在下一次事件之前不会更新，
+    /// 显示出去就是一句很快就会变假的话。
     #[cfg(test)]
     pub fn active(&self) -> usize {
         self.active.load(Ordering::Acquire)
     }
 
     pub fn begin_batch(&self) {
-        // 新一批永远从"未暂停"开始，不继承上一批的状态。
+        // 新一批永远从"未暂停、未停止"开始，不继承上一批的状态。
         self.paused.store(false, Ordering::Release);
+        self.stopping.store(false, Ordering::Release);
         self.active_batch.store(true, Ordering::Release);
     }
 
     pub fn end_batch(&self) {
         self.paused.store(false, Ordering::Release);
+        self.stopping.store(false, Ordering::Release);
         self.active_batch.store(false, Ordering::Release);
         self.active.store(0, Ordering::Release);
         self.notify.notify_waiters();
     }
 
-    /// idle / running / paused —— 前端按钮与 summary 的唯一真相来源。
-    pub fn state(&self) -> &'static str {
+    /// idle / running / paused / stopping —— 前端按钮与 summary 的唯一真相来源。
+    pub fn state(&self) -> CompressionState {
         if !self.active_batch.load(Ordering::Acquire) {
-            return "idle";
+            return CompressionState::Idle;
+        }
+        // 停止盖过暂停：暂停中点停止，状态就该是"正在停止"，而不是一直显示暂停。
+        if self.is_stopping() {
+            return CompressionState::Stopping;
         }
         if self.is_paused() {
-            "paused"
+            CompressionState::Paused
         } else {
-            "running"
+            CompressionState::Running
         }
     }
 
@@ -159,11 +205,13 @@ impl CompressionScheduler {
             .expect("这个调用永远不会返回 Cancelled")
     }
 
-    /// 拿一份 CPU 预算，等待期间 `cancelled()` 变真就立刻退出等待并返回 None。
+    /// 拿一份 CPU 预算，等待期间 `cancelled()` 变真、或批次被「停止」，就立刻退出等待并返回 None。
     ///
-    /// 判断顺序是刻意的：**先查取消，再查暂停/名额**。所以
-    /// `paused == true` 且这个文件已被取消时，worker 能马上退出，
-    /// 而暂停状态原样保留给其余还在排队的文件。
+    /// 判断顺序是刻意的，**不能改**：先查取消 → 再查停止 → 最后才是暂停/名额。
+    /// - 取消排最前：`paused == true` 且这个文件已被取消时，worker 能马上退出，
+    ///   而暂停状态原样保留给其余还在排队的文件。
+    /// - 停止排在暂停之前：暂停中按下停止，等待者必须能看见"整批已停"并退出，
+    ///   否则它们会一直堵在关着的闸门上，直到用户点「继续」——那正是「停止」的反面。
     pub async fn acquire_or_cancelled<F>(
         self: &std::sync::Arc<Self>,
         mut cancelled: F,
@@ -172,12 +220,12 @@ impl CompressionScheduler {
         F: FnMut() -> bool,
     {
         loop {
-            if cancelled() {
+            if cancelled() || self.is_stopping() {
                 return None;
             }
             if let Some(permit) = self.try_acquire() {
-                if cancelled() {
-                    // 拿到的这一刻才被取消：还回预算，这个文件不压。
+                // 拿到的这一刻才被取消 / 才点了停止：还回预算，这个文件不压。
+                if cancelled() || self.is_stopping() {
                     drop(permit);
                     return None;
                 }
@@ -231,6 +279,27 @@ struct ProgressPayload {
     status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     result: Option<CompressResult>,
+}
+
+/// 批次阶段变化的载荷。
+///
+/// 只有状态，**不含"还有几个在跑"这类计数**：事件只在阶段真的变化时发一次，快照里的
+/// 数字在下一个事件之前不会再更新，放进 UI 就是一句很快就变假的话。谁还在跑，队列里
+/// 那几个仍在转圈的行就是活的答案。
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct CompressionStatePayload {
+    state: CompressionState,
+}
+
+/// 阶段变化的唯一播报口：每次状态真的变了都走这里，前端不再猜。
+fn emit_compression_state(app: &AppHandle, scheduler: &CompressionScheduler) {
+    let _ = app.emit(
+        "compression-state-change",
+        CompressionStatePayload {
+            state: scheduler.state(),
+        },
+    );
 }
 
 // ─── File collection ────────────────────────────────────────────
@@ -657,6 +726,8 @@ async fn compress_batch(
             state.cpu_info.budget_ceiling(),
         ));
     let retention_days = settings.original_retention_days;
+    // 批次真的开跑了才播报 running：前端在拿到这条事件之前不许显示「压缩中…」。
+    emit_compression_state(app, &state.compression);
 
     // Emit "queued" for all files
     for fp in &all_files {
@@ -821,8 +892,9 @@ async fn compress_batch(
     }
 
     state.cancel_queue.lock().unwrap().clear();
-    // 批次结束必须清暂停，否则下一批继承上一批的状态。
+    // 批次结束必须清暂停与停止，否则下一批继承上一批的状态。
     state.compression.end_batch();
+    emit_compression_state(app, &state.compression);
     let final_results = results_arc.lock().await.clone();
     final_results
 }
@@ -1009,20 +1081,34 @@ pub fn clear_cancel_queue(state: State<'_, AppState>) -> bool {
 }
 
 #[tauri::command]
-pub fn pause_compression(state: State<'_, AppState>) -> String {
+pub fn pause_compression(app: AppHandle, state: State<'_, AppState>) -> CompressionState {
     state.compression.pause();
-    state.compression.state().to_string()
+    emit_compression_state(&app, &state.compression);
+    state.compression.state()
 }
 
 #[tauri::command]
-pub fn resume_compression(state: State<'_, AppState>) -> String {
+pub fn resume_compression(app: AppHandle, state: State<'_, AppState>) -> CompressionState {
     state.compression.resume();
-    state.compression.state().to_string()
+    emit_compression_state(&app, &state.compression);
+    state.compression.state()
+}
+
+/// 停止整批：等待中的文件全部作废，正在压的几个跑完，批次收尾后回到 idle。
+///
+/// 不需要前端把路径传进来 —— 闸门自己认得 `stopping`，排在后面的文件
+/// 一个个在 `acquire_or_cancelled` 里自行退出（它们会各自收到一次 cancelled 事件）。
+/// 这也是"停止"比"逐个取消"更可靠的地方：不存在"部分已停、部分还在排队"的中间态。
+#[tauri::command]
+pub fn stop_compression(app: AppHandle, state: State<'_, AppState>) -> CompressionState {
+    state.compression.stop();
+    emit_compression_state(&app, &state.compression);
+    state.compression.state()
 }
 
 #[tauri::command]
-pub fn get_compression_state(state: State<'_, AppState>) -> String {
-    state.compression.state().to_string()
+pub fn get_compression_state(state: State<'_, AppState>) -> CompressionState {
+    state.compression.state()
 }
 
 #[tauri::command]
@@ -1597,7 +1683,7 @@ mod tests {
         assert!(wait_until(|| started.load(Ordering::SeqCst) == 3).await);
         scheduler.pause();
         assert!(scheduler.is_paused());
-        assert_eq!(scheduler.state(), "paused");
+        assert_eq!(scheduler.state(), CompressionState::Paused);
 
         // 放掉一个在跑的任务，腾出名额 —— 暂停时不能拿它补位。
         work_gate.add_permits(1);
@@ -1606,13 +1692,13 @@ mod tests {
         assert_eq!(started.load(Ordering::SeqCst), 2, "暂停后仍在启动新任务");
 
         scheduler.resume();
-        assert_eq!(scheduler.state(), "running");
+        assert_eq!(scheduler.state(), CompressionState::Running);
         work_gate.add_permits(20);
         driver.await.unwrap();
         assert_eq!(finished.load(Ordering::SeqCst), 10, "继续后必须把整批跑完");
         assert_eq!(peak.load(Ordering::SeqCst), 3, "任何时刻都不该超过 3 份并行");
         scheduler.end_batch();
-        assert_eq!(scheduler.state(), "idle");
+        assert_eq!(scheduler.state(), CompressionState::Idle);
         assert_eq!(scheduler.active(), 0);
     }
 
@@ -1621,11 +1707,115 @@ mod tests {
         let scheduler = CompressionScheduler::new(3);
         scheduler.begin_batch();
         scheduler.pause();
-        assert_eq!(scheduler.state(), "paused");
+        assert_eq!(scheduler.state(), CompressionState::Paused);
         scheduler.begin_batch();
-        assert_eq!(scheduler.state(), "running");
+        assert_eq!(scheduler.state(), CompressionState::Running);
         scheduler.end_batch();
-        assert_eq!(scheduler.state(), "idle");
+        assert_eq!(scheduler.state(), CompressionState::Idle);
+    }
+
+    /// 「停止」= 闸门对还没开始的文件永久关闭，已经在跑的继续跑完（绝不 kill）。
+    ///
+    /// 逐条钉住四件事：状态是 stopping、等待者立刻退出、已在跑的照常完成、
+    /// 停止后即使有人调 `resume()` 也不会把排队的文件放回来。
+    #[tokio::test]
+    async fn stopping_the_batch_lets_running_jobs_finish_and_closes_the_gate_for_good() {
+        let scheduler = std::sync::Arc::new(CompressionScheduler::new(2));
+        scheduler.begin_batch();
+        // 先占满两个名额 —— 这两个就是"正在压缩的图片"。
+        let first = scheduler.acquire().await;
+        let second = scheduler.acquire().await;
+        assert_eq!(scheduler.active(), 2);
+
+        let waiter = {
+            let scheduler = scheduler.clone();
+            tokio::spawn(async move { scheduler.acquire_or_cancelled(|| false).await.is_some() })
+        };
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished(), "名额满了，第三个文件就该在闸门上等");
+
+        scheduler.stop();
+        assert_eq!(scheduler.state(), CompressionState::Stopping);
+        assert_eq!(
+            waiter.await.unwrap(),
+            false,
+            "停止后等待中的文件必须自己退出，不能等到名额空出来再开工"
+        );
+        assert_eq!(scheduler.active(), 2, "已经在跑的两个不许被抢走名额");
+        assert!(
+            scheduler.acquire_or_cancelled(|| false).await.is_none(),
+            "停止后闸门对后来者是关的"
+        );
+
+        // 关键：停止不是暂停。即使有人误调 resume()，批次的闸门也不该重新打开。
+        scheduler.resume();
+        assert!(
+            scheduler.acquire_or_cancelled(|| false).await.is_none(),
+            "停止不可逆：resume() 不许把停止的批次放回来"
+        );
+        assert_eq!(scheduler.state(), CompressionState::Stopping);
+
+        // 在跑的两个收尾（permit 归还）之后，批次照样收尾回 idle。
+        drop(first);
+        drop(second);
+        scheduler.end_batch();
+        assert_eq!(scheduler.state(), CompressionState::Idle);
+    }
+
+    /// 暂停中按停止：等待者必须能看见"整批已停"并退出，而不是继续堵在关着的闸门上。
+    #[tokio::test]
+    async fn stopping_while_paused_finishes_the_batch_instead_of_waiting_for_resume() {
+        let scheduler = std::sync::Arc::new(CompressionScheduler::new(1));
+        scheduler.begin_batch();
+        let running = scheduler.acquire().await;
+        scheduler.pause();
+        assert_eq!(scheduler.state(), CompressionState::Paused);
+
+        let waiter = {
+            let scheduler = scheduler.clone();
+            tokio::spawn(async move { scheduler.acquire_or_cancelled(|| false).await.is_some() })
+        };
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished(), "暂停时等待者必须被拦住");
+
+        scheduler.stop();
+        assert_eq!(scheduler.state(), CompressionState::Stopping);
+        assert!(
+            !waiter.await.unwrap(),
+            "暂停中停止：等待者必须退出（判断顺序是 取消 → 停止 → 暂停，不能反过来）"
+        );
+        assert_eq!(scheduler.active(), 1, "在跑的那个照旧跑完");
+        drop(running);
+        scheduler.end_batch();
+        assert_eq!(scheduler.state(), CompressionState::Idle);
+    }
+
+    /// 停止的标志不许泄漏到下一批：批次起止都要把它清干净。
+    #[test]
+    fn stopping_does_not_leak_into_the_next_batch() {
+        let scheduler = CompressionScheduler::new(2);
+        scheduler.begin_batch();
+        scheduler.stop();
+        assert_eq!(scheduler.state(), CompressionState::Stopping);
+        scheduler.end_batch();
+        assert_eq!(scheduler.state(), CompressionState::Idle);
+        scheduler.begin_batch();
+        assert_eq!(scheduler.state(), CompressionState::Running);
+        assert!(!scheduler.is_stopping(), "新一批必须从「未停止」开始");
+    }
+
+    /// 前端认的是四个字面量（app.js 的 COMPRESSION_STATES 与事件载荷）：序列化结果必须
+    /// 逐字一致 —— 改变体名就得同时改前端，否则 UI 会静默不认后端播报的状态。
+    #[test]
+    fn the_wire_format_is_the_four_state_strings_the_frontend_knows() {
+        for (state, wire) in [
+            (CompressionState::Idle, "\"idle\""),
+            (CompressionState::Running, "\"running\""),
+            (CompressionState::Paused, "\"paused\""),
+            (CompressionState::Stopping, "\"stopping\""),
+        ] {
+            assert_eq!(serde_json::to_string(&state).unwrap(), wire);
+        }
     }
 
     /// 暂停中取消一个还没开始的文件：它自己退出等待，但闸门**保持关闭**。

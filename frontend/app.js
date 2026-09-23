@@ -156,7 +156,8 @@ function toggleSettings() {
 let files = [];
 let inputPaths = [];
 let results = [];
-let isCompressing = false;
+// isCompressing / compressionPaused 都在「压缩状态机」那一节声明：
+// 它们是 compressionState 的派生镜像，唯一的写入口是 setCompressionState。
 let pendingAutoCompress = false;
 let outputDir = null;
 let currentCompressOptions = null;
@@ -495,13 +496,22 @@ function updateQueueSummary() {
   }).map(function(result) { return result.file; }));
   if (isCompressing || completed.size > 0) {
     summary.textContent = completed.size + ' / ' + queued.size + ' 已完成'
-      + (isCompressing && compressionPaused ? ' · 已暂停' : '')
+      + compressionStateSuffix()
       + cpuLimitText();
   } else {
     summary.textContent = files.length + ' 个文件';
   }
   updateBulkActionButtons();
   applyQueueView();
+}
+
+/// 摘要里跟着阶段走的那一小段。只有「已暂停 / 正在停止」两种，
+/// 不往里塞"还有几个在跑"的数字：那个数字在事件之后就没有下一个事件来更新它了。
+function compressionStateSuffix() {
+  if (!isCompressing) return '';
+  if (compressionState === COMPRESSION_PAUSED) return ' · 已暂停';
+  if (compressionState === COMPRESSION_STOPPING) return ' · 正在停止';
+  return '';
 }
 
 function updateBulkActionButtons() {
@@ -639,6 +649,8 @@ function createQueueRow(filePath) {
     '<div class="progress-file-bar"></div>';
   var nameEl = row.querySelector('.queue-item-name');
   if (nameEl) nameEl.textContent = name;
+  // 新行也走同一张状态表：暂停途中追加进来的文件，不该显示成「等待中」还转着圈。
+  renderTaskStatus(row, waitingRowStatus());
   var rmBtn = row.querySelector('.queue-item-remove');
   rmBtn.addEventListener('click', function(e) {
     e.stopPropagation();
@@ -651,14 +663,9 @@ function createQueueRow(filePath) {
       if (idx >= 0) files.splice(idx, 1);
       row.classList.remove('waiting');
       row.classList.add('cancelled');
-      row.querySelector('.queue-item-icon').innerHTML = iconMarkup('minus', true);
-      row.querySelector('.queue-item-status').textContent = '已移除';
+      renderTaskStatus(row, 'removed');
       row.querySelector('.queue-item-remove').style.display = 'none';
-      if (!isCompressing) {
-        updateQueueSummary();
-      } else {
-        updateQueueSummary();
-      }
+      updateQueueSummary();
     }
   });
   return row;
@@ -878,7 +885,9 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
   var candidates = Array.isArray(requestedPaths) ? requestedPaths.slice() : files.slice();
   if (candidates.length === 0) return;
 
-  isCompressing = true;
+  // 先占住批次位（静默）：真正开跑之前还有几步可能提前 return，
+  // 那几步里不该亮出"暂停/停止"按钮和「压缩中…」。
+  setCompressionState(COMPRESSION_RUNNING, true);
   var runRevision = queueRevision;
   if (startButtonTimer) {
     clearTimeout(startButtonTimer);
@@ -893,30 +902,30 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
     showToast('无法确认输出目录，请重试');
   }
   if (!hasOutputAccess) {
-    isCompressing = false;
+    setCompressionState(COMPRESSION_IDLE, true);
     updateQueueSummary();
     return;
   }
   if (runRevision !== queueRevision) {
-    isCompressing = false;
+    setCompressionState(COMPRESSION_IDLE, true);
     updateQueueSummary();
     return;
   }
 
-  isCompressing = true;
+  setCompressionState(COMPRESSION_RUNNING, true);
   currentCompressOptions = null;
 
   const config = getCurrentCompressionConfig();
   if (config.error) {
     showToast(config.error);
-    isCompressing = false;
+    setCompressionState(COMPRESSION_IDLE, true);
     updateQueueSummary();
     return;
   }
 
   var batchPaths = getPendingQueuePaths(candidates);
   if (batchPaths.length === 0) {
-    isCompressing = false;
+    setCompressionState(COMPRESSION_IDLE, true);
     updateQueueSummary();
     return;
   }
@@ -943,12 +952,10 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
     startBtn.disabled = true;
     startBtn.classList.remove('done');
     startBtn.classList.add('compressing');
-    var btnText = document.getElementById('compressBtnText');
-    if (btnText) btnText.innerHTML = '<span class="progress-file-spinner"></span> ' + processingActionText('progress');
   }
-  compressionPaused = false;
+  // 一批开始 = 未暂停、未停止；按钮与文案全部由状态机说了算。
+  setCompressionState(COMPRESSION_RUNNING);
   setPauseButtonVisible(true);
-  renderPauseControls();
 
   renderFileQueue();
 
@@ -965,8 +972,7 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
     if (status === 'starting' && row) {
       row.classList.remove('waiting');
       row.classList.add('compressing');
-      row.querySelector('.queue-item-icon').innerHTML = '<span class="progress-file-spinner"></span>';
-      row.querySelector('.queue-item-status').textContent = processingActionText('progress');
+      renderTaskStatus(row, 'running');
       var rmBtn = row.querySelector('.queue-item-remove');
       if (rmBtn) rmBtn.style.display = 'none';
       applyQueueView();
@@ -1010,8 +1016,7 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
     if (status === 'cancelled' && row && !batchSettled.has(file)) {
       batchSettled.add(file);
       row.classList.add('cancelled');
-      row.querySelector('.queue-item-icon').innerHTML = iconMarkup('minus', true);
-      row.querySelector('.queue-item-status').textContent = '已跳过';
+      renderTaskStatus(row, 'cancelled');
       updateQueueSummary();
     }
   };
@@ -1048,9 +1053,10 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
       activeBatchRows.clear();
       activeBatchRevision = 0;
     }
-    isCompressing = false;
+    // 用户按了停止：这一批就地结束，绝不被"自动压缩"再拉起来跑下一批。
+    var stoppedByUser = compressionState === COMPRESSION_STOPPING;
+    setCompressionState(COMPRESSION_IDLE);
     cancelledFiles.clear();
-    compressionPaused = false;
     setPauseButtonVisible(false);
     if (startBtn) {
       startBtn.classList.remove('compressing');
@@ -1064,7 +1070,7 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
         if (btnText) btnText.innerHTML = '<svg class="symbol-icon"><use href="#icon-compress"/></svg> ' + processingActionText('idle');
       }, 2000);
     }
-    var shouldContinue = pendingAutoCompress && getPendingQueuePaths(files).length > 0;
+    var shouldContinue = !stoppedByUser && pendingAutoCompress && getPendingQueuePaths(files).length > 0;
     pendingAutoCompress = false;
     if (shouldContinue) {
       startCompression(true);
@@ -1109,8 +1115,7 @@ async function compressOneFile(filePath) {
 
   row.classList.remove('waiting', 'done', 'failed', 'restored', 'cancelled');
   row.classList.add('compressing');
-  row.querySelector('.queue-item-icon').innerHTML = '<span class="progress-file-spinner"></span>';
-  row.querySelector('.queue-item-status').textContent = '压缩中…';
+  renderTaskStatus(row, 'running');
   var actions = row.querySelector('.queue-item-actions');
   if (actions) actions.innerHTML = '';
   var rmBtn = row.querySelector('.queue-item-remove');
@@ -1186,10 +1191,7 @@ function markQueueRowRestored(filePath) {
   if (!row) return;
   row.classList.remove('done', 'failed', 'compressing');
   row.classList.add('restored');
-  var icon = row.querySelector('.queue-item-icon');
-  if (icon) icon.innerHTML = iconMarkup('restore', true);
-  var status = row.querySelector('.queue-item-status');
-  if (status) status.textContent = '已恢复';
+  renderTaskStatus(row, 'restored');
   renderRestoredActions(row, filePath);
 }
 
@@ -1279,9 +1281,50 @@ function showView(name) {
   if (view === 'settings') { loadRetentionSetting(); loadCpuSetting(); initUpdatePanel(); }
 }
 
-// ─── 暂停 / 继续 ────────────────────────────────────────────────
-// 暂停只挡住"还没开始"的文件；已经在跑的子进程自己跑完，绝不 kill。
+// ─── 压缩状态机（idle / running / paused / stopping）───────────────
+// 值域与后端 `CompressionScheduler::state()` 逐字一致：后端每次真的变化都发
+// compression-state-change，前端只负责照着画。
+//
+// 从前只有 `isCompressing` 一个布尔值，于是「暂停中」和「压缩中」在界面上没有任何区别，
+// loading 照转、文案照写 —— 用户点了暂停却看不出暂停了，这是那一堆体验问题的根因。
+var COMPRESSION_IDLE = 'idle';
+var COMPRESSION_RUNNING = 'running';
+var COMPRESSION_PAUSED = 'paused';
+var COMPRESSION_STOPPING = 'stopping';
+var COMPRESSION_STATES = [COMPRESSION_IDLE, COMPRESSION_RUNNING, COMPRESSION_PAUSED, COMPRESSION_STOPPING];
+
+var compressionState = COMPRESSION_IDLE;
+// 下面两个是 compressionState 的派生镜像，供既有读点使用。
+// **只有 setCompressionState 能写它们**（tests/pause-resume.cjs 钉住这条），
+// 别处一律只读，否则又会出现"两个真相"。
+var isCompressing = false;
 var compressionPaused = false;
+
+/// 唯一的写入口。silent 供"先占住批次、UI 稍后再画"的中间态使用
+/// （与旧实现里那些提前 return 的路径一一对应）。
+function setCompressionState(next, silent) {
+  if (COMPRESSION_STATES.indexOf(next) < 0) return false;
+  compressionState = next;
+  isCompressing = next !== COMPRESSION_IDLE;
+  compressionPaused = next === COMPRESSION_PAUSED;
+  if (!silent) renderPauseControls();
+  return true;
+}
+
+/// 后端阶段变化的确认。批次的收尾由发起它的那次 invoke 负责，所以：
+/// - 非 idle 的状态只在本地确实有批次时采纳（否则是上一批的迟到事件）；
+/// - idle **永远不采纳**，绝不把一个刚起跑的新批次打回空闲。
+function applyCompressionStateEvent(payload) {
+  if (!payload || COMPRESSION_STATES.indexOf(payload.state) < 0) return;
+  if (payload.state === COMPRESSION_IDLE || !isCompressing) return;
+  setCompressionState(payload.state);
+}
+
+// ─── 暂停 / 继续 / 停止 ──────────────────────────────────────────
+// 三者都只决定"要不要再启动新文件"：暂停时正在压的那张继续跑完，
+// 停止时也一样 —— 绝不 kill 已经在跑的子进程（那会留下写了一半的临时文件、
+// 悬空的覆盖事务和对不上账的历史）。区别在闸门关多久：暂停关到用户点继续，
+// 停止是永久关闭，等已经开跑的那几个收尾就结束整批。
 
 function pauseButtonText(paused) {
   return paused
@@ -1289,35 +1332,132 @@ function pauseButtonText(paused) {
     : '<svg class="symbol-icon symbol-icon-small"><use href="#icon-pause"/></svg> 暂停';
 }
 
+function stopButtonText(stopping) {
+  return '<svg class="symbol-icon symbol-icon-small"><use href="#icon-stop"/></svg> '
+    + (stopping ? '正在停止…' : '停止');
+}
+
+/// 队列行的图标 + 文案，一处说了算 —— 不许再散落 `innerHTML = '<span class="spinner">'`。
+/// status: 'waiting' | 'running' | 'paused' | 'stopping' | 'cancelled' | 'removed' | 'restored'
+function taskStatusMarkup(status) {
+  switch (status) {
+    case 'running':
+      return { icon: '<span class="progress-file-spinner"></span>', text: processingActionText('progress') };
+    case 'paused':
+      // 暂停不用"停住的转圈"：一个静止的圆环看着像卡死，暂停图标才是它的意思。
+      return { icon: iconMarkup('pause', true), text: '已暂停' };
+    case 'stopping':
+      return { icon: iconMarkup('minus', true), text: '已跳过' };
+    case 'cancelled':
+      return { icon: iconMarkup('minus', true), text: '已跳过' };
+    case 'removed':
+      return { icon: iconMarkup('minus', true), text: '已移除' };
+    case 'restored':
+      return { icon: iconMarkup('restore', true), text: '已恢复' };
+    default:
+      return { icon: iconMarkup('queue', true), text: '等待中' };
+  }
+}
+
+function renderTaskStatus(row, status) {
+  if (!row) return;
+  var markup = taskStatusMarkup(status);
+  var icon = row.querySelector('.queue-item-icon');
+  if (icon) icon.innerHTML = markup.icon;
+  var text = row.querySelector('.queue-item-status');
+  if (text) text.textContent = markup.text;
+}
+
+/// 还在排队的行此刻该显示什么：暂停时不该还写着「等待中」并转着圈，
+/// 停止时它们已经注定被跳过。
+function waitingRowStatus() {
+  if (compressionState === COMPRESSION_STOPPING) return 'stopping';
+  return compressionPaused ? 'paused' : 'waiting';
+}
+
+function repaintWaitingRows() {
+  if (!activeBatchRows) return;
+  activeBatchRows.forEach(function(row) {
+    if (!row || !row.classList || !row.classList.contains('waiting')) return;
+    renderTaskStatus(row, waitingRowStatus());
+  });
+}
+
+/// 进度按钮上那段"图标 + 文案"。暂停时换掉转圈的圆环改用静态暂停图标 ——
+/// "动画还在转"本身就是用户判断"到底暂停了没有"的依据。
+function progressButtonMarkup() {
+  if (compressionState === COMPRESSION_PAUSED) {
+    return iconMarkup('pause', true) + ' 暂停中…';
+  }
+  if (compressionState === COMPRESSION_STOPPING) {
+    return '<span class="progress-file-spinner"></span> 正在停止…';
+  }
+  return '<span class="progress-file-spinner"></span> ' + processingActionText('progress');
+}
+
 function renderPauseControls() {
+  var stopping = compressionState === COMPRESSION_STOPPING;
   var btn = document.getElementById('pauseCompressBtn');
   var text = document.getElementById('pauseBtnText');
   if (text) text.innerHTML = pauseButtonText(compressionPaused);
-  if (btn) btn.title = compressionPaused ? '继续压缩剩余文件' : '暂停：不再启动新文件';
+  if (btn) {
+    btn.title = compressionPaused ? '继续压缩剩余文件' : '暂停：不再启动新文件';
+    btn.disabled = stopping;
+  }
+  var stopBtn = document.getElementById('stopCompressBtn');
+  var stopText = document.getElementById('stopBtnText');
+  if (stopText) stopText.innerHTML = stopButtonText(stopping);
+  if (stopBtn) {
+    stopBtn.disabled = !isCompressing || stopping;
+    stopBtn.title = '停止：等待中的文件会跳过，正在压缩的文件会先完成';
+  }
   var btnText = document.getElementById('compressBtnText');
   if (btnText && isCompressing) {
-    btnText.innerHTML = '<span class="progress-file-spinner"></span> '
-      + (compressionPaused ? '暂停中…' : processingActionText('progress'));
+    btnText.innerHTML = progressButtonMarkup();
   }
+  repaintWaitingRows();
   updateQueueSummary();
 }
 
 function setPauseButtonVisible(visible) {
-  var btn = document.getElementById('pauseCompressBtn');
-  if (btn) btn.style.display = visible ? 'inline-flex' : 'none';
+  ['pauseCompressBtn', 'stopCompressBtn'].forEach(function(id) {
+    var btn = document.getElementById(id);
+    if (btn) btn.style.display = visible ? 'inline-flex' : 'none';
+  });
 }
 
 async function toggleCompressionPause() {
-  var next = !compressionPaused;
-  compressionPaused = next;
-  renderPauseControls();
+  // 停止在收尾途中不许再切换暂停：闸门已经焊死，按下去只会让文案和真相分叉。
+  if (!isCompressing || compressionState === COMPRESSION_STOPPING) return;
+  var previous = compressionState;
+  var next = previous === COMPRESSION_PAUSED ? COMPRESSION_RUNNING : COMPRESSION_PAUSED;
+  setCompressionState(next);
   try {
-    await invoke(next ? 'pause_compression' : 'resume_compression');
+    await invoke(next === COMPRESSION_PAUSED ? 'pause_compression' : 'resume_compression');
   } catch (error) {
     console.error('Pause toggle failed:', error);
-    compressionPaused = !next;
-    renderPauseControls();
-    showToast(next ? '暂停失败，请重试' : '继续失败，请重试');
+    setCompressionState(previous);
+    showToast(next === COMPRESSION_PAUSED ? '暂停失败，请重试' : '继续失败，请重试');
+  }
+}
+
+/// 停止整批：等待中的文件全部作废，已经在压的几个跑完各自收尾。
+///
+/// 停止之后**不许**自动续跑下一批（pendingAutoCompress 在这里就清掉）：
+/// 用户刚说"停下"，再被"自动压缩"拉起来就是没听他说话。
+async function stopCompression() {
+  if (!isCompressing || compressionState === COMPRESSION_STOPPING) return;
+  var previous = compressionState;
+  pendingAutoCompress = false;
+  setCompressionState(COMPRESSION_STOPPING);
+  showToast('正在停止：等待中的文件会跳过，正在压缩的文件会先完成');
+  try {
+    // 闸门在后端焊死，不需要把路径一条条传过去。
+    await invoke('stop_compression');
+  } catch (error) {
+    console.error('Stop failed:', error);
+    setCompressionState(previous);
+    showToast('停止失败，请重试');
   }
 }
 
@@ -2104,6 +2244,11 @@ function loadCompressSettings() {
 
 // Init
 (function() {
+  // 后端是阶段状态的权威：暂停 / 继续 / 停止的真实结果由它播报，
+  // 前端点按钮时只是先乐观地画一遍（失败会回滚）。
+  listen('compression-state-change', function(event) {
+    applyCompressionStateEvent(event.payload);
+  }).catch(function() {});
   loadCompressSettings();
   // 队列摘要里的「CPU 4/10」需要在进入设置页之前就拿到，所以启动即检测一次。
   loadCpuSetting().then(function() { updateQueueSummary(); }).catch(function() {});

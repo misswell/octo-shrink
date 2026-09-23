@@ -26,6 +26,7 @@ permissions = [
   "allow-take-compare-window-payload",
   "allow-pause-compression",
   "allow-resume-compression",
+  "allow-stop-compression",
   "allow-get-compression-state",
   "allow-list-history",
   "allow-clear-history",
@@ -166,8 +167,13 @@ commands.allow = ["resume_compression"]
 
 [[permission]]
 identifier = "allow-get-compression-state"
-description = "Read the queue state: idle, running or paused"
+description = "Read the queue state: idle, running, paused or stopping"
 commands.allow = ["get_compression_state"]
+
+[[permission]]
+identifier = "allow-stop-compression"
+description = "Stop the whole batch: waiting files are skipped, running ones finish"
+commands.allow = ["stop_compression"]
 
 [[permission]]
 identifier = "allow-list-history"

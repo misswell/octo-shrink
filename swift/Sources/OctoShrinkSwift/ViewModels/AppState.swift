@@ -87,7 +87,7 @@ final class AppState: ObservableObject {
     // 队列
     @Published var items: [QueueItem] = []
     @Published var options = CompressOptions()
-    @Published var isCompressing = false
+    @Published private(set) var isCompressing = false
     @Published var compressProgress: Double = 0
     @Published var compressCurrent = 0
     @Published var compressTotal = 0
@@ -118,8 +118,12 @@ final class AppState: ObservableObject {
     // 页面导航（主窗口内部视图，切换不销毁队列、不影响压缩）
     @Published var page: AppPage = .main
 
-    // 暂停：只拦「还没开始」的文件，正在跑的那个会正常完成
-    @Published var compressionPaused = false
+    // 批次阶段（idle / running / paused / stopping）：UI 按钮与文案的唯一依据。
+    // 下面 isCompressing / compressionPaused 是它的派生镜像，**只有 setCompressionPhase 能写**，
+    // 别处一律只读 —— 两个真相并存就是"暂停了但界面还在转"的来源。
+    @Published private(set) var compressionPhase: CompressionPhase = .idle
+    var compressionPaused: Bool { compressionPhase == .paused }
+    var compressionStopping: Bool { compressionPhase == .stopping }
 
     // 历史记录页 / 设置页
     @Published var historyEntries: [HistoryEntry] = []
@@ -665,10 +669,27 @@ final class AppState: ObservableObject {
         runBatch(paths: [path])
     }
 
+    /// 摘要里跟着阶段走的那一小段（与 Tauri 的 compressionStateSuffix 逐字一致）。
+    var compressionPhaseSummary: String {
+        guard isCompressing else { return "" }
+        switch compressionPhase {
+        case .paused: return " · 已暂停"
+        case .stopping: return " · 正在停止"
+        default: return ""
+        }
+    }
+
+    /// 批次阶段的唯一写入口：镜像（isCompressing / compressionPaused）都从这里派生。
+    /// 别处直接写 isCompressing 就会又出现"两个真相"。
+    private func setCompressionPhase(_ next: CompressionPhase) {
+        compressionPhase = next
+        isCompressing = next != .idle
+    }
+
     private func runBatch(paths: [String]) {
         guard !paths.isEmpty else { return }
 
-        isCompressing = true
+        setCompressionPhase(.running)
         compressTotal = paths.count
         compressCurrent = 0
         compressProgress = 0
@@ -683,9 +704,8 @@ final class AppState: ObservableObject {
         let counter = CounterBox()
         let group = DispatchGroup()
         let queue = DispatchQueue(label: "octoshrink.compress", attributes: .concurrent)
-        // 新批次从未暂停开始，不继承上一批的状态；上限取设置页当前值。
+        // 新批次从未暂停、未停止开始，不继承上一批的状态；上限取设置页当前值。
         scheduler.beginBatch(maxParallelism: effectiveCpuThreadLimit)
-        compressionPaused = false
         let gate = scheduler
         let store = history
         let journal = transactions
@@ -727,8 +747,9 @@ final class AppState: ObservableObject {
 
         group.notify(queue: .main) { [self] in
             gate.endBatch()
-            compressionPaused = false
-            self.isCompressing = false
+            // 用户按过停止：这一批就地结束，绝不许被"自动压缩"再拉起来跑下一批。
+            let stoppedByUser = compressionStopping
+            setCompressionPhase(.idle)
             self.compressDoneText = options.processingMode == .system ? "转换完成" : "压缩完成"
             cancelBox.removeAll()
             refreshHistory()
@@ -737,7 +758,7 @@ final class AppState: ObservableObject {
             }
             // 自动续队列
             let stillPending = items.filter { $0.status == .waiting || $0.status == .failed }
-            if pendingAutoCompress && !stillPending.isEmpty {
+            if pendingAutoCompress && !stillPending.isEmpty && !stoppedByUser {
                 pendingAutoCompress = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
                     self.startCompress()
@@ -754,18 +775,34 @@ final class AppState: ObservableObject {
         compressProgress = total > 0 ? Double(counter.value) / Double(total) : 0
     }
 
-    /// 暂停 / 继续：后端只决定「要不要再启动新文件」，绝不打断正在跑的压缩。
+    /// 暂停 / 继续：闸门只决定「要不要再启动新文件」，绝不打断正在跑的压缩。
+    /// 停止在收尾途中不许再切换暂停 —— 闸门已经焊死，按下去只会让文案和真相分叉。
     func togglePause() {
-        guard isCompressing else { return }
+        guard isCompressing, !compressionStopping else { return }
         if compressionPaused {
             scheduler.resume()
-            compressionPaused = false
+            setCompressionPhase(.running)
             showToast("继续压缩")
         } else {
             scheduler.pause()
-            compressionPaused = true
+            setCompressionPhase(.paused)
             showToast("已暂停，正在压缩的文件会先完成")
         }
+    }
+
+    /// 停止整批：等待中的文件全部作废，已经在压的几个跑完各自收尾。
+    ///
+    /// 与「取消全部」的区别是层次：`cancelAll` 是文件级的（逐条记账），
+    /// 停止是批次级的 —— 闸门对还没开始的文件永久关闭，后来者自己就退了，
+    /// 不需要谁替它记账。绝不 kill 正在跑的进程。
+    func stopBatch() {
+        guard isCompressing, !compressionStopping else { return }
+        // 用户刚说"停下"，再被"自动压缩"拉起来就是没听他说话。
+        pendingAutoCompress = false
+        setCompressionPhase(.stopping)
+        scheduler.stop()
+        scheduler.wakeWaiters()
+        showToast("正在停止：等待中的文件会跳过，正在压缩的文件会先完成")
     }
 
     /// 取消全部：等待中/压缩中的行标记为已跳过（与 Tauri 的 cancelled 状态一致）

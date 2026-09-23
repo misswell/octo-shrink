@@ -2,7 +2,7 @@
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
-const source = fs.readFileSync('frontend/app.js', 'utf8');
+const { installStateMachine } = require('./app-slices.cjs');
 
 function field(extra) {
   return Object.assign({
@@ -32,7 +32,7 @@ const context = vm.createContext({
   console: { log: console.log, warn: console.warn, error: message => calls.push(['error', message]) },
   Set, Map, Promise, JSON, Math, String, Number, parseInt, Object, Array,
   files: Array.from({ length: 20 }, (_, i) => `/img-${i}.png`),
-  results: [], isCompressing: true, processingMode: 'advanced',
+  results: [], processingMode: 'advanced',
   document: { getElementById: id => elements[id] || null },
   applyQueueView() {}, showToast(message) { calls.push(['toast', message]); },
   loadRetentionSetting: async () => {},
@@ -54,10 +54,12 @@ const context = vm.createContext({
     return null;
   },
 });
+const source = require('./app-slices.cjs').source;
 const slice = (from, to) => source.slice(source.indexOf(from), source.indexOf(to));
 vm.runInContext(slice('function updateQueueSummary(', 'function toggleQueueSortDirection('), context);
 vm.runInContext(slice('function processingActionText(', 'function setProcessingMode('), context);
-vm.runInContext(slice('var compressionPaused = false;', '// ─── 历史记录页'), context);
+installStateMachine(context);
+context.setCompressionState('running', true);
 vm.runInContext(slice('// ─── 设置页：CPU 使用上限', '// ─── Comparison（独立原生窗口）'), context);
 
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
@@ -94,10 +96,14 @@ const winArm = {
   // 队列摘要：自动时只说"CPU 自动"，不假装知道具体数字。
   context.updateQueueSummary();
   assert.equal(elements.queueSummary.textContent, '0 / 20 已完成 · CPU 自动');
-  context.compressionPaused = true;
+  context.setCompressionState('paused', true);
   context.updateQueueSummary();
   assert.equal(elements.queueSummary.textContent, '0 / 20 已完成 · 已暂停 · CPU 自动');
-  context.compressionPaused = false;
+  context.setCompressionState('stopping', true);
+  context.updateQueueSummary();
+  assert.equal(elements.queueSummary.textContent, '0 / 20 已完成 · 正在停止 · CPU 自动',
+    '停止收尾时摘要要说"正在停止"，不能说还在跑');
+  context.setCompressionState('running', true);
 
   // ── 显式选 4：摘要变成 4/10，点自动回到 null ──
   await context.saveCpuThreadLimit(4);

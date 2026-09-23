@@ -425,13 +425,13 @@ do {
     let scheduler = CompressionScheduler(maxParallelism: 3)
     let meter = PeakMeter()
     check(!scheduler.isPaused, "初始未暂停")
-    check(scheduler.state == "idle", "没有批次在跑时状态为 idle")
+    check(scheduler.phase == .idle, "没有批次在跑时状态为 idle")
 
     scheduler.beginBatch()
-    check(scheduler.state == "running", "批次开始后状态为 running")
+    check(scheduler.phase == .running, "批次开始后状态为 running")
     scheduler.pause()
     check(scheduler.isPaused, "pause 后处于暂停")
-    check(scheduler.state == "paused", "状态为 paused")
+    check(scheduler.phase == .paused, "状态为 paused")
 
     let group = DispatchGroup()
     group.enter()
@@ -455,7 +455,7 @@ do {
     scheduler.pause()
     scheduler.endBatch()
     check(!scheduler.isPaused, "批次收尾必然解除暂停")
-    check(scheduler.state == "idle", "批次收尾后回到 idle")
+    check(scheduler.phase == .idle, "批次收尾后回到 idle")
 }
 
 // ─── 13. history.json 字段命名与 Tauri 线一致 ─────────────────────────────
@@ -985,7 +985,7 @@ do {
     running.wait()
     check(!scheduler.isPaused, "resume 后闸门开")
     scheduler.endBatch()
-    check(scheduler.state == "idle", "批次收尾回到 idle")
+    check(scheduler.phase == .idle, "批次收尾回到 idle")
 }
 
 // ─── 26. 历史页每一行的按钮 = 这条记录此刻真能做到的事 ──────────────────────
@@ -1072,7 +1072,122 @@ do {
           "重建条目照样给恢复按钮 —— 它存在的意义就是这个")
 }
 
+// ─── 27. 停止整批：等待中的作废，已经在跑的跑完（与 Rust / Tauri 线同语义） ──
+//
+// 线程安全的标志盒子：后台 worker 用它把"我拿到名额了吗 / 我退出了吗"记下来。
+final class FlagBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var flags: Set<String> = []
+
+    func mark(_ name: String) {
+        lock.lock()
+        flags.insert(name)
+        lock.unlock()
+    }
+
+    func has(_ name: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return flags.contains(name)
+    }
+}
+
+print("[27] 停止是批次级的，且不可逆")
+do {
+    let scheduler = CompressionScheduler(maxParallelism: 2)
+    scheduler.beginBatch()
+    let meter = PeakMeter()
+    let running = DispatchGroup()
+    // 先占满两个名额 —— 这两个就是"正在压缩的图片"。
+    for _ in 0..<2 {
+        running.enter()
+        DispatchQueue.global().async {
+            let permit = scheduler.acquire()
+            meter.begin()
+            Thread.sleep(forTimeInterval: 0.3)
+            meter.end()
+            permit.release()
+            running.leave()
+        }
+    }
+    check(waitUntil { scheduler.activeJobs == 2 }, "两个名额先被占满")
+
+    // 第三个文件堵在闸门上等名额：停止之后它必须自己退出，而不是等着开工。
+    let third = FlagBox()
+    let thirdGroup = DispatchGroup()
+    thirdGroup.enter()
+    DispatchQueue.global().async {
+        if let permit = scheduler.acquire(cancelled: { false }) {
+            third.mark("permit")
+            permit.release()
+        }
+        third.mark("exited")
+        thirdGroup.leave()
+    }
+    Thread.sleep(forTimeInterval: 0.1)
+    check(!third.has("exited"), "名额满时第三个文件该在闸门上等")
+
+    scheduler.stop()
+    check(scheduler.phase == .stopping, "停止后状态为 stopping")
+    check(scheduler.isStopping, "isStopping 同步为真")
+    _ = thirdGroup.wait(timeout: .now() + 2)
+    check(waitUntil { third.has("exited") }, "停止后等待中的文件自己退出，不再开工")
+    check(!third.has("permit"), "被停止作废的文件不许开工")
+    check(scheduler.acquire(cancelled: { false }) == nil, "停止后闸门对后来者是关的")
+
+    // 停止不是暂停：误调 resume() 也不许把批次放回来。
+    scheduler.resume()
+    check(scheduler.acquire(cancelled: { false }) == nil, "停止不可逆：resume 不放行")
+    check(scheduler.phase == .stopping, "resume 之后状态仍是 stopping")
+
+    _ = running.wait(timeout: .now() + 3)
+    check(meter.done == 2, "已经在跑的两个照旧跑完，一个都没被掐掉")
+    check(meter.peak == 2, "停止不打断在跑的任务（峰值 \(meter.peak)）")
+
+    scheduler.endBatch()
+    check(scheduler.phase == .idle, "批次收尾回到 idle")
+    check(!scheduler.isStopping, "停止标志不泄漏到下一批")
+    scheduler.beginBatch()
+    check(scheduler.phase == .running, "新一批从 running 开始")
+    scheduler.endBatch()
+}
+
+// ─── 28. 暂停中按停止：必须结束整批，而不是等用户点「继续」 ────────────────
+print("[28] 暂停中停止")
+do {
+    let scheduler = CompressionScheduler(maxParallelism: 1)
+    scheduler.beginBatch()
+    let held = scheduler.acquire()
+    scheduler.pause()
+    check(scheduler.phase == .paused, "先暂停")
+
+    let waiting = FlagBox()
+    let waitingGroup = DispatchGroup()
+    waitingGroup.enter()
+    DispatchQueue.global().async {
+        if let permit = scheduler.acquire(cancelled: { false }) {
+            waiting.mark("permit")
+            permit.release()
+        }
+        waiting.mark("exited")
+        waitingGroup.leave()
+    }
+    Thread.sleep(forTimeInterval: 0.1)
+    check(!waiting.has("exited"), "暂停期间等待者被拦住")
+
+    scheduler.stop()
+    check(scheduler.phase == .stopping, "停止盖过暂停：状态是 stopping 而不是 paused")
+    _ = waitingGroup.wait(timeout: .now() + 2)
+    check(waitUntil { waiting.has("exited") },
+          "暂停中停止：等待者必须退出（判定顺序 取消 → 停止 → 暂停，不能反过来）")
+    check(!waiting.has("permit"), "停止作废的文件不许开工")
+    check(scheduler.activeJobs == 1, "在跑的那个照旧跑完")
+    held.release()
+    scheduler.endBatch()
+    check(scheduler.phase == .idle, "暂停中停止也要回到 idle")
+}
+
 print(failures == 0
-      ? "\n✓ Swift 历史 / 备份 / 暂停 / CPU 上限自检全部通过"
+      ? "\n✓ Swift 历史 / 备份 / 暂停 / 停止 / CPU 上限自检全部通过"
       : "\n✗ Swift 自检失败 \(failures) 项")
 exit(failures == 0 ? 0 : 1)

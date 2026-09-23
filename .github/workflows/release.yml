@@ -376,7 +376,7 @@ jobs:
           DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${ARCHIVE}"
           jq -n \
             --arg version "$VERSION" \
-            --arg notes "OctoShrink ${VERSION}: 原图备份保留时间的清理时机改到关闭应用 —— 启动时不再删任何东西，崩溃或强杀后留下的备份会再多留一次运行；默认「不保留」档现在连本次的记录一起在退出时清掉。" \
+            --arg notes "OctoShrink ${VERSION}: 新增「停止」按钮 —— 等待中的文件立即作废，正在压缩的那几张跑完就结束整批（不硬杀子进程，所以不会留下写了一半的文件）；停止之后不会再自动续跑下一批。暂停也终于看得见了：转圈的加载动画会停下、进度按钮写「暂停中…」、队列里排队的行标「已暂停」，不会再有「点了暂停却像没暂停」。三条产物线（直发 / App Store / Swift 原生）语义一致。" \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg signature "$SIGNATURE" \
             --arg url "$DOWNLOAD_URL" \

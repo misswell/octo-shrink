@@ -429,7 +429,7 @@ struct QueuePanelView: View {
 
             CompressButton()
 
-            // 与 Tauri 一致：进度按钮保持原样，旁边只加一个小号暂停/继续，
+            // 与 Tauri 一致：进度按钮保持原样，旁边只加小号的暂停/继续与停止，
             // 不新增大按钮、不改变现有 UI 密度。
             if appState.isCompressing {
                 Button {
@@ -440,9 +440,21 @@ struct QueuePanelView: View {
                         .labelIconToTextSpacing(4)
                 }
                 .buttonStyle(SecondaryButtonStyle())
+                .disabled(appState.compressionStopping)
                 .help(appState.compressionPaused
                       ? "继续压缩"
                       : "暂停：正在压缩的文件会先完成，之后再开新的")
+
+                Button {
+                    appState.stopBatch()
+                } label: {
+                    Label(appState.compressionStopping ? "正在停止…" : "停止",
+                          systemImage: "stop.fill")
+                        .labelIconToTextSpacing(4)
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .disabled(appState.compressionStopping)
+                .help("停止：等待中的文件会跳过，正在压缩的文件会先完成")
             }
         }
         .padding(.horizontal, AppMetrics.sectionHPadding)
@@ -452,7 +464,7 @@ struct QueuePanelView: View {
     private var queueSummaryText: String {
         if appState.isCompressing || appState.doneCount > 0 {
             return "\(appState.doneCount) / \(appState.items.count) 已完成"
-                + (appState.isCompressing && appState.compressionPaused ? " · 已暂停" : "")
+                + appState.compressionPhaseSummary
                 + appState.cpuSummaryText
         }
         return "\(appState.items.count) 个文件"
@@ -527,7 +539,8 @@ struct FileRowView: View {
                 .frame(width: 24, height: 24)
             switch item.status {
             case .waiting:
-                Image(systemName: "photo")
+                // 暂停时换成暂停图标：转圈动画还在转，用户就以为没暂停。
+                Image(systemName: appState.compressionPaused ? "pause.fill" : "photo")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
             case .compressing:
@@ -653,7 +666,8 @@ struct FileRowView: View {
 
     private var statusText: String {
         switch item.status {
-        case .waiting: return "等待中"
+        // 暂停中排队的行写「已暂停」而不是「等待中」：它们此刻真的不会前进。
+        case .waiting: return appState.compressionPaused ? "已暂停" : "等待中"
         case .compressing: return appState.options.processingMode == .system ? "转换中…" : "压缩中…"
         case .done:
             if let r = item.result { return r.savingsSignedText }
@@ -682,9 +696,13 @@ struct CompressButton: View {
 
     private var buttonText: String {
         if appState.isCompressing {
-            // 暂停时进度按钮只换文案，不新增控件（与 Tauri 的「暂停中…」一致）
-            if appState.compressionPaused { return "暂停中…" }
-            return appState.options.processingMode == .system ? "转换中…" : "压缩中…"
+            // 暂停 / 停止时进度按钮只换文案，不新增控件（与 Tauri 一致）。
+            // 文案跟着 compressionPhase 走，不看 isCompressing 一个布尔值。
+            switch appState.compressionPhase {
+            case .paused: return "暂停中…"
+            case .stopping: return "正在停止…"
+            default: return appState.options.processingMode == .system ? "转换中…" : "压缩中…"
+            }
         }
         if !appState.compressDoneText.isEmpty {
             return appState.compressDoneText
@@ -693,7 +711,12 @@ struct CompressButton: View {
     }
 
     private var buttonIcon: String {
-        if appState.isCompressing { return "arrow.triangle.2.circlepath" }
+        if appState.isCompressing {
+            // 暂停时换成静态的暂停图标：转圈动画还在转，用户就以为没暂停。
+            return appState.compressionPhase == .paused
+                ? "pause.fill"
+                : "arrow.triangle.2.circlepath"
+        }
         if !appState.compressDoneText.isEmpty { return "checkmark" }
         return "arrow.down.circle.fill"
     }
