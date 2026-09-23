@@ -141,7 +141,7 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - ✅ 两条产物线功能对齐：JXL 已从前端输出格式下拉移除（两版一致）；GIF 两版均有压缩功能（Direct gifsicle 减色更优，App Store image crate 重编码，属质量差异非功能差异）
 - ✅ 对比视图已改为独立原生窗口（未发版）：`compare.html` + `compare_window.js`，label="compare"，由 `open_compare_window` 命令创建（Direct 用 tauri:// 内嵌页，App Store 用本地 HTTP 页），自由缩放可大于主窗口、自带红绿灯；载荷经 `pending_compare` 状态 + `take_compare_window_payload` 首屏取回，`compare-open` / `compare-results-changed` 事件双向同步；`on_window_event` 仅在 label=="main" 关闭时 exit(0)；首屏与 resize 均按"适合窗口"fit 适配（先 showPanel 再测量视口，隐藏态测量会得到 0 而回退 100%，大图只显示局部），缩放下限 0.02，重置按钮=重新适配，用户手动缩放后 resize 不再打断
 - ✅ 安全暂停已接入（三线一致）：压缩中可暂停/继续，只拦「还没开始」的文件，绝不 kill 正在跑的 CLI 子进程；进度按钮文案变「暂停中…」，旁边一个小号 [暂停]/[继续]。**取消一个文件只 `wake_waiters()`、绝不 `resume()`**（详见「安全暂停」），整批取消走一次 `cancel_batch`
-- ✅ 压缩历史 + 原图保留/恢复已接入（三线一致）：`history.rs::HistoryStore` / Swift `Services/HistoryStore.swift` 落 App Support（**不再是临时目录**），历史页/设置页为主窗口内部视图，恢复统一走一个服务（`restore_original` / `restore_history_entry` / `restore_all` 共用 `HistoryStore::restore`），保留档位为「不保留」（默认，退出时清理）或 1/3/7/14/30 天（启动时按天清理，详见下一节）
+- ✅ 压缩历史 + 原图保留/恢复已接入（三线一致）：`history.rs::HistoryStore` / Swift `Services/HistoryStore.swift` 落 App Support（**不再是临时目录**），历史页/设置页为主窗口内部视图，恢复统一走一个服务（`restore_original` / `restore_history_entry` / `restore_all` 共用 `HistoryStore::restore`），保留档位为「不保留」（默认，退出时连记录带备份一起清）或 1/3/7/14/30 天（详见「保留期与退出清理」——清理只有一个时机，就是正常退出）
 - ✅ 历史页每一行都有与「压缩完成」那一行对等的按钮（三线一致）：另存为 / 对比查看 / 恢复原图 / 删除这次压缩结果 / 访达 / 复制日志，全部由 `sourceExists`·`backupExists`·`outputExists` 三个读取时现算的派生字段决定，按钮不成立就不画；后缀模式给「删除这次压缩结果」而不是「恢复原图」，清空历史的确认框数得清带走几份原图备份（详见「历史页每一行的按钮」）
 - ✅ 覆盖事务与崩溃安全已接入（**三条线一致**）：`output_transaction.rs::TransactionStore` ↔ Swift `OutputTransactionStore.swift` 在覆盖前记账、`history.add` 落盘后才销账，启动时 `recover()` 补记或自动回滚上次中断的覆盖；`history.json` 严格读取（损坏→隔离 + 按 `backup-meta.json` 重建 `recoveryAvailable` + 本次启动锁死备份 sweep）；`write_output_file` 全链路 `Result`（任一步失败必须把 `CompressResult.success` 翻成 false）；备份 key 从 `DefaultHasher` 迁到 FNV-1a 64（老 key 只读复用/续认，含书签）；`MAX_HISTORY_ENTRIES = 10_000`
 - ✅ CPU 使用上限已接入（三条线一致）：设置页「性能」小节 + `CompressionScheduler`（暂停与并行预算同一套闸门）+两层预算（并发文件数 × 单编码器内部线程），检测见 `system_info.rs` / `SystemInfo.swift`，详见「CPU 使用上限（三条线共用不变量）」
@@ -171,8 +171,8 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 | restore_original / restore_history_entry / restore_all | 三条命令共用同一个恢复服务 `HistoryStore::restore`：备份 → `.octoshrink-restore-<nanos>.tmp` → fsync → rename 覆盖源文件 → **历史状态落盘成功之后**才删本次生成的压缩输出与备份目录；命中冲突（大小或 mtime 变化 >2 s，仅 replace 模式）时返回 `conflict=true`，前端确认后带 `force=true` 重试。`RestoreOutcome` 额外回报 `output_mode`，前端据此决定说「已恢复原图」还是「已删除这次压缩结果」 | 同上，源图/输出/备份路径均经 bookmark 授权；路径一律由 historyId 从存储读取，前端不拼路径 | 沙盒；两版恢复语义一致，**不允许复制三套恢复逻辑**。顺序反了会出现"历史说已恢复、备份已删、原图没写回" |
 | 历史页每一行的按钮 | `historyRowActionDefs(entry)`（前端）↔ `historyRowActions(_:)`（Swift 服务层）按 `sourceExists` / `backupExists` / `outputExists` 三个**读取时现算**的派生字段决定：另存为 → 对比 → 反悔（恢复原图 或 删除这次压缩结果，二选一）→ 访达 → 复制日志 | 同上，同一份前端代码、同一套判据 | 见「历史页每一行的按钮 = 这条记录此刻真能做到的事」。后缀模式永不给「恢复原图」，replace 永不给「删除这次压缩结果」；按钮不成立就不画 |
 | 历史记录与原图备份 | `HistoryStore` 落 `<appdata>/history/history.json` + `<appdata>/history/backups/<key>/`（App Support，跨启动长期保留）；备份 key = **FNV-1a 64 位**（`stable_hash`，跨 rustc 版本稳定），老 `DefaultHasher` key 仍被识别用于续用已有备份与书签 | 同上（沙盒容器内的 App Support）| 备份绝不放 temp_dir/Caches，否则系统清理会丢掉原图；Swift 线用独立根 `~/Library/Application Support/com.misswell.octoshrink.swift`。**标准库从不承诺 `DefaultHasher` 的跨版本稳定性**，一次升级就能让所有备份看起来"无人引用" |
-| 启动清理 | `setup` 里先 `transactions.recover(history)`（补记或自动回滚上次中断的覆盖），再跑一次 `cleanup_expired(retention_days)`：只删过期 `HistoryEntry` 和只被该条目引用的备份目录；`retention_days == 0`（「不保留」，默认档）时**只扫无人引用的孤儿备份** | 同上 | 不留常驻计时器；「不保留」档的备份**只在正常退出时清**（`RunEvent::Exit` / `applicationWillTerminate`），因为崩溃现场那份可能是唯一的原图；**绝不删用户的 sourcePath / outputPath / 输出目录里的文件**（历史过期 ≠ 用户文件过期） |
-| history.json 读不出来 | **严格读**：文件不存在=空历史（正常）；存在但解析失败=损坏 → 隔离为 `history.corrupt-<millis>.json`（现场绝不许被 `[]` 覆盖）→ 按 `backups/<key>/backup-meta.json` 重建 `status: "recoveryAvailable"` 条目 → 本次启动**禁止一切备份 sweep**（`cleanup_is_locked()`） | 同上 | 老实现 `unwrap_or_default()` 把半个文件当空历史，下一次启动清理就"合法地"删光所有原图备份。重建出的条目没有压缩明细，但保证**原图仍可一键恢复** |
+| 退出清理（唯一的清理时机） | `RunEvent::Exit` → `commands::apply_retention_on_exit` → `HistoryStore::apply_retention_on_exit(retention_days, run_started_at, previous_run_ended_cleanly)`：按当前档位删过期 `HistoryEntry` 和只被它们引用的备份目录；启动路径（`setup` / `AppState.init`）**只结清中断事务和损坏现场，一个备份都不删** | 同上（`applicationWillTerminate`） | 不留常驻计时器，也不在启动删任何东西：崩溃 / 强杀不走退出钩子，现场那份备份可能是唯一的原图；把时机收在退出，用户中途改档位也在同一刻生效。**绝不删用户的 sourcePath / outputPath / 输出目录里的文件**（历史过期 ≠ 用户文件过期） |
+| history.json 读不出来 | **严格读**：文件不存在=空历史（正常）；存在但解析失败=损坏 → 隔离为 `history.corrupt-<millis>.json`（现场绝不许被 `[]` 覆盖）→ 按 `backups/<key>/backup-meta.json` 重建 `status: "recoveryAvailable"` 条目 → 本次运行**禁止一切备份 sweep**（`cleanup_is_locked()`） | 同上 | 老实现 `unwrap_or_default()` 把半个文件当空历史，退出清理就"合法地"删光所有原图备份。重建出的条目没有压缩明细，但保证**原图仍可一键恢复** |
 | 安全暂停 / 取消 | `CompressionScheduler`（`pause_compression` / `resume_compression` / `compression_state` / `cancel_file` / `cancel_batch` / `clear_cancel_queue`）：闸门只拦「还没开始」的文件，正在跑的 CLI 子进程绝不 kill；`Notify` + 250 ms 超时轮询，等待者用 `acquire_or_cancelled` 自带取消退出条件 | 同上（进程内引擎同样只在新任务起点等待）| 两版行为一致；Swift 线为 `CompressionScheduler.acquire(cancelled:)`。**取消只 `wake_waiters()`，绝不 `resume()`** |
 | 对比窗口（compare 独立窗口）| WebviewUrl::App 加载内嵌 compare.html，经 convertFileSrc / read_image_dataurl 读图 | WebviewUrl::External 指向本地 HTTP 服务器 `http://localhost:<port>/compare.html`（`frontend_http_port()`），经 read_image_dataurl（bookmark 授权范围内）读图，窗口创建时 `visible(false)` + on_page_load show 防白屏 | 沙盒阻止 tauri://；两版窗口行为一致，URL 按 feature 分叉 |
 | open_in_finder | Command::new("open").arg("-R") | tauri-plugin-opener（NSWorkspace）| 沙盒禁 spawn Finder |
@@ -237,7 +237,7 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - **凭证在覆盖之前落盘**：`prepare()` 写 `transactions/<id>.json`（含 `history_id` / source / output / backup 路径 / `cross_format`），`history_id` 与稍后写入的 `HistoryEntry.id` **同一个**，这是唯一的关联键。
 - **提交凭据 = 只有一条事实**：`history.contains_committed(history_id)`。真 → `finish()` 销账；假 → `rollback()`（备份写回源文件、删本次生成结果）。❌ 不许凭"文件存在 / mtime 对了"之类的猜测来判断提交。
 - `rollback()` **永不删备份**：回滚失败时它是唯一的原图副本，必须留给下一次。
-- 启动时 `transactions.recover(history)` 先跑，再跑 `cleanup_expired`；`setup` 的 `CleanupReport` 会把中断事务的处置结果带出去（补记 or 已自动回滚）。
+- 启动时 `transactions.recover(history)` 第一件事就跑（**早于任何清理**，回滚要用的那份备份不能被当孤儿扫掉）；`setup` 的 `CleanupReport` 会把中断事务的处置结果带出去（补记 or 已自动回滚）。清理本身不在启动跑，见「保留期与退出清理」。
 - 只要还有 pending 凭证，`clear_history` 必须拒绝（「仍有文件事务正在处理，暂时无法清空历史记录」）。
 - **Swift 线必须全进程只用 `HistoryStore.shared`**：损坏锁死（`cleanupLocked`）与启动报告是**这一次运行**的状态，`AppState` 与 `AppDelegate.applicationWillTerminate` 各 `new` 一个实例，就会出现"启动时刚把损坏现场留档、退出清理看不见那把锁，转身把备份 sweep 掉"。`OutputTransactionStore` 同理只有一份（`AppState.transactions`）。
 - **清空历史同样受批次闸门约束**：`clear_history` 在压缩进行中直接返回错误（「压缩进行中，无法清空历史记录」），因为历史是"备份还有人认领"的账本 —— 一边在写备份一边销账，正在处理的那几张图就会变成无人引用的孤儿并被扫掉。前端配套：`renderHistory` 在 `isCompressing` 时禁用 `historyClearBtn` 并给 title，`clearHistory()` 自己也要早退 + toast（只靠按钮 disabled 挡不住键盘触发）。Swift 侧判据是 `CompressionScheduler.isBatchActive` + `transactions.hasPending()`，后端 `AppState.clearHistory()` 自己早退 + toast，`HistoryPageView` 的按钮同样 disable。这条在 `tests/history-view.cjs` 有回归断言。
@@ -250,12 +250,12 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 
 ### 历史文件读不出来：宁可少删，不可错删
 
-`history.json` 是"哪些备份还有人认领"的唯一依据。读不出来时如果把损坏当成空历史，下一次启动清理就会"合法地"删光所有备份目录 —— 而那些目录里是已被覆盖的**用户原图唯一的副本**。
+`history.json` 是"哪些备份还有人认领"的唯一依据。读不出来时如果把损坏当成空历史，退出清理就会"合法地"删光所有备份目录 —— 而那些目录里是已被覆盖的**用户原图唯一的副本**。
 
 - **严格读**：文件不存在 = 空历史（正常状态）；文件存在但解析失败 = 损坏。❌ 不许 `serde_json::from_str(...).unwrap_or_default()` 这类"读不出就当没有"。
 - 损坏时**先隔离现场**：整份挪成为 `history.corrupt-<epoch millis>.json`（毫秒足够唯一，本项目不引 chrono）。❌ 绝不许用重建出的 `[]` 或少量记录去覆盖它 —— 那是销毁证据，也是销毁用户的东西。
 - 隔离之后按 `backups/<key>/backup-meta.json` 重建 `status: "recoveryAvailable"` 条目：没有压缩明细（省了多少字节、用的什么算法），但带**真实原图副本的位置**，用户仍然能一键恢复。备份目录里连 meta 都没有的那些，保持孤儿身份，等解锁后再扫。
-- 本次启动**锁死一切备份 sweep**：`cleanup_is_locked()` 为真时，`cleanup_expired` / `purge_backups_on_exit` / `sweep_unreferenced_backups` 一律直接返回并给出警告文案「历史记录文件已损坏，本次启动跳过清理，原图备份全部保留」。锁是**整次启动**的，不因某一次成功写入而解除。
+- 本次运行**锁死一切备份 sweep**：`cleanup_is_locked()` 为真时，`apply_retention_on_exit` / `sweep_unreferenced_backups` 一律直接返回并给出警告文案「历史记录文件已损坏，本次退出跳过清理，原图备份全部保留」。锁是**整次运行**的，不因某一次成功写入而解除；也因此**绝不许**在跳过清理时写 `clean-exit` 记号（那等于谎报"账已结清"，会把上次崩溃留下的备份在下一次退出误删）。
 - 前端文案（三条线一致）：`recoveryAvailable` 显示「检测到可恢复的原图备份」，明细行显示「明细已丢失」，算法行显示「按备份重建」，用警告图标而不是对勾。❌ 不许伪造「节省 0.0%」—— 那是把"我不知道"包装成"压得不好"。备份也没了的时候同样显示「原图备份已清理」并收起恢复按钮。
 - `restore` 对 `recoveryAvailable` 条目照常工作（它只需要 `backup_path`）。冲突判定比的是文件大小 + mtime，而这两个值对重建条目来说无从得知 —— 必须填**当下实测到的源文件状态**（`compressed_size: file_size(source)`、`output_modified_at: file_mtime_millis(source)`），否则每一次恢复都会误报「压缩后又被修改过」，逼用户确认一次根本没有的冲突。
 
@@ -289,20 +289,23 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - 「清空历史」就是**手动到期**：不用等保留期，确认框要数清楚这一次带走几份原图备份（`historyEntries.filter(e => e.backupExists).length`）。文案固定：「同时立即删除 OctoShrink 保存的 N 份原图备份，不必等保留期到期。不会删除你的任何图片文件。」一份都没有时说「这次只清记录」，❌ 不许在没有备份的时候还写"会清理备份"。
 - 回归：`tests/history-view.cjs`（前端逐模式的按钮数组）+ `swift/Tests/HistoryStoreCheck/main.swift` 第 [26] 组（同一批用例）。改判据必须两边同改、两边都要过。
 
-### 保留期与退出/启动清理
+### 保留期与退出清理（清理只有一个时机）
 
 - 设置项 `原图备份保留时间`：**默认 `0` = 不保留**，可选 `不保留 / 1 / 3 / 7 / 14 / 30`（单位：天）。存在 `<app_data_dir>/settings.json`（Swift 线在自己的根目录下同名文件），字段 `original_retention_days` / `originalRetentionDays`，文件损坏则回落默认值。
 - **`0` 是一个真实档位，不是"没设置"**：常量 `KEEP_UNTIL_QUIT`（Rust）/ `Retention.noRetain`（Swift），默认值直接取它。三处必须守住：
   - ❌ 不许 `if (days)` / `parseInt(v,10) || 3` 这类真值判断 —— 会把「不保留」静默吞成 3 天（前端已修过两处，`tests/history-view.cjs` 有回归断言）。
   - ❌ 不许把 clamp 写成 `days.clamp(1, 30)` —— 会把 0 变成"保留 1 天"。clamp 只夹越界值，0 原样通过（`clamp_retention` / `Retention.clamp`）。
   - ❌ 不许显示成「保留 0 天」（`Retention.label(0) == "不保留"`）。
-- **`0` 不按时间过期**：它的清理挂在**正常退出**上（Tauri `RunEvent::Exit` → `commands::purge_backups_if_not_retained`；Swift `AppDelegate.applicationWillTerminate` → `HistoryStore.shared.purgeBackupsOnExit()`）。启动时这一档**只扫无人引用的孤儿备份**，不动还有人引用的（`cleanup_expired(0)` / `cleanupExpired(retentionDays: 0)` 里 `expires_by_time = days > 0` 为假）。
-  **为什么**：崩溃 / 强杀之后，那次留下的备份可能就是用户原图**唯一还活着的副本**（压缩结果已覆盖了源文件）。这笔欠账留给下一次正常退出收，绝不能在下一次启动时先删。
-- ⚠️ 「不保留」**不改变备份的写入**：`ensure_backup` 照旧在覆盖原文件前写备份，本次会话内随时可恢复。这一档只决定备份的**寿命**（到本次退出为止），不决定"要不要备份"。备份写不成仍然必须放弃覆盖。
-- 退出清理只抹 `backup_path` 并删备份目录，**历史条目本身保留** —— 那是用户的压缩记录，不是原图。前端/历史页读到 `backupExists == false` 就显示「原图备份已清理」并收起恢复按钮；此时 `restore` 必须返回 `BackupGone` / 抛 `RestoreError.backupGone`（「原图备份已清理，无法恢复」），❌ 不许伪装成 `NotRestorable`（"原图未被覆盖，无需恢复"）骗用户。
-- 按天保留的档位（1/3/7/14/30）：清理**只在启动时跑一次**，不留常驻计时器。
-- ⚠️ 清理对象的白名单是闭集，只允许删：① 本 store 里过期/无主的 `HistoryEntry` ② 只被这些过期条目引用的 `backups/<key>/` ③「不保留」档退出时所有已无引用的备份目录。**绝对不能删**：用户的 `sourcePath` 原图、`outputPath` 压缩结果、用户指定输出目录里的任何文件、`*_compressed.<ext>`、历史条目本身。历史过期 ≠ 用户文件过期。
-- 文案硬规定：按天档说「过期的历史记录和原图备份将在下次启动应用时自动清理」；「不保留」档说「原图备份只在这次运行期间保留，关闭应用时清理；期间可以随时恢复原图」。**永远不许**写「原图将在 3 天后删除」这类吓人的话，也**永远不许**把备份说成从不存在的功能（后半句「期间可以随时恢复原图」在「不保留」档是事实，可以写）。
+- **清理只有一个时机：正常退出。** `HistoryStore::apply_retention_on_exit(retention_days, run_started_at, previous_run_ended_cleanly)` ↔ `HistoryStore.applyRetentionOnExit(retentionDays:runStartedAt:previousRunEndedCleanly:)`。调用点：Tauri `RunEvent::Exit` → `commands::apply_retention_on_exit(app)`；Swift `AppDelegate.applicationWillTerminate` → `applyRetentionOnExit()`。**启动时一个备份都不许删**（`setup` / `AppState.init` 只跑 `transactions.recover()` 和损坏现场处理）：崩溃或强杀不会走退出钩子，而"下次启动就删"恰恰会在用户最需要那份副本的时候动手；把时机收在退出，用户中途改保留档位也在同一刻生效。
+- **`0`（不保留）判据**：`created_at >= run_started_at` 的记录连同其备份一起走 —— 记录和备份都清，不是只清备份。**例外**：`created_at` 早于本次运行、且备份文件此刻还在、且 `previous_run_ended_cleanly == false`（上次是异常退出）的那条，再留一个会话：那份备份可能是被覆盖原图**唯一还活着的副本**，这一次会话是用户唯一看得见、也恢复得了它的窗口。下一次干净退出收账，不留"说不保留却永久占着磁盘"的死角。
+- **按天档位（1/3/7/14/30）判据**：`created_at < now - days*DAY` 的记录过期，连带删只被它们引用的备份。窗口比的是退出那一刻，所以中途从 30 改到 1 立刻按 1 天收账。
+- **先落账再删文件**：`history.json` 写成功之后才 `sweep_unreferenced_backups`；写失败直接返回并给警告，一个文件都不动。备份删了而账上还写着"备份在"就是一个点开只会报错的恢复入口。
+- **`clean-exit` 记号**（`<history_root>/clean-exit`）：只有退出清理**真的跑完**（`report.warnings` 为空）才由调用方 `mark_clean_exit()` 写下；启动时 `take_clean_exit_marker()` 读一次即抹掉。历史不可信 / 写盘失败而跳过清理时**绝不许**留下"账已结清"的假证据。没有记号一律按"上次没结清"处理 —— 宁可多留一批备份，也不误删。
+- ⚠️ 「不保留」**不改变备份的写入**：`ensure_backup` 照旧在覆盖原文件前写备份，本次会话内随时可恢复。这一档只决定记录和备份的**寿命**（到本次退出为止），不决定"要不要备份"。备份写不成仍然必须放弃覆盖。
+- 备份被清走后**整条记录一起消失**（用户 2026-09-23 明确要求：「按照我们设定的保留时间去清除原图和历史记录」，选项「记录清掉，但仍有活备份的那条留着」）。仍然存在的边界：记录在、备份却被用户在 App 外面删了 —— 历史页读到 `backupExists == false` 就显示「原图备份已清理」并收起恢复按钮，此时 `restore` 必须返回 `BackupGone` / 抛 `RestoreError.backupGone`（「原图备份已清理，无法恢复」），❌ 不许伪装成 `NotRestorable`（"原图未被覆盖，无需恢复"）骗用户。
+- ⚠️ 清理对象的白名单是闭集，只允许删：① 本次退出判定过期的 `HistoryEntry` ② 只被这些过期条目引用的 `backups/<key>/` ③ 无人引用的孤儿备份目录。**绝对不能删**：用户的 `sourcePath` 原图、`outputPath` 压缩结果、用户指定输出目录里的任何文件、`*_compressed.<ext>`。历史过期 ≠ 用户文件过期。
+- 文案硬规定（三线逐字一致）：按天档说「过期的历史记录和原图备份将在关闭应用时自动清理」；「不保留」档说「本次运行的压缩记录和原图备份都会在关闭应用时清理；期间可以随时恢复原图」。切档 toast：`原图备份改为不保留，关闭应用时清理记录和备份` / `原图备份保留 N 天，关闭应用时清理过期项`。**永远不许**写「下次启动时清理」（清理不在启动跑，写了就是假承诺），也**永远不许**写「原图将在 3 天后删除」这类吓人的话，更**永远不许**把备份说成从不存在的功能。
+- 回归：`history.rs` 的 `expired_entries_and_their_backups_are_dropped_when_quitting` / `quitting_with_not_retained_clears_this_runs_rows_and_backups` / `crash_leftovers_get_one_more_session_under_not_retained` / `not_retained_leftovers_are_collected_by_the_next_clean_quit` / `the_clean_exit_marker_is_what_tells_a_crash_apart_from_a_quit` ↔ `scripts/test_swift_history.sh` 第 [3]、[19]、[20] 组 ↔ `tests/history-view.cjs` 的保留档位文案断言。
 
 ### 安全暂停
 

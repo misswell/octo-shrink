@@ -12,7 +12,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
-use crate::app_settings::{effective_cpu_limit, AppSettings, SettingsStore, KEEP_UNTIL_QUIT};
+use crate::app_settings::{effective_cpu_limit, AppSettings, SettingsStore};
 use crate::engine::{self, CompressOptions, CompressResult, EngineResult};
 use crate::history::{HistoryEntry, HistoryStore, RestoreError};
 use crate::output_transaction::{self, ReplaceTransaction, StagedOutput, TransactionStore};
@@ -33,6 +33,11 @@ pub struct AppState {
     pub access: std::sync::Arc<dyn FileAccess>,
     /// 启动时检测一次的本机 CPU 能力：设置页展示 + 上限天花板。
     pub cpu_info: CpuInfo,
+    /// 本次运行的起点：「不保留」档靠它区分"这次造的记录"和"上次崩溃留下的记录"。
+    pub run_started_at: i64,
+    /// 上次运行是否走完了退出清理。为假时说明磁盘上那批备份是崩溃现场留下的、
+    /// 可能是原图唯一的副本，本次退出得再留它一次。
+    pub previous_run_ended_cleanly: bool,
 }
 
 /// 压缩调度器：暂停与 CPU 使用上限共用一个闸门。
@@ -945,24 +950,32 @@ pub fn cleanup_temp_dirs() {
     }
 }
 
-/// 「不保留」档（`retentionDays == 0`）：正常退出时把原图备份清干净。
+/// 退出时按当前保留档位清一次历史记录与原图备份 —— 这是保留档位唯一的执行点。
 ///
-/// 只挂在退出路径上，启动时不清 —— 崩溃或强杀现场的那份备份可能是唯一还活着的
-/// 原图，删掉它就把"覆盖不可逆"变成"原图彻底没了"。异常退出留下的等下次正常退出收走。
-pub fn purge_backups_if_not_retained(app: &AppHandle) {
+/// 只在正常退出跑，启动时不清：崩溃或强杀现场的那份备份可能是唯一还活着的原图，
+/// 删掉它就把"覆盖不可逆"变成"原图彻底没了"。中途改档位也在这一刻生效。
+pub fn apply_retention_on_exit(app: &AppHandle) {
     let state = app.state::<AppState>();
-    if state.settings_store.load().original_retention_days != KEEP_UNTIL_QUIT {
-        return;
-    }
-    let report = state.history_store.purge_backups_on_exit();
-    if report.removed_backups > 0 || !report.warnings.is_empty() {
+    let report = state.history_store.apply_retention_on_exit(
+        state.settings_store.load().original_retention_days,
+        state.run_started_at,
+        state.previous_run_ended_cleanly,
+    );
+    if report.removed_entries > 0 || report.removed_backups > 0 {
         log::info!(
-            "退出清理: 原图备份 -{} 份（历史记录保留）",
-            report.removed_backups
+            "退出清理: 历史记录 -{} 条，原图备份 -{} 份，保留 {} 份",
+            report.removed_entries,
+            report.removed_backups,
+            report.kept_backups
         );
     }
-    for warning in report.warnings {
+    for warning in &report.warnings {
         log::warn!("退出清理未完成: {warning}");
+    }
+    // 只有账真结了才留记号。历史不可信或写盘失败时跳过清理，那批备份就得继续留着，
+    // 于是下一次退出仍然按"上次异常退出"处理，多给它一个会话的机会。
+    if report.warnings.is_empty() {
+        state.history_store.mark_clean_exit();
     }
 }
 
@@ -1041,7 +1054,7 @@ pub fn get_app_settings(state: State<'_, AppState>) -> AppSettings {
     state.settings_store.load()
 }
 
-/// 只改持久值：生效时点是下一次启动，这里绝不顺手清理。
+/// 只改持久值：清理只在正常退出时跑，所以这里绝不顺手删东西，生效时点就是下一次关闭应用。
 #[tauri::command]
 pub fn set_original_retention_days(
     state: State<'_, AppState>,
@@ -1957,7 +1970,7 @@ mod tests {
         assert_eq!(result.backup_path, None);
         // 凭证已销账，下次启动不会再把这次当成中断事务。
         assert!(!transactions.has_pending());
-        // 备份**不删**：它成了无人引用的孤儿，留给启动清理，绝不在这条路径上丢掉原图副本。
+        // 备份**不删**：它成了无人引用的孤儿，留给退出清理，绝不在这条路径上丢掉原图副本。
         let backups = temp.path().join("history").join("backups");
         assert!(
             fs::read_dir(&backups)

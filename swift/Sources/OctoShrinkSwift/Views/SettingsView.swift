@@ -135,12 +135,13 @@ struct AppSettingsPageView: View {
     }
 
     /// 「不保留」不能说成"保留 0 天"，也不能写得像"原图马上就没救了"：
-    /// 覆盖前照旧备份，只是这份备份的寿命到本次退出为止。
+    /// 覆盖前照旧备份，只是这份备份和这次的记录一起，寿命到本次退出为止。
+    /// 文案与前端 `applyRetentionSetting()` 逐字一致。
     private var retentionCopyText: String {
         var text = "覆盖原文件时，OctoShrink 会先保存一份原图备份。\n"
         text += appState.retentionDays == Retention.noRetain
-            ? "原图备份只在这次运行期间保留，关闭应用时清理；期间可以随时恢复原图。"
-            : "过期的历史记录和原图备份将在下次启动应用时自动清理。"
+            ? "本次运行的压缩记录和原图备份都会在关闭应用时清理；期间可以随时恢复原图。"
+            : "过期的历史记录和原图备份将在关闭应用时自动清理。"
         return text
     }
 

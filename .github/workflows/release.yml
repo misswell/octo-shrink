@@ -376,7 +376,7 @@ jobs:
           DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${ARCHIVE}"
           jq -n \
             --arg version "$VERSION" \
-            --arg notes "OctoShrink ${VERSION}: 图标体系换成描边风格；在线更新入口移到设置页的「更新」面板，App Store 版不再显示无效的更新按钮。" \
+            --arg notes "OctoShrink ${VERSION}: 原图备份保留时间的清理时机改到关闭应用 —— 启动时不再删任何东西，崩溃或强杀后留下的备份会再多留一次运行；默认「不保留」档现在连本次的记录一起在退出时清掉。" \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg signature "$SIGNATURE" \
             --arg url "$DOWNLOAD_URL" \

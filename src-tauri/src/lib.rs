@@ -505,8 +505,8 @@ pub fn run() {
             cancel_update,
         ])
         .setup(move |app| {
-            // 历史与原图备份放 AppData：绝不放临时目录。「不保留」（0，默认档）时
-            // 备份随这次运行存活、退出时清掉；按天保留的档位随退出留在磁盘上。
+            // 历史与原图备份放 AppData：绝不放临时目录。清理只有一个时机 —— 正常退出，
+            // 按当前保留档位把该走的记录和备份一起走掉。
             let data_root = app.path().app_data_dir().map_err(|error| error.to_string())?;
             let history_root = data_root.join(history::HISTORY_DIR);
             let history_store = std::sync::Arc::new(
@@ -520,7 +520,7 @@ pub fn run() {
             ));
 
             // 第一步先结清上次没走完的覆盖事务，**必须早于任何清理**：
-            // 回滚要用的那份备份，如果被启动清理当成孤儿扫掉，原图就真没了。
+            // 回滚要用的那份备份，如果被清理当成孤儿扫掉，原图就真没了。
             let recovered = transactions.recover(&history_store);
             if recovered.committed > 0 || recovered.rolled_back > 0 {
                 log::info!(
@@ -546,20 +546,11 @@ pub fn run() {
                 }
             }
 
-            // 启动阶段清一次过期历史 + 无人引用的备份；单项失败只 warn，
-            // 绝不让 App 因为删不掉文件而起不来。
-            let report = history_store.cleanup_expired(settings.original_retention_days);
-            if report.removed_entries > 0 || report.removed_backups > 0 {
-                log::info!(
-                    "启动清理: 历史记录 -{} 条，原图备份 -{} 份，保留 {} 份",
-                    report.removed_entries,
-                    report.removed_backups,
-                    report.kept_backups
-                );
-            }
-            for warning in report.warnings {
-                log::warn!("启动清理未完成: {warning}");
-            }
+            // 清理只在退出时跑，启动时一个备份都不动：崩溃现场那份可能是被覆盖原图
+            // 唯一还活着的副本。这里只取上次的"我结清过账了"记号，供本次退出判断
+            // 要不要再给那批遗留多留一次会话。
+            let previous_run_ended_cleanly = history_store.take_clean_exit_marker();
+            let run_started_at = history::now_millis();
 
             // CPU 能力只在启动时检测一次：设置页展示的是真机数字，不是写死的核心数。
             let cpu_info = system_info::CpuInfo::detect();
@@ -575,6 +566,8 @@ pub fn run() {
                 settings_store,
                 access: sandbox_access::build_access(history_root.join("bookmarks")),
                 cpu_info,
+                run_started_at,
+                previous_run_ended_cleanly,
             });
 
             // 启动时清掉上次崩溃残留的临时目录（正常退出时也清一次）
@@ -679,8 +672,8 @@ pub fn run() {
             // 应用退出（关主窗 / Cmd+Q / 重启）时清理临时目录，避免长期累积
             if matches!(event, tauri::RunEvent::Exit) {
                 commands::cleanup_temp_dirs();
-                // 「不保留」档：原图备份的寿命就是这次运行。
-                commands::purge_backups_if_not_retained(app);
+                // 保留档位唯一的执行点：此刻的档位就是用户最终选的那个。
+                commands::apply_retention_on_exit(app);
             }
         });
 }

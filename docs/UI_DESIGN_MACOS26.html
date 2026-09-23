@@ -1175,7 +1175,7 @@ input[type=range]::-webkit-slider-thumb {
     <div class="impl">
       <span>#originalRetentionDays（与 cpuThreadLimit 同一份 settings.json）</span>
       <span>Rust app_settings.rs::Retention · Swift HistoryStore.swift Retention.noRetain</span>
-      <span>退出清理：commands.rs::purge_backups_if_not_retained · HistoryStore.purgeBackupsOnExit()</span>
+      <span>退出清理（唯一时机）：commands.rs::apply_retention_on_exit · HistoryStore.applyRetentionOnExit(retentionDays:runStartedAt:previousRunEndedCleanly:)</span>
       <span>.settings-copy 文案随档位切换</span>
       <span class="swift">SwiftUI: AppSettingsPageView + SettingsRow</span>
       <span class="guard">ensure_backup 的写入逻辑一行都不改</span>
@@ -1200,7 +1200,7 @@ input[type=range]::-webkit-slider-thumb {
               </div>
               <p class="settings-copy">
                 覆盖原文件时，OctoShrink 会先保存一份原图备份。<br>
-                <span id="retentionCopy">过期的历史记录和原图备份将在下次启动应用时自动清理。</span>
+                <span id="retentionCopy">本次运行的压缩记录和原图备份都会在关闭应用时清理；期间可以随时恢复原图。</span>
               </p>
             </div>
           </div>
@@ -1246,9 +1246,9 @@ input[type=range]::-webkit-slider-thumb {
       <span class="variant"><b>恢复</b> 备份已清时返回「原图备份已清理，无法恢复」，不假装成功</span>
     </div>
     <div class="notes">
-      <div class="note">文案两条线逐字一致（<code>app.js applyRetentionSetting()</code> ↔ <code>SettingsView.retentionCopyText</code>）：0 档「原图备份只在这次运行期间保留，关闭应用时清理；期间可以随时恢复原图。」其余档「过期的历史记录和原图备份将在下次启动应用时自动清理。」</div>
-      <div class="note">切换档位的 toast 也固定：<code>原图备份改为不保留，关闭应用时清理</code> / <code>原图备份保留 N 天，下次启动时清理过期项</code>。</div>
-      <div class="note warn">崩溃 / 强杀不会走退出清理，那份备份可能是<b>唯一还活着的原图</b> —— 所以启动时绝不按时间删。<b>永远不许</b>写「原图将在 3 天后删除」「恢复原图仅限当前会话」。</div>
+      <div class="note">文案两条线逐字一致（<code>app.js applyRetentionSetting()</code> ↔ <code>SettingsView.retentionCopyText</code>）：0 档「本次运行的压缩记录和原图备份都会在关闭应用时清理；期间可以随时恢复原图。」其余档「过期的历史记录和原图备份将在关闭应用时自动清理。」</div>
+      <div class="note">切换档位的 toast 也固定：<code>原图备份改为不保留，关闭应用时清理记录和备份</code> / <code>原图备份保留 N 天，关闭应用时清理过期项</code>。</div>
+      <div class="note warn">崩溃 / 强杀不会走退出清理，那份备份可能是<b>唯一还活着的原图</b> —— 所以清理只挂在正常退出，启动时一个备份都不删。<b>永远不许</b>写「下次启动时清理」（那是假承诺）、写「原图将在 3 天后删除」或「恢复原图仅限当前会话」。</div>
       <div class="note">设置与 CPU 上限共用同一份 <code>settings.json</code>：写任一项都必须读-改-写，不得顺手抹掉对方字段（已修过的回归 bug）。</div>
       <div class="note">Swift 自检已断言 <code>Retention.options.first == Retention.noRetain</code>，两条线下拉顺序一致。</div>
       <div class="note">唯一非现有元素是那颗 <code>.tag-new</code> 徽标（图版装饰，不是产品类名）：备份份数/体积只作提示，如需常驻要先补一条统计命令，本板不动 IPC。</div>
@@ -1572,7 +1572,7 @@ input[type=range]::-webkit-slider-thumb {
       <li>新增窗口 label 必须进 <code>capabilities/default.json</code> 的 <code>windows</code> 数组（对比窗口 <code>"compare"</code> 就是这条），否则该窗口内 invoke 静默失效。</li>
       <li>白屏与 IPC 是耦合项：本地 HTTP 固定端口段 <code>41845-41847</code> 与 <code>remote.urls</code> 的带端口 origin 精确匹配必须同时满足，改一个要确认另一个。</li>
       <li>备份与历史始终落在<b>各自独立</b>的 App Support（Direct / App Store / <code>com.misswell.octoshrink.swift</code>），三条线互不读写对方的 <code>history.json</code>；绝不放进 temp / Caches。</li>
-      <li>启动清理的白名单是闭集：只删过期条目与只被其引用的备份目录，<b>绝不</b>删用户的 <code>sourcePath</code> / <code>outputPath</code> / 输出目录内容。</li>
+      <li>退出清理（唯一的清理时机）的白名单是闭集：只删过期条目与只被其引用的备份目录，<b>绝不</b>删用户的 <code>sourcePath</code> / <code>outputPath</code> / 输出目录内容；启动时一个备份都不删。</li>
       <li>改完用 <code>bash scripts/build_all.sh</code> 同时出两版，并跑 <code>cargo test</code> / <code>cargo test --features inproc-backends --no-default-features</code> / <code>npm run test:frontend</code> / <code>bash scripts/test_swift_history.sh</code> 四套验证；验证要用签名+沙盒 .app，<code>cargo tauri dev</code> 不复现沙盒问题。</li>
       <li>文件访问差异、entitlements 对照、CLI↔crate 映射若被改变，必须同步更新 AGENTS.md 对应小节。</li>
     </ul>

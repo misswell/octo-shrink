@@ -157,7 +157,7 @@ final class AppState: ObservableObject {
         scheduler = CompressionScheduler(maxParallelism: CPULimit.effective(
             configured: settings.cpuThreadLimit, detected: cpuInfo.budgetCeiling))
         // 第一步先结清上次没走完的覆盖事务，**必须早于任何清理**：回滚要用的那份备份
-        // 如果被启动清理当成孤儿扫掉，原图就真没了。
+        // 如果被清理当成孤儿扫掉，原图就真没了。
         let recovered = transactions.recover(history)
         if recovered.committed > 0 || recovered.rolledBack > 0 {
             NSLog("OctoShrink 启动恢复: 补记事务 %d 次，自动恢复原图 %d 个文件",
@@ -173,12 +173,8 @@ final class AppState: ObservableObject {
                 NSLog("OctoShrink 从原图备份重建了 %d 条可恢复记录", report.recoveredEntries)
             }
         }
-        let report = history.cleanupExpired(retentionDays: retentionDays)
-        if report.removedEntries > 0 || report.removedBackups > 0 {
-            NSLog("OctoShrink 启动清理: 历史记录 -%d 条，原图备份 -%d 份，保留 %d 份",
-                  report.removedEntries, report.removedBackups, report.keptBackups)
-        }
-        for warning in report.warnings { NSLog("OctoShrink 启动清理未完成: %@", warning) }
+        // 启动不清理：清理只有一个时机，就是正常退出（见 AppDelegate）。崩溃现场那份
+        // 备份可能是原图唯一的副本，"下次启动就删"恰好会在最需要它的时候动手。
         historyEntries = history.list()
     }
 
@@ -323,8 +319,8 @@ final class AppState: ObservableObject {
         retentionDays = clamped
         settingsStore.setRetentionDays(clamped)
         showToast(clamped == Retention.noRetain
-            ? "原图备份改为不保留，关闭应用时清理"
-            : "原图备份保留 \(clamped) 天，下次启动时清理过期记录")
+            ? "原图备份改为不保留，关闭应用时清理记录和备份"
+            : "原图备份保留 \(clamped) 天，关闭应用时清理过期项")
     }
 
     /// 改 CPU 上限：正在跑的任务不抢回来，只影响之后启动的新任务（与暂停同语义）。

@@ -5,9 +5,10 @@ import Foundation
 // 与 src-tauri/src/history.rs 同一套语义，只是落在自己的 App Support 目录：
 // 清理只针对 OctoShrink 自己写的副本 —— 用户的原图和压缩结果永远不在删除范围内。
 //
-// retentionDays > 0：备份随退出保留，在**下一次启动**按天数清理。
-// retentionDays == 0（「不保留」，默认档）：备份随这次运行存活，覆盖原文件前照写
-// 不误，在**正常退出**时清干净；异常退出留下的等下次正常退出，启动时只扫无人引用的孤儿。
+// 清理只有一个时机：**正常退出**，启动时一律不动备份。
+// retentionDays == 0（「不保留」，默认档）：本次运行的记录连同原图备份在退出时一起走，
+// 上次异常退出遗留的那批多给一次会话的机会；retentionDays > 0：退出时按天数窗口清理。
+// 为什么不是"下次启动"：崩溃现场那份备份可能是被覆盖原图唯一还活着的副本。
 
 // MARK: - 时间与文件属性
 
@@ -224,7 +225,7 @@ extension HistoryEntry {
         return "\(OctoClock.nowNanos)-\(sequence)-\(HistoryStore.backupKey(forPath: canonicalPath(source)))"
     }
 
-    /// 一次成功产出对应一条历史。`expiresAt` 只用于展示：启动清理按 `created_at`
+    /// 一次成功产出对应一条历史。`expiresAt` 只用于展示：退出清理按 `created_at`
     /// 判定，所以同一张图重压多次时，备份的存活期顺延到最后一次相关压缩之后。
     static func record(
         source: String,
@@ -305,7 +306,7 @@ enum RestoreError: Error {
         switch self {
         case .notFound: return "找不到这条历史记录"
         case .notRestorable: return "原图未被覆盖，无需恢复"
-        // 「不保留」档退出后就会走到这里：原图确实被覆盖过，只是备份没了。
+        // 备份被退出清理收走、或被用户在 App 外面删掉：原图确实被覆盖过，只是副本没了。
         case .backupGone: return "原图备份已清理，无法恢复"
         case .conflict: return "这个文件在压缩后又被修改过"
         case .io: return "恢复失败"
@@ -337,6 +338,8 @@ final class HistoryStore: @unchecked Sendable {
     static let backupsDirName = "backups"
     static let historyFileName = "history.json"
     static let metaFileName = "backup-meta.json"
+    /// 上次运行是否走完了退出清理。清理只有一个时机，所以得留个记号区分"上次崩了"。
+    static let cleanExitFileName = "clean-exit"
     /// `history.json` 损坏后重建出来的条目用的算法标记：它不是一次真实压缩。
     static let recoveryAlgorithm = "recovery"
     /// 历史条数硬上限：清理逻辑再怎么出错，也不能让 history.json 无限膨胀。
@@ -344,6 +347,11 @@ final class HistoryStore: @unchecked Sendable {
     static let maxHistoryEntries = 10_000
 
     let root: String
+    /// 本次运行的起点：「不保留」档靠它区分"这次造的记录"和"上次崩溃留下的记录"。
+    let runStartedAt = OctoClock.nowMillis
+    /// 上次运行有没有走完退出清理。为假说明磁盘上那批备份是崩溃现场留下的、
+    /// 可能是原图唯一的副本，本次退出得再留它一次。
+    let previousRunEndedCleanly: Bool
     private let lock = NSLock()
     /// `history.json` 读不出来过 → 本次启动锁死一切备份 sweep。
     /// 锁是整次启动的，不因后来某次写入成功而解除。
@@ -367,6 +375,9 @@ final class HistoryStore: @unchecked Sendable {
 
     init(root: String = HistoryStore.appDataRoot()) {
         self.root = root
+        // 启动只把"上次到底结清过账没有"读走（读一次即抹掉记号）：清理挂在退出上。
+        // 顺序不能颠倒 —— 这一行之前 self 还没初始化完，碰不得 backupsDir 这类实例属性。
+        previousRunEndedCleanly = Self.takeCleanExitMarker(at: root)
         try? FileManager.default.createDirectory(
             atPath: backupsDir, withIntermediateDirectories: true
         )
@@ -379,7 +390,7 @@ final class HistoryStore: @unchecked Sendable {
 
     /// 严格读取：**"没有历史"和"历史读不出来"是两回事**。
     ///
-    /// 老实现是 `contents + try? decode else []`，把半个 JSON 当成空历史；下一次启动
+    /// 老实现是 `contents + try? decode else []`，把半个 JSON 当成空历史；下一次清理
     /// 清理看到"没有任何记录引用这些备份"，就把用户所有原图备份删了 —— 拿原图换一个
     /// 不报错。损坏时改为：隔离现场留档 → 按 backup-meta 重建恢复入口 → 本次启动锁死
     /// 一切备份清理。
@@ -693,30 +704,50 @@ final class HistoryStore: @unchecked Sendable {
         return nil
     }
 
-    // ─── 启动清理 ────────────────────────────────────────────────
+    // ─── 退出清理（唯一的清理时机）───────────────────────────────
 
-    /// 只在启动时调用一次：删掉过期记录，再删掉已经没有任何记录引用的备份。
-    /// 单个删除失败只记 warning，剩下的孤儿下次启动继续扫。
+    /// 正常退出时按保留档位清一次：删掉的记录写回 history.json，再删已经没人引用的备份。
+    /// 单个删除失败只记 warning，剩下的孤儿下次退出继续扫。
     ///
-    /// `retentionDays == 0`（不保留）**不按时间过期**：这一档的清理挂在正常退出上，
-    /// 这里只扫没人引用的孤儿。
-    func cleanupExpired(retentionDays: Int) -> CleanupReport {
+    /// - 按天档位（1/3/7/14/30）：`createdAt` 超出窗口的记录过期。
+    /// - 「不保留」（0）：**本次运行**造出的记录过期。`runStartedAt` 之前那条如果是上次
+    ///   异常退出留下的、备份文件还在，就再留它一次（`previousRunEndedCleanly` 为假时）
+    ///   —— 那份备份可能是被覆盖原图唯一的副本，而这一次会话是用户唯一看得见、
+    ///   也恢复得了它的窗口。下一次干净退出收账。
+    ///
+    /// 只在正常退出跑，启动时一个备份都不动：崩溃现场那份可能是原图唯一的副本。
+    func applyRetentionOnExit(
+        retentionDays: Int,
+        runStartedAt: Int64,
+        previousRunEndedCleanly: Bool
+    ) -> CleanupReport {
         lock.lock(); defer { lock.unlock() }
         var report = CleanupReport()
         let all = readRaw()          // 先触发加载，损坏时才会把锁置起来
         if cleanupLocked {
-            if let pending = takePendingReportLocked() { report = pending }
-            report.warnings.append("历史记录文件已损坏，本次启动跳过清理，原图备份全部保留")
+            // 引用关系不可信的时候一个备份都不许删：这是"history.json 损坏 →
+            // 所有备份变成无人引用 → 全被清掉"那条链路唯一的断点。
+            report.warnings.append("历史记录文件已损坏，本次退出跳过清理，原图备份全部保留")
             return report
         }
-        let expiresByTime = retentionDays > Retention.noRetain
+        let notRetained = retentionDays == Retention.noRetain
         let cutoff = OctoClock.nowMillis - Int64(max(1, retentionDays)) * historyDayMillis
         let kept = all.filter { entry in
-            let expired = expiresByTime && entry.createdAt < cutoff
-            if expired { report.removedEntries += 1 }
-            return !expired
+            let survives: Bool
+            if notRetained {
+                // 别信 entry.backupExists：readRaw 给的是落盘时那份快照，备份目录
+                // 后来被谁动过它不知道。豁免的唯一依据是"文件此刻还在"。
+                let backupIsLive = entry.backupPath.map(fileExists(at:)) ?? false
+                survives = entry.createdAt < runStartedAt && !previousRunEndedCleanly && backupIsLive
+            } else {
+                survives = entry.createdAt >= cutoff
+            }
+            if !survives { report.removedEntries += 1 }
+            return survives
         }
-        guard writeRaw(kept) else {
+        // 先落账再删文件：备份没了而 history.json 还说备份在，就是一个点开只会报错的
+        // 恢复入口；写失败时一个文件都不许动。
+        if kept.count != all.count && !writeRaw(kept) {
             report.warnings.append("history.json 写入失败")
             return report
         }
@@ -724,30 +755,18 @@ final class HistoryStore: @unchecked Sendable {
         return report
     }
 
-    /// 「不保留」档：正常退出时把所有原图备份清干净。
-    ///
-    /// 历史条目本身留着 —— 那是用户的压缩记录，不是原图。只抹掉 `backupPath`，
-    /// 读出来 `backupExists == false`，历史页自然显示「原图备份已清理」并收起恢复按钮。
-    func purgeBackupsOnExit() -> CleanupReport {
-        lock.lock(); defer { lock.unlock() }
-        var report = CleanupReport()
-        _ = readRaw()               // 先触发加载，损坏时才会把锁置起来
-        if cleanupLocked {
-            // 历史读不出来时，备份目录里那些文件可能是用户原图**唯一**的副本。
-            // 既不能"按历史清理"（历史本身不可信），也不能顺手把 backupPath 抹成 nil
-            // —— 那会让重建出来的恢复入口永久失联。整个锁定期原样留给下次启动。
-            report.warnings.append("历史记录文件已损坏，本次退出不清理原图备份")
-            return report
-        }
-        var cleared = readRaw()
-        for index in cleared.indices { cleared[index].backupPath = nil }
-        guard writeRaw(cleared) else {
-            report.warnings.append("history.json 写入失败")
-            return report
-        }
-        // 传空列表：备份目录里剩下的每一份都不再被引用，一并清掉。
-        sweepUnreferencedBackups(kept: [], report: &report)
-        return report
+    /// 读取并抹掉「上次运行走完了退出清理」的记号，只在启动时取一次。
+    /// 崩溃 / 强杀写不下这个文件，所以"没有记号"就是上次没清账的证据。
+    static func takeCleanExitMarker(at root: String) -> Bool {
+        let path = (root as NSString).appendingPathComponent(cleanExitFileName)
+        guard FileManager.default.fileExists(atPath: path) else { return false }
+        return (try? FileManager.default.removeItem(atPath: path)) != nil
+    }
+
+    /// 只有退出清理真的跑完才留记号：跳过清理时不许留下"账已结清"的假证据。
+    func markCleanExit() {
+        let path = (root as NSString).appendingPathComponent(Self.cleanExitFileName)
+        try? String(OctoClock.nowMillis).data(using: .utf8)?.write(to: URL(fileURLWithPath: path))
     }
 
     /// 删掉没有任何存活条目引用的备份目录。调用方必须已持有 `lock`。
@@ -900,7 +919,7 @@ final class HistoryStore: @unchecked Sendable {
         }
         Self.removeGeneratedOutput(entry)
         if let dir = backupDirectory {
-            // 备份在 App Support 内，不需要任何沙盒授权。删不掉只是孤儿，下次启动扫。
+            // 备份在 App Support 内，不需要任何沙盒授权。删不掉只是孤儿，下次退出扫。
             _ = removeDirectory(dir)
         }
         return ids

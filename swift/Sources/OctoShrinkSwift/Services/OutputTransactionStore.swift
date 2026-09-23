@@ -165,7 +165,7 @@ final class OutputTransactionStore: @unchecked Sendable {
     }
 
     /// 启动时第一件事：把上次没走完的事务结清。**必须早于任何清理** ——
-    /// 回滚要用的那份备份如果被启动清理当成孤儿扫掉，原图就真没了。
+    /// 回滚要用的那份备份如果被清理当成孤儿扫掉，原图就真没了。
     func recover(_ history: HistoryStore) -> RecoveryReport {
         var report = RecoveryReport()
         for txn in list() {

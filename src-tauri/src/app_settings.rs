@@ -1,7 +1,7 @@
 // OctoShrink - backend-persisted app settings.
 //
-// 保留天数必须在后端可读，因为过期清理发生在 App 启动阶段（`setup()`），
-// 此时前端还没有运行，localStorage 不可用。
+// 保留天数必须在后端可读，因为清理挂在正常退出上（`RunEvent::Exit`），
+// 那一刻前端可能已经不存在，localStorage 不可用。
 
 use std::fs;
 use std::path::{Path, PathBuf};

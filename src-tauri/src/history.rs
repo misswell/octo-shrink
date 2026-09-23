@@ -3,10 +3,14 @@
 // 与旧的 `$TMPDIR/octoshrink-backups` 模型的根本区别：清理只针对 OctoShrink 自己
 // 写的副本 —— 用户的原图和压缩结果永远不在删除范围内。
 //
-// `retentionDays > 0`：备份随 App 退出保留，只在**下一次启动**按天数清理。
-// `retentionDays == 0`（「不保留」，默认档）：备份随这次运行存活，覆盖原文件前照写
-// 不误（没有备份就不许覆盖），在**正常退出**时清干净；异常退出留下的等到下次正常退出，
-// 启动时只扫没人引用的孤儿。
+// 清理只有一个时机：**正常退出**。启动时一律不动备份。
+//
+// `retentionDays == 0`（「不保留」，默认档）：本次运行的记录连同原图备份在退出时一起
+// 走；覆盖原文件前照写不误（没有备份就不许覆盖）。上次异常退出遗留的那批多给一次机会。
+// `retentionDays > 0`：退出时清掉超出天数窗口的记录和只被它们引用的备份。
+//
+// 为什么是退出而不是"下次启动"：崩溃现场那份备份可能是被覆盖原图唯一还活着的副本，
+// 而"下次启动就删"恰好会在用户最可能需要它的时候把它抹掉。
 //
 // 读取是**严格**的：`history.json` 存在但解析不出来时，绝不退化成"空历史"。
 // 空历史会让所有备份看起来无人引用，进而被清理掉 —— 那是拿用户原图换一个不报错。
@@ -14,7 +18,7 @@
 
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
@@ -29,6 +33,8 @@ pub const HISTORY_DIR: &str = "history";
 pub const BACKUPS_DIR: &str = "backups";
 const HISTORY_FILE: &str = "history.json";
 const META_FILE: &str = "backup-meta.json";
+/// 上次运行是否走完了退出清理。清理只有一个时机，所以得留个记号区分"上次崩了"。
+const CLEAN_EXIT_FILE: &str = "clean-exit";
 pub const DAY_MILLIS: i64 = 86_400_000;
 /// mtime 比文件大小更容易被无关操作扰动；容忍 2 秒以内的写入抖动。
 const MTIME_TOLERANCE_MILLIS: i64 = 2_000;
@@ -150,7 +156,7 @@ impl HistoryEntry {
         )
     }
 
-    /// 一次成功产出对应一条历史。`expires_at` 只用于展示：启动清理按 `created_at`
+    /// 一次成功产出对应一条历史。`expires_at` 只用于展示：退出清理按 `created_at`
     /// 判定，所以同一张图重压多次时，备份的存活期顺延到最后一次相关压缩之后。
     pub fn record(
         source: &Path,
@@ -330,7 +336,7 @@ impl HistoryStore {
     /// 严格读取：**"没有历史"和"历史读不出来"是两回事**。
     ///
     /// 老实现 `serde_json::from_str(&raw).unwrap_or_default()` 把半个 JSON 当成空历史，
-    /// 于是下一次启动清理看到"没有任何记录引用这些备份"，把用户所有原图备份全删了。
+    /// 于是下一次清理看到"没有任何记录引用这些备份"，把用户所有原图备份全删了。
     /// Err 只会来自"文件存在但内容不可信"，调用方据此关掉清理。
     fn load_from_disk(&self) -> Result<Vec<HistoryEntry>, String> {
         let raw = match fs::read_to_string(self.history_path()) {
@@ -543,7 +549,7 @@ impl HistoryStore {
             .iter()
             .filter_map(|entry| backup_key_of(entry.backup_path.as_deref()))
             .collect();
-        // 先让历史不再引用任何备份，再动手删：中间崩溃只是留下孤儿，下次启动扫掉。
+        // 先让历史不再引用任何备份，再动手删：中间崩溃只是留下孤儿，下次退出扫掉。
         self.store(Vec::new())?;
         let mut report = CleanupReport {
             removed_entries: entries.len(),
@@ -565,7 +571,7 @@ impl HistoryStore {
     /// 都落进同一个备份目录，也和 Swift 线 `backupKey(forPath:)` 完全一致。
     ///
     /// 刻意不用 `DefaultHasher` —— 标准库从不把它的算法当作持久存储格式的保证，
-    /// 一次升级就能让所有已有备份变成"无人引用"，进而被启动清理删掉。
+    /// 一次升级就能让所有已有备份变成"无人引用"，进而被退出清理删掉。
     fn stable_hash(text: &str) -> String {
         let mut hash: u64 = 0xcbf29ce484222325;
         for byte in text.as_bytes() {
@@ -783,40 +789,55 @@ impl HistoryStore {
         Path::new(backup_path).parent().map(Path::to_path_buf)
     }
 
-    // ─── 启动清理 ────────────────────────────────────────────────
+    // ─── 退出清理（唯一的清理时机）────────────────────────────────
 
-    /// 只在启动时调用一次：删掉过期记录，再删掉已经没有任何记录引用的备份。
-    /// 单个删除失败只 warn，剩下的孤儿下次启动继续扫。
+    /// 正常退出时按保留档位清一次：删掉的记录写回 `history.json`，再删已经没人引用的备份。
+    /// 单个删除失败只 warn，剩下的孤儿下次退出继续扫。
     ///
-    /// `retention_days == 0`（不保留）**不按时间过期**：这一档的清理挂在正常退出上。
-    /// 崩溃 / 强杀现场留下的那份备份可能是唯一还活着的原图，启动时只扫没人引用的孤儿。
-    pub fn cleanup_expired(&self, retention_days: u32) -> CleanupReport {
+    /// - 按天档位（1/3/7/14/30）：`created_at` 超出窗口的记录过期。
+    /// - 「不保留」（0）：**本次运行**造出的记录过期。`run_started_at` 之前那条如果是
+    ///   上次异常退出留下的、备份文件还在，就再留它一次（`previous_run_ended_cleanly`
+    ///   为假时）—— 那份备份可能是被覆盖原图唯一的副本，而这一次会话是用户唯一看得见
+    ///   也能一键恢复它的窗口。下一次干净退出收账，不留"说不保留却永久占着磁盘"的死角。
+    pub fn apply_retention_on_exit(
+        &self,
+        retention_days: u32,
+        run_started_at: i64,
+        previous_run_ended_cleanly: bool,
+    ) -> CleanupReport {
         let mut report = CleanupReport::default();
         let _commit = self.commit_lock.lock().unwrap();
         if self.cleanup_is_locked() {
             // 引用关系不可信的时候一个备份都不许删：这是"history.json 损坏 →
             // 所有备份变成无人引用 → 全被清掉"那条链路唯一的断点。
-            let mut report = self.take_startup_report().unwrap_or_default();
             report.warnings.push(
-                "历史记录文件已损坏，本次启动跳过清理，原图备份全部保留".into(),
+                "历史记录文件已损坏，本次退出跳过清理，原图备份全部保留".into(),
             );
             return report;
         }
-        let all = self.snapshot();
-        let expires_by_time = retention_days > crate::app_settings::KEEP_UNTIL_QUIT;
+        let not_retained = retention_days == crate::app_settings::KEEP_UNTIL_QUIT;
         let cutoff = now_millis() - retention_days.max(1) as i64 * DAY_MILLIS;
+        let all = self.snapshot();
         let kept: Vec<HistoryEntry> = all
             .iter()
             .filter(|entry| {
-                let expired = expires_by_time && entry.created_at < cutoff;
-                if expired {
+                let survives = if not_retained {
+                    entry.created_at < run_started_at
+                        && !previous_run_ended_cleanly
+                        && backup_file_is_live(entry)
+                } else {
+                    entry.created_at >= cutoff
+                };
+                if !survives {
                     report.removed_entries += 1;
                 }
-                !expired
+                survives
             })
             .cloned()
             .collect();
 
+        // 先落账再删文件：备份没了而 `history.json` 还说备份在，就是一个点开只会报错的
+        // 恢复入口；写失败时一个文件都不许动。
         if kept.len() != all.len() {
             if let Err(error) = self.store(kept.clone()) {
                 report.warnings.push(format!("history.json 写入失败: {error}"));
@@ -828,33 +849,23 @@ impl HistoryStore {
         report
     }
 
-    /// 「不保留」档：正常退出时清掉所有原图备份。
-    ///
-    /// 历史条目本身留着 —— 那是用户的压缩记录，不是原图。只把 `backup_path` 抹掉，
-    /// 前端读到 `backupExists == false` 就自然显示「原图备份已清理」并收起恢复按钮。
-    pub fn purge_backups_on_exit(&self) -> CleanupReport {
-        let mut report = CleanupReport::default();
-        let _commit = self.commit_lock.lock().unwrap();
-        if self.cleanup_is_locked() {
-            report.warnings.push("历史记录不可信，退出时保留所有原图备份".into());
-            return report;
+    /// 读取并抹掉「上次运行走完了退出清理」的记号，只在启动时取一次。
+    /// 崩溃 / 强杀写不下这个文件，所以"没有记号"就是上次没清账的证据。
+    pub fn take_clean_exit_marker(&self) -> bool {
+        let path = self.root.join(CLEAN_EXIT_FILE);
+        match fs::remove_file(&path) {
+            Ok(()) => true,
+            Err(error) if error.kind() == ErrorKind::NotFound => false,
+            Err(error) => {
+                log::warn!("退出记号 {path:?} 读不了，按上次没清账处理: {error}");
+                false
+            }
         }
-        let cleared: Vec<HistoryEntry> = self
-            .snapshot()
-            .into_iter()
-            .map(|mut entry| {
-                entry.backup_path = None;
-                entry
-            })
-            .collect();
+    }
 
-        if let Err(error) = self.store(cleared) {
-            report.warnings.push(format!("history.json 写入失败: {error}"));
-            return report;
-        }
-        // 传空列表：备份目录里剩下的每一份都不再被引用，一并清掉。
-        self.sweep_unreferenced_backups(&[], &mut report);
-        report
+    /// 只有退出清理真的跑完才留记号：跳过清理时不许留下"账已结清"的假证据。
+    pub fn mark_clean_exit(&self) {
+        let _ = fs::write(self.root.join(CLEAN_EXIT_FILE), now_millis().to_string());
     }
 
     /// 删掉没有任何存活条目引用的备份目录。
@@ -1055,7 +1066,7 @@ impl HistoryStore {
             }
             Self::remove_generated_output(entry);
             if let Some(dir) = backup_dir {
-                // 备份在 AppData 内，不需要沙盒授权。删不掉只是孤儿，下次启动扫。
+                // 备份在 AppData 内，不需要沙盒授权。删不掉只是孤儿，下次退出扫。
                 let _ = fs::remove_dir_all(dir);
             }
             Ok(ids)
@@ -1101,6 +1112,15 @@ pub(crate) fn same_file(a: &Path, b: &Path) -> bool {
 fn backup_key_of(backup_path: Option<&str>) -> Option<String> {
     let dir = Path::new(backup_path?).parent()?;
     dir.file_name()?.to_str().map(str::to_owned)
+}
+
+/// 备份文件此刻是否还在磁盘上。清理时用它判断"这条记录还替用户守着一份原图吗"。
+fn backup_file_is_live(entry: &HistoryEntry) -> bool {
+    entry
+        .backup_path
+        .as_ref()
+        .map(|path| Path::new(path).exists())
+        .unwrap_or(false)
 }
 
 /// 只有测试用：一条指向 `source`、覆盖模式为 replace 的历史记录。
@@ -1200,7 +1220,7 @@ mod tests {
     }
 
     #[test]
-    fn expired_entries_and_unreferenced_backups_are_dropped_at_startup() {
+    fn expired_entries_and_their_backups_are_dropped_when_quitting() {
         let dir = tempfile::tempdir().unwrap();
         let store = store_in(dir.path());
         let old = sample_source(dir.path(), "old.png", b"old-original");
@@ -1216,7 +1236,7 @@ mod tests {
             .add(entry_for(&fresh, &fresh_backup, now - 2 * DAY_MILLIS))
             .unwrap();
 
-        let report = store.cleanup_expired(3);
+        let report = store.apply_retention_on_exit(3, now, true);
         assert_eq!(report.removed_entries, 1);
         assert!(!dir_of_backup(&old_backup).exists());
         assert!(dir_of_backup(&fresh_backup).exists());
@@ -1243,38 +1263,45 @@ mod tests {
             .add(entry_for(&source, &second, now - 2 * DAY_MILLIS))
             .unwrap();
 
-        store.cleanup_expired(3);
+        store.apply_retention_on_exit(3, now, true);
         assert!(dir_of_backup(&backup).exists());
         assert_eq!(store.list().len(), 1);
 
-        store.cleanup_expired(1);
+        store.apply_retention_on_exit(1, now, true);
         assert!(!dir_of_backup(&backup).exists());
         assert!(store.list().is_empty());
         assert!(source.exists());
     }
 
     #[test]
-    fn not_retained_backups_survive_startup_because_they_may_be_the_only_original() {
+    fn quitting_with_not_retained_clears_this_runs_rows_and_backups() {
         let dir = tempfile::tempdir().unwrap();
         let store = store_in(dir.path());
         let source = sample_source(dir.path(), "a.png", b"true-original");
         let backup = store.ensure_backup(&source).unwrap();
-        // 三天前异常退出欠下的：0 档不按时间过期，这份备份可能还是唯一活着的原图。
+        fs::write(&source, b"compressed").unwrap();
+        let run_started_at = now_millis();
         store
-            .add(entry_for(&source, &backup, now_millis() - 3 * DAY_MILLIS))
+            .add(entry_for(&source, &backup, run_started_at + 1_000))
             .unwrap();
 
-        let report = store.cleanup_expired(0);
-        assert_eq!(report.removed_entries, 0);
-        assert!(
-            dir_of_backup(&backup).exists(),
-            "启动清理不许动还有人引用的原图备份"
-        );
-        assert_eq!(fs::read(&backup).unwrap(), b"true-original");
+        let report = store.apply_retention_on_exit(0, run_started_at, true);
+        assert_eq!(report.removed_entries, 1);
+        assert_eq!(report.removed_backups, 1);
+        assert!(store.list().is_empty(), "「不保留」= 关掉应用后记录也没了");
+        assert!(!dir_of_backup(&backup).exists());
+        // 清的是 OctoShrink 自己的账本和副本，用户的压缩结果一个字节都不动。
+        assert!(source.exists());
+        assert_eq!(fs::read(&source).unwrap(), b"compressed");
+
+        // 再退一次不许炸：已经没有东西可清了。
+        let again = store.apply_retention_on_exit(0, run_started_at, true);
+        assert_eq!(again.removed_entries, 0);
+        assert_eq!(again.removed_backups, 0);
     }
 
     #[test]
-    fn quitting_with_not_retained_clears_backups_but_keeps_the_history_rows() {
+    fn a_row_whose_backup_vanished_says_so_instead_of_pretending_to_be_restorable() {
         let dir = tempfile::tempdir().unwrap();
         let store = store_in(dir.path());
         let source = sample_source(dir.path(), "a.png", b"true-original");
@@ -1283,26 +1310,76 @@ mod tests {
         store
             .add(entry_for(&source, &backup, now_millis()))
             .unwrap();
+        // 记录还活着、备份目录却已经没了（手动清过 / 磁盘出错）：这时只能说实话。
+        fs::remove_dir_all(dir_of_backup(&backup)).unwrap();
 
-        let report = store.purge_backups_on_exit();
-        assert_eq!(report.removed_backups, 1);
-        assert!(!dir_of_backup(&backup).exists());
-
-        // 历史条目是用户的压缩记录，不是原图：留着，只是不再可恢复。
         let rows = store.list();
         assert_eq!(rows.len(), 1);
-        assert!(rows[0].backup_path.is_none());
         assert!(!rows[0].backup_exists);
-        assert!(source.exists(), "清理备份不能顺手删掉用户的压缩结果");
-
         let error = store
             .restore(&rows[0], true, open_access().as_ref(), &mut || false)
             .unwrap_err();
         assert!(matches!(error, RestoreError::BackupGone));
         assert_eq!(error.message(), "原图备份已清理，无法恢复");
+    }
 
-        // 再退一次不许炸：已经没有备份可清了。
-        assert_eq!(store.purge_backups_on_exit().removed_backups, 0);
+    #[test]
+    fn crash_leftovers_get_one_more_session_under_not_retained() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let source = sample_source(dir.path(), "a.png", b"true-original");
+        let backup = store.ensure_backup(&source).unwrap();
+        fs::write(&source, b"compressed").unwrap();
+        // 上次被强杀/崩溃欠下的：那份备份可能是这个原图唯一还活着的副本。
+        let run_started_at = now_millis();
+        store
+            .add(entry_for(&source, &backup, run_started_at - 60_000))
+            .unwrap();
+
+        // 本次退出：上一次没结清账 → 留着，用户在这一次会话里看得见、也恢复得了。
+        let report = store.apply_retention_on_exit(0, run_started_at, false);
+        assert_eq!(report.removed_entries, 0);
+        assert_eq!(report.removed_backups, 0);
+        assert!(dir_of_backup(&backup).exists());
+        let rows = store.list();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].backup_exists);
+        store
+            .restore(&rows[0], true, open_access().as_ref(), &mut || false)
+            .unwrap();
+        assert_eq!(fs::read(&source).unwrap(), b"true-original");
+    }
+
+    #[test]
+    fn not_retained_leftovers_are_collected_by_the_next_clean_quit() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let source = sample_source(dir.path(), "a.png", b"true-original");
+        let backup = store.ensure_backup(&source).unwrap();
+        fs::write(&source, b"compressed").unwrap();
+        // 同一份遗留：这次的上一次运行是**正常退出**的，账已经结过，不该再享有豁免。
+        store
+            .add(entry_for(&source, &backup, now_millis() - 60_000))
+            .unwrap();
+
+        let report = store.apply_retention_on_exit(0, now_millis(), true);
+        assert_eq!(report.removed_entries, 1);
+        assert_eq!(report.removed_backups, 1);
+        assert!(store.list().is_empty());
+        assert!(!dir_of_backup(&backup).exists());
+        assert!(source.exists());
+    }
+
+    #[test]
+    fn the_clean_exit_marker_is_what_tells_a_crash_apart_from_a_quit() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        // 全新安装：没有记号 = 上次没结清（宁可多留一批备份，也不误删）。
+        assert!(!store.take_clean_exit_marker());
+        store.mark_clean_exit();
+        // 取一次就抹掉：下次启动读到的必须是"本次运行"的结论，不是上上次的。
+        assert!(store.take_clean_exit_marker());
+        assert!(!store.take_clean_exit_marker());
     }
 
     #[test]
@@ -1425,16 +1502,17 @@ mod tests {
         fs::write(&source, b"compressed").unwrap();
         fs::write(store.history_path(), b"{ half-written").unwrap();
 
-        // 重启后第一件事就是启动清理：损坏的历史绝不能被当成"空历史"，
-        // 否则所有备份看起来无人引用，一次不报错的启动就把原图全删了。
-        let report = store.cleanup_expired(3);
+        // 退出清理第一刀就砍在损坏的历史上：它绝不能被当成"空历史"，否则所有备份
+        // 看起来无人引用，一次不报错的退出就把原图全删了。
+        let report = store.apply_retention_on_exit(3, now_millis(), true);
         assert_eq!(report.removed_entries, 0);
         assert_eq!(report.removed_backups, 0);
+        assert!(!report.warnings.is_empty(), "跳过清理必须说给用户听");
         assert!(dir_of_backup(&backup).exists());
         assert_eq!(fs::read(&backup).unwrap(), b"true-original");
         assert!(store.list().iter().any(|entry| entry.status == HistoryStatus::RecoveryAvailable));
         // 损坏现场要留档，不能悄悄被 [] 覆盖掉。
-        let quarantined = PathBuf::from(report.quarantined_to.unwrap());
+        let quarantined = PathBuf::from(store.take_startup_report().unwrap().quarantined_to.unwrap());
         assert_eq!(fs::read(&quarantined).unwrap(), b"{ half-written");
     }
 
@@ -1475,7 +1553,7 @@ mod tests {
         let backup = store.ensure_backup(&source).unwrap();
         assert!(!store.cleanup_is_locked());
         // 全新安装（没有任何历史）时，无人引用的孤儿备份照常被回收。
-        let report = store.cleanup_expired(3);
+        let report = store.apply_retention_on_exit(3, now_millis(), true);
         assert_eq!(report.removed_backups, 1);
         assert!(!dir_of_backup(&backup).exists());
     }

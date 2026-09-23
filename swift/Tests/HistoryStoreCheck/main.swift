@@ -3,8 +3,8 @@
 // 跑法：bash scripts/test_swift_history.sh
 // Swift 线用 swiftc 直接编译、没有 Package.swift 测试 target，所以这里是可执行自检而不是 XCTest。
 //
-// 守的是规范里最不能坏的几条：备份绝不覆盖真正原图、启动清理只删 OctoShrink
-// 自己的副本、「不保留」档只在正常退出时清备份（崩溃现场那份可能是唯一的原图）、
+// 守的是规范里最不能坏的几条：备份绝不覆盖真正原图、清理只删 OctoShrink
+// 自己的副本、清理唯一的时机是正常退出（崩溃现场那份可能是唯一的原图，启动时一个都不动）、
 // 恢复必须原子写回、压缩后被外部改过必须先问用户、暂停和改 CPU 上限都只拦
 // 「还没开始」的任务、CPU 上限真的限住同时跑的任务数。
 
@@ -181,10 +181,10 @@ do {
     check(moved.map { readBytes($0) } == [7], "挪位后备份的仍是本图真正原图")
 }
 
-// ─── 3. 启动清理只删 OctoShrink 自己的记录与备份 ───────────────────────────
+// ─── 3. 退出清理只删 OctoShrink 自己的记录与备份 ───────────────────────────
 // 这里测的是"按天保留"那一支，所以显式写 3 天，不用 Retention.defaultDays
 // （默认档已经变成 0 = 不保留，见 [19]）。
-print("[3] cleanupExpired 只清自己的副本")
+print("[3] applyRetentionOnExit 只清自己的副本")
 do {
     let store = tempStore("3")
     let source = canonicalPath(NSTemporaryDirectory() + "octoshrink-check-3/c.png")
@@ -203,7 +203,8 @@ do {
     store.add(entry)
     ageEntry(entry.id, daysAgo: 10, in: store)
 
-    let report = store.cleanupExpired(retentionDays: 3)
+    let report = store.applyRetentionOnExit(
+        retentionDays: 3, runStartedAt: OctoClock.nowMillis, previousRunEndedCleanly: true)
     check(report.removedEntries == 1, "过期历史记录被删除")
     check(report.removedBackups == 1, "无人引用的原图备份被删除")
     check(store.list().isEmpty, "历史页清空")
@@ -220,7 +221,8 @@ do {
         retentionDays: 30
     )
     store.add(fresh)
-    let second = store.cleanupExpired(retentionDays: 3)
+    let second = store.applyRetentionOnExit(
+        retentionDays: 3, runStartedAt: store.runStartedAt, previousRunEndedCleanly: true)
     check(second.keptBackups == 1 && second.removedBackups == 0, "未过期备份被保留")
     check(fm.fileExists(atPath: userOutput) && fm.fileExists(atPath: source), "保留期内用户文件不受影响")
 }
@@ -647,7 +649,7 @@ do {
           "本机架构 \(live.architecture)")
 }
 
-// ─── 19. 「不保留」（默认档）：备份活到本次退出为止 ──────────────────────────
+// ─── 19. 「不保留」（默认档）：清理只挂在正常退出 ────────────────────────────
 print("[19] 不保留：退出才清，启动不清")
 do {
     let root = freshRoot("19")
@@ -671,34 +673,70 @@ do {
     ageEntry(entry.id, daysAgo: 10, in: store)
     let orphan = store.ensureBackup(for: userOutput)!
 
-    let startup = store.cleanupExpired(retentionDays: Retention.noRetain)
-    check(startup.removedEntries == 0 && store.list().count == 1, "启动时不按时间过期，记录与备份都留着")
+    check(!store.previousRunEndedCleanly, "没有退出记号 = 上次没结清账，宁可多留")
+    let survived = store.applyRetentionOnExit(
+        retentionDays: Retention.noRetain,
+        runStartedAt: store.runStartedAt,
+        previousRunEndedCleanly: false
+    )
+    check(survived.removedEntries == 0 && store.list().count == 1,
+          "上次崩溃留下的记录，本次退出仍然留着")
     check(fm.fileExists(atPath: backup) && readBytes(backup) == [1, 9],
-          "还有人引用的原图备份绝不在启动时被删，且仍是真正的原图")
+          "还有人引用的原图备份绝不在退出时被删，且仍是真正的原图")
     check(!fm.fileExists(atPath: orphan), "无人引用的孤儿备份照旧扫掉")
+    let rows = store.list()
+    check(rows.count == 1 && rows[0].backupExists, "留着的那条仍然能一键恢复")
+    check(store.restoreOutcome(entry: rows[0], force: true).success
+          && readBytes(source) == [1, 9], "崩溃现场的原图恢复回来了")
 
-    let quit = store.purgeBackupsOnExit()
-    check(quit.removedBackups == 1, "退出时清掉原图备份（\(quit.removedBackups) 份）")
-    check(!fm.fileExists(atPath: backup), "备份目录已删除")
-    let kept = store.list()
-    check(kept.count == 1, "历史记录本身留着 —— 那是用户的压缩记录，不是原图")
-    check(kept[0].backupPath == nil && !kept[0].backupExists, "记录不再引用备份，历史页显示「原图备份已清理」")
-    check(kept[0].status == .compressed, "退出清理不把记录伪造成「已恢复」")
-    check(fm.fileExists(atPath: source) && fm.fileExists(atPath: userOutput), "用户文件一个都不碰")
+    // 结清过账的下一次退出不再享有豁免：不留下"说不保留却永久占着磁盘"的死角。
+    let leftover = store.ensureBackup(for: source)!
+    writeData(source, [3, 9])
+    let stale = HistoryEntry.record(
+        source: source,
+        result: result(file: source, size: 2),
+        output: source,
+        backup: leftover,
+        retentionDays: Retention.noRetain
+    )
+    store.add(stale)
+    ageEntry(stale.id, daysAgo: 10, in: store)
+    let collected = store.applyRetentionOnExit(
+        retentionDays: Retention.noRetain,
+        runStartedAt: OctoClock.nowMillis,
+        previousRunEndedCleanly: true
+    )
+    check(collected.removedEntries == 2 && store.list().isEmpty,
+          "正常退出结清账之后，记录和原图备份一起走（\(collected.removedEntries) 条）")
+    check(!fm.fileExists(atPath: leftover), "备份目录已删除")
+    check(fm.fileExists(atPath: source) && fm.fileExists(atPath: userOutput),
+          "用户文件一个都不碰")
 
-    let nextLaunch = HistoryStore(root: root)
-    check(nextLaunch.list().count == 1 && nextLaunch.list()[0].backupPath == nil,
-          "下次启动读到的还是那条历史，只是备份已清")
-
-    let outcome = store.restoreOutcome(entry: kept[0], force: false)
-    check(!outcome.success && !outcome.conflict, "备份没了就不假装恢复成功")
-    check(outcome.error == "原图备份已清理，无法恢复", "说清是备份没了：\(outcome.error ?? "")")
-    check(store.purgeBackupsOnExit().removedBackups == 0, "重复退出清理是幂等的")
+    // 记号是"上次到底结清过账没有"的唯一证据：写一次、读一次即抹掉。
+    store.markCleanExit()
+    check(HistoryStore(root: root).previousRunEndedCleanly, "退出记号留给下一次启动")
+    check(!fm.fileExists(atPath: root + "/\(HistoryStore.cleanExitFileName)"),
+          "记号读一次就抹掉，不会一直算成上上次")
 
     // 不保留 ≠ 关掉备份：覆盖前照旧必须先有备份，这条不变量不能让新档位废掉。
     let again = store.ensureBackup(for: source)
-    check(again != nil && readBytes(again!) == [1, 9], "「不保留」照样先备份再覆盖")
+    check(again != nil && readBytes(again!) == [3, 9], "「不保留」照样先备份再覆盖")
     check(Retention.options.first == Retention.noRetain, "设置页下拉第一档就是「不保留」")
+
+    // 记录还在、备份却被外部删了：只能说实话，不能假装恢复成功。
+    let goneBackup = store.ensureBackup(for: source)!
+    writeData(source, [4, 9])
+    store.add(HistoryEntry.record(
+        source: source,
+        result: result(file: source, size: 2),
+        output: source,
+        backup: goneBackup,
+        retentionDays: 30
+    ))
+    try? fm.removeItem(atPath: goneBackup)
+    let gone = store.restoreOutcome(entry: store.list()[0], force: false)
+    check(!gone.success && !gone.conflict, "备份没了就不假装恢复成功")
+    check(gone.error == "原图备份已清理，无法恢复", "说清是备份没了：\(gone.error ?? "")")
 }
 
 // ─── 20. history.json 读不出来：隔离现场 + 按备份重建 + 本次禁止清理 ─────────
@@ -717,11 +755,12 @@ do {
     writeData(store.historyFile, Array("[{\"id\":\"x\",\"sourcePa".utf8))
 
     let reopened = HistoryStore(root: root)
-    // 生产代码的顺序：先取启动报告（落日志），再跑启动清理。
+    // 生产代码的顺序：先取启动报告（落日志）。清理不在启动跑，见 [19]。
     let startup = reopened.takeStartupReport()
     check(startup?.recoveredEntries == 1, "启动报告统计到重建条目")
     check(reopened.takeStartupReport() == nil, "启动报告只报一次")
-    let report = reopened.cleanupExpired(retentionDays: 3)
+    let report = reopened.applyRetentionOnExit(
+        retentionDays: 3, runStartedAt: reopened.runStartedAt, previousRunEndedCleanly: true)
     check(report.removedEntries == 0 && report.removedBackups == 0,
           "损坏现场一次备份都不许删（removedBackups \(report.removedBackups)）")
     check(fm.fileExists(atPath: backup) && readBytes(backup) == [1, 2, 3],
@@ -742,7 +781,10 @@ do {
     check(rebuilt.first?.sourcePath == source, "重建条目认得原图属于谁")
 
     // 锁定期内连退出清理也不许动手：历史不可信时备份可能是原图唯一的副本。
-    let quit = reopened.purgeBackupsOnExit()
+    let quit = reopened.applyRetentionOnExit(
+        retentionDays: Retention.noRetain,
+        runStartedAt: reopened.runStartedAt,
+        previousRunEndedCleanly: false)
     check(quit.removedBackups == 0 && fm.fileExists(atPath: backup),
           "损坏锁定期内退出也不清备份")
 

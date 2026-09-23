@@ -1650,8 +1650,8 @@ async function saveRetentionDays(days) {
     var settings = await invoke('set_original_retention_days', { days: days });
     retentionDays = settings.originalRetentionDays;
     showToast(retentionDays === 0
-      ? '原图备份改为不保留，关闭应用时清理'
-      : '原图备份保留 ' + retentionDays + ' 天，下次启动时清理过期项');
+      ? '原图备份改为不保留，关闭应用时清理记录和备份'
+      : '原图备份保留 ' + retentionDays + ' 天，关闭应用时清理过期项');
   } catch (error) {
     showToast('设置失败: ' + (error.message || error));
   }
@@ -1660,6 +1660,7 @@ async function saveRetentionDays(days) {
 }
 
 // 「不保留」不是"关掉备份"：覆盖前照旧备份，只是寿命到本次退出为止。
+// 清理只有一个时机 —— 关闭应用，所以文案不许再承诺"下次启动"。
 // 文案必须把这件事说清楚，也不能写成吓人的措辞。
 function applyRetentionSetting() {
   var select = document.getElementById('retentionDays');
@@ -1667,8 +1668,8 @@ function applyRetentionSetting() {
   var copy = document.getElementById('retentionCopy');
   if (copy) {
     copy.textContent = retentionDays === 0
-      ? '原图备份只在这次运行期间保留，关闭应用时清理；期间可以随时恢复原图。'
-      : '过期的历史记录和原图备份将在下次启动应用时自动清理。';
+      ? '本次运行的压缩记录和原图备份都会在关闭应用时清理；期间可以随时恢复原图。'
+      : '过期的历史记录和原图备份将在关闭应用时自动清理。';
   }
 }
 

@@ -269,14 +269,17 @@ const actionsOf = row => row.children[4].children.map(btn => btn.dataset.history
   assert.equal(ids.mainView.style.display, '', 'unknown view falls back to main');
 
   // ── 原图备份保留时间：「不保留」= 0，是一个真实档位而不是"没设置" ──
+  // 清理只有一个时机：关闭应用。两条文案都不许再说"下次启动"。
   retentionReply = 7;
   await context.loadRetentionSetting();
   assert.equal(ids.retentionDays.value, '7');
-  assert.doesNotMatch(ids.retentionCopy.textContent, /关闭应用时清理/, '按天保留不该说退出清理');
+  assert.match(ids.retentionCopy.textContent, /过期的历史记录和原图备份将在关闭应用时自动清理/);
+  assert.doesNotMatch(ids.retentionCopy.textContent, /下次启动/, '按天保留不该承诺下次启动才生效');
+  assert.doesNotMatch(ids.retentionCopy.textContent, /本次运行/, '按天档该说过期窗口，不是本次会话');
   retentionReply = 0;
   await context.loadRetentionSetting();
   assert.equal(ids.retentionDays.value, '0', '0 不能被真值判断吞掉，停在 7 天');
-  assert.match(ids.retentionCopy.textContent, /关闭应用时清理/);
+  assert.match(ids.retentionCopy.textContent, /本次运行的压缩记录和原图备份都会在关闭应用时清理/);
   assert.match(ids.retentionCopy.textContent, /恢复原图/, '要说清楚这期间仍可恢复');
 
   // 选「不保留」必须原样传 0 —— `parseInt(...) || 3` 会把它偷偷变成 3 天。
@@ -287,19 +290,26 @@ const actionsOf = row => row.children[4].children.map(btn => btn.dataset.history
   await flush();
   assert.equal(last('set_original_retention_days')[1].days, 0);
   assert.match(toasts[toasts.length - 1], /不保留/);
+  assert.match(toasts[toasts.length - 1], /关闭应用时清理记录和备份/, '要说清记录也一起走');
   assert.doesNotMatch(toasts[toasts.length - 1], /保留 0 天/, '不许说"保留 0 天"这种半截话');
 
   ids.retentionDays.value = '3';
   ids.retentionDays.handlers.change();
   await flush();
   assert.equal(last('set_original_retention_days')[1].days, 3);
-  assert.match(ids.retentionCopy.textContent, /下次启动应用时自动清理/);
+  assert.match(toasts[toasts.length - 1], /关闭应用时清理过期项/);
+  assert.match(ids.retentionCopy.textContent, /关闭应用时自动清理/);
 
   const settingsHtml = fs.readFileSync('frontend/index.html', 'utf8');
   assert.match(settingsHtml, /<option value="0">不保留<\/option>/);
   assert.ok(
     settingsHtml.indexOf('<option value="0">') < settingsHtml.indexOf('<option value="1">'),
     '「不保留」是默认档，排第一');
+  // HTML 里的静态文案 = 默认档那一句：设置读回来之前那一瞬也不许先承诺"下次启动"。
+  assert.ok(
+    settingsHtml.includes('本次运行的压缩记录和原图备份都会在关闭应用时清理'),
+    '默认文案要与 retentionDays === 0 的分支逐字一致');
+  assert.doesNotMatch(settingsHtml, /下次启动应用时自动清理/);
 
   // ── 压缩进行中不许清空历史：后端会拒绝，前端先收成不可点，别让人撞报错 ──
   context.historyEntries = [entry({})];
