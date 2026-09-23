@@ -653,7 +653,7 @@ input[type=range]::-webkit-slider-thumb {
         <ul>
           <li>覆盖原文件前<b>必须先写备份</b>；备份没写成就放弃这次覆盖</li>
           <li>历史 / 备份落在<b>各自独立的 App Support</b>，三条线互不读写对方的 <code>history.json</code></li>
-          <li>「不保留」= <code>0</code> 是真实档位：照常备份，<b>退出时</b>清理，启动不按时间过期</li>
+          <li>「不保留」= <code>0</code> 是真实档位：照常备份，<b>只在正常退出时</b>清理，启动一个备份都不删</li>
           <li>暂停与 CPU 上限共用<b>一个</b> <code>CompressionScheduler</code> 闸门</li>
         </ul>
       </div>
@@ -1241,8 +1241,9 @@ input[type=range]::-webkit-slider-thumb {
       <span class="variant"><b>默认</b> <code>Retention.defaultDays = noRetain</code>，下拉第一项就是「不保留」，老用户一律回落到该档</span>
       <span class="variant"><b>档位文案两条线不同</b> Tauri <code>&lt;option&gt;</code> 是「1 天 / 3 天」，Swift <code>Retention.label()</code> 是「保留 1 天 / 保留 3 天」，0 档两边都只写「不保留」</span>
       <span class="variant"><b>0 ≠ nil</b> 禁止 <code>if (days)</code> / <code>parseInt(v,10) || 3</code> / <code>clamp(1,30)</code></span>
-      <span class="variant"><b>启动</b> 不按时间过期，只扫无人引用的孤儿备份</span>
-      <span class="variant"><b>退出</b> 清备份、留记录、把 backupPath 置空</span>
+      <span class="variant"><b>启动</b> 一个备份都不删，只读走「上次退出结没结清」的 <code>clean-exit</code> 记号（读一次即抹掉）</span>
+      <span class="variant"><b>退出</b> 是唯一的清理时机：按当前档位删过期记录与只被它们引用的备份；「不保留」把这次的记录和备份一起清掉</span>
+      <span class="variant"><b>崩溃过的上一次</b> 留下的备份再多留一次运行，等下一次正常退出收 —— 那可能是原图唯一的副本</span>
       <span class="variant"><b>恢复</b> 备份已清时返回「原图备份已清理，无法恢复」，不假装成功</span>
     </div>
     <div class="notes">
