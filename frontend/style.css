@@ -790,6 +790,7 @@ body {
 .file-queue-item.done .queue-item-icon { color: var(--success); }
 .file-queue-item.failed .queue-item-icon { color: var(--danger); }
 .file-queue-item.restored .queue-item-icon { color: var(--text-tertiary); }
+.file-queue-item.compressing .queue-item-icon { color: var(--accent); }
 .file-queue-item .queue-item-name {
   flex: 1;
   overflow: hidden;
@@ -976,10 +977,10 @@ body {
 .progress-file-spinner {
   width: 12px;
   height: 12px;
-  border: 3px solid currentColor;
-  border-right-color: transparent;
-  border-radius: 4px;
-  animation: spin 1s ease-in-out infinite;
+  border: 2px solid color-mix(in srgb, currentColor 22%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
   flex-shrink: 0;
 }
 @keyframes spin { to { transform: rotate(360deg); } }

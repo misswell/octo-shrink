@@ -60,4 +60,10 @@ assert.match(rule, /stroke:\s*currentColor/, 'glyph 必须 stroke:currentColor�
 assert.match(rule, /stroke-width/, '.symbol-icon 缺少 stroke-width');
 assert.doesNotMatch(css, /fill='%23888'/, '<select> 箭头仍是旧的实心灰块');
 
-console.log(`PASS: ${shared.length} 个共享 glyph 两页一致，sprite 无缺失/无死 glyph，描边渲染模式在位`);
+// 加载指示器：55b2a4c 曾把它改成圆角方块 + ease-in-out，画出来是个 ∩ 形断口块
+const spinner = css.match(/\.progress-file-spinner\s*\{[^}]*\}/)[0];
+assert.match(spinner, /border-radius:\s*50%/, 'spinner 必须是圆环：非 50% 会画成圆角方形的断口块');
+assert.match(spinner, /animation:\s*spin[^;]*\blinear\b/, 'spinner 必须 linear 匀速：ease-in-out 每圈加减速，看着像卡顿');
+assert.match(spinner, /border[^;]*color-mix/, 'spinner 需要有半透明轨道，四边同色只剩一个硬缺口');
+
+console.log(`PASS: ${shared.length} 个共享 glyph 两页一致，sprite 无缺失/无死 glyph，描边渲染模式在位，spinner 为匀速圆环`);
