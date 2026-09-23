@@ -607,6 +607,12 @@ xcrun altool --upload-app \
 #### 发布新版本完整流程（无密码）
 
 ```bash
+# 0. 发版前必须改的三处（CI 不会替你生成，漏了就发出一条描述上一版的下载提示）
+#    - src-tauri/tauri.conf.json  -> "version"（Direct）
+#    - src-tauri/tauri.conf.appstore.json -> "version"（两条线版本号保持一致）
+#    - .github/workflows/release.yml 里 latest.json 的 --arg notes "..." 换成这一版的实话
+#      （这段文字就是应用内「检查更新」弹出的更新说明，硬编码在 workflow 里）
+
 # 1. 更新版本号
 #    src-tauri/tauri.conf.json -> "version"
 
@@ -626,6 +632,10 @@ gh run watch --exit-status
 ```
 
 也可在 GitHub Actions 手动运行 `Release` workflow：输入 `vX.Y.Z` 作为产物版本标签；`publish=false`（默认）只完整验证构建、签名与公证，`publish=true` 才正式发布。CI 签名公证实现位于 `scripts/sign_notarize_macos_ci.sh`；本地不再需要下载、重签或覆盖 Release 资产。
+
+> ⚠️ **`release.yml` 不跑任何测试套件**（只构建 / 签名 / 公证 / 发布），所以推 tag 之前本地那几套自检是唯一的门禁：`npm run test:frontend`、`cargo test --lib`（默认 feature）、`cargo test --lib --features appstore --no-default-features`、`bash scripts/test_swift_history.sh`，再加一次 `cargo check --release`（release profile 与 dev 不同，历史上踩过 proc-macro 半写坏的坑）。CI 一轮约 33 分钟、不可中断重来代价高。
+>
+> 一次完整发布的耗时参考：v2.5.37 33m22s，v2.5.36 38m18s。`gh run watch <run-id> --exit-status --interval 60` 可以挂着等。
 
 **钥匙串 profile 已丢失（2026-09-23 实测）**：本机 `octoshrink-notary` 已不在钥匙串里，`bash scripts/notarize.sh` 会在公证前的自检处停下并打印下面这条命令（脚本第 146 行的探测是好的，不会让它变成莫名其妙的失败）。发布走 GitHub Actions 不受影响 —— CI 用的是 `APPLE_ID` / `APPLE_TEAM_ID` / `APPLE_APP_SPECIFIC_PASSWORD` 三个 Secrets，与本机钥匙串无关。
 用户需要在终端执行一次 `xcrun notarytool store-credentials octoshrink-notary --apple-id misswell@foxmail.com --team-id U8U443D7ZL`，输入 App 专用密码。这是唯一可能需要用户输入的情况。
