@@ -636,6 +636,11 @@ gh run watch --exit-status
 > ⚠️ **`release.yml` 不跑任何测试套件**（只构建 / 签名 / 公证 / 发布），所以推 tag 之前本地那几套自检是唯一的门禁：`npm run test:frontend`、`cargo test --lib`（默认 feature）、`cargo test --lib --features appstore --no-default-features`、`bash scripts/test_swift_history.sh`，再加一次 `cargo check --release`（release profile 与 dev 不同，历史上踩过 proc-macro 半写坏的坑）。CI 一轮约 33 分钟、不可中断重来代价高。
 >
 > 一次完整发布的耗时参考：v2.5.37 33m22s，v2.5.36 38m18s。`gh run watch <run-id> --exit-status --interval 60` 可以挂着等。
+>
+> **发完之后怎么核对（别被某个端点骗了）**：`gh release view <tag>` / `releases/tags/<tag>` 这个按 tag 查的端点可能报 `assets: 0`，而资产其实好好的（v2.5.38 实测：按 tag 查 0 个，按 release id 查 10 个，公开页面也齐）。可靠的三条判据：① `gh api repos/<owner>/<repo>/releases/<id>/assets`（id 从 tag 查不到就 `gh api .../releases?per_page=10` 取）；② 公开页面 `releases/expanded_assets/<tag>`；③ 最关键的一条 —— 用**应用真正轮询的那个 URL** 验一遍：`curl -sL https://github.com/<owner>/<repo>/releases/latest/download/latest.json`，确认 `version` 是新版本、`notes` 是这次写的实话、`platforms.darwin-*.url` 指向本版更新包，再 `curl -sIL` 那个 tar.gz 看到 200。自动更新走的是 `releases/latest/download/…`（`tauri.conf.json` 的 updater.endpoints），不是按 tag 的 API，所以后者抽风不影响用户。
+>
+> Release 页正文（`release.yml` 里 `softprops/action-gh-release` 的 `body`）是**按 tag 那个提交里的 workflow 文本**生成的：改完 workflow 再拖到发布之后才补的正文改动不会进这一版，得 `gh release edit <tag> --notes-file` 手动补（v2.5.38 就这么补的）。
+
 
 **钥匙串 profile 已丢失（2026-09-23 实测）**：本机 `octoshrink-notary` 已不在钥匙串里，`bash scripts/notarize.sh` 会在公证前的自检处停下并打印下面这条命令（脚本第 146 行的探测是好的，不会让它变成莫名其妙的失败）。发布走 GitHub Actions 不受影响 —— CI 用的是 `APPLE_ID` / `APPLE_TEAM_ID` / `APPLE_APP_SPECIFIC_PASSWORD` 三个 Secrets，与本机钥匙串无关。
 用户需要在终端执行一次 `xcrun notarytool store-credentials octoshrink-notary --apple-id misswell@foxmail.com --team-id U8U443D7ZL`，输入 App 专用密码。这是唯一可能需要用户输入的情况。
