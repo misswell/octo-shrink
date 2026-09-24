@@ -70,6 +70,29 @@ if [ -n "$spawns" ]; then
 fi
 ok "bundle 自检通过（无外部可执行文件、引擎无 spawn）"
 
+# ---------- 1.6 嵌入 provisioning profile ----------
+# 为什么要嵌：不嵌照样能提交审核，但 Apple 每次投递都会回一封
+# ITMS-90889（"missing a provisioning profile... not eligible for TestFlight"），
+# 而且这个构建在 TestFlight 里根本不可用。必须在 codesign **之前**放进去，
+# 否则它不在签名的封条内（包一改签名就废）。
+PROFILE_FILE="${APPSTORE_PROFILE:-$PROJECT_DIR/src-tauri/OctoShrink_AppStore.provisionprofile}"
+if [ -f "$PROFILE_FILE" ]; then
+  cp "$PROFILE_FILE" "$APP/Contents/embedded.provisionprofile" \
+    || fail "无法写入 embedded.provisionprofile"
+  # 兜底清一下别的扩展属性（quarantine 之类）。注意 com.apple.provenance 清不掉：
+  # 这台机器上新建的每个文件都带它，productbuild 因此会在载荷里生成配对的
+  # AppleDouble `._` 条目 —— 整个载荷本来就有 19 个（主程序、CodeResources 都有），
+  # 2.4.3 就是这么送审并上架的，属既有现象、不是问题。
+  xattr -c "$APP/Contents/embedded.provisionprofile" 2>/dev/null || true
+  ok "已嵌入 provisioning profile: $(basename "$PROFILE_FILE")"
+else
+  # 非致命：没有它只是拿不到 TestFlight，审核与上架不受影响。
+  log "⚠️  未找到 provisioning profile（$PROFILE_FILE）—— 可提交审核，但该构建不能用于 TestFlight"
+  log "    重建：asc profiles create --name \"OctoShrink macOS AppStore\" --profile-type MAC_APP_STORE \\"
+  log "          --bundle 9G3X34F4VY --certificate L4SC3D834Q"
+  log "          asc profiles download --id <PROFILE_ID> --output $PROFILE_FILE"
+fi
+
 # ---------- 2. Apple Distribution 签名（hardened runtime + sandbox entitlements）----------
 # 前置：在钥匙串安装 "Apple Distribution: <name>" 证书（Apple Developer > Certificates > +）。
 SIGN_IDENTITY="${APPSTORE_SIGN_IDENTITY:-Apple Distribution: Guofeng Liu (U8U443D7ZL)}"

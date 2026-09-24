@@ -31,3 +31,6 @@ logo-designs/octoshrink-logo-generated-v1.png
 logo-designs/icon-candidates-v1/
 logo-designs/ip-as-logo-v1/
 marketing/
+
+# App Store provisioning profile（本机生成，会过期；靠 asc profiles create 重建，见 AGENTS.md §6.5）
+src-tauri/*.provisionprofile

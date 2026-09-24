@@ -536,7 +536,7 @@ xcrun altool --upload-app \
 
 ```bash
 APP=6792604654                                    # OctoShrink 图片压缩（bundleId com.misswell.octoshrink.appstore）
-bash scripts/build_appstore.sh                    # 出 OctoShrink-<ver>.pkg（自带签名 + bundle 自检）
+bash scripts/build_appstore.sh                    # 出 OctoShrink-<ver>.pkg（签名 + bundle 自检 + 嵌入 provisioning profile）
 asc builds upload --app $APP --pkg OctoShrink-<ver>.pkg --version <ver> --build-number <ver> --wait
 asc builds update --build-id <构建ID> --uses-non-exempt-encryption=false   # ← 漏了这步就卡死，见下
 asc versions update --version-id <可编辑版本ID> --version <ver>            # 复用 ASC 里已有的可编辑版本记录
@@ -619,9 +619,20 @@ asc review submit --app $APP --version-id <版本ID> --build <构建ID> --confir
 | 提交审核（过审上架） | ❌ 不需要（2.2.6 / 2.2.9 实证） |
 | TestFlight 内测分发 | ✅ 需要 |
 
-**何时需要 profile**：仅当要 TestFlight 内测分发给测试者时才嵌入。过审上架直接上传 + 提交审核即可，不必等 profile。
+**何时需要 profile**：仅当要 TestFlight 内测分发给测试者时才嵌入。过审上架直接上传 + 提交审核即可，不必等 profile。**但从 2026-09-24 起 `build_appstore.sh` 默认就嵌**（profile 在 `src-tauri/OctoShrink_AppStore.provisionprofile`，被 .gitignore 忽略）：这样每次投递都干净、不会再收到 ITMS-90889 那封信，TestFlight 也随时可用。文件不存在时脚本只警告不报错 —— 没有它照样能提交审核。
 
-嵌入步骤（TestFlight 时才用）：codesign 前 `cp <profile>.provisionprofile "$APP/Contents/embedded.provisionprofile"`，再 codesign + productbuild。profile 从 Apple Developer > Profiles 下载（macOS → App Store 类型，App ID = com.misswell.octoshrink.appstore，证书 Apple Distribution: Guofeng Liu）。
+profile 重建（会过期；`L4SC3D834Q` 是本机签名用的那张 Apple Distribution 证书，序列号 `49C2…` 与钥匙串里的身份一一对应，**别绑错**）：
+
+```bash
+asc profiles create --name "OctoShrink macOS AppStore" --profile-type MAC_APP_STORE \
+  --bundle 9G3X34F4VY --certificate L4SC3D834Q     # 9G3X34F4VY = bundle id 的**资源 id**，不是 com.misswell... 字符串
+asc profiles download --id <PROFILE_ID> --output src-tauri/OctoShrink_AppStore.provisionprofile
+asc profiles inspect --path src-tauri/OctoShrink_AppStore.provisionprofile   # 核对 appId/证书再签
+```
+
+两处易错：① `--bundle` 要的是 bundle id 的**资源 id**（`asc bundle-ids list` 查），传 bundle 标识符字符串会报 `There is no App ID with ID ... on this team`；② profile 里必须包含**实际签名的证书**，绑到另一张 Apple Distribution 上会在安装/TestFlight 阶段验签失败。当前 profile id：`H5A5VPGK86`（2026-09-24 建，MAC_APP_STORE，ACTIVE）。
+
+⚠️ 别为 `._` 文件折腾：这台机器给每个新建文件打 `com.apple.provenance`（`xattr -d/-c` 都清不掉），productbuild 因此会在载荷里生成 19 个配对的 AppleDouble `._xxx` 条目（主程序、CodeResources 都有）。2.4.3 就是这么上架的，属既有现象。
 
 ### 12. build_appstore.sh 变量引用必须用花括号
 
