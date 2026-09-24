@@ -1732,9 +1732,10 @@ pub fn open_compare_window(
         .min_inner_size(560.0, 440.0)
         .resizable(true)
         .background_color(background);
-    // 沙盒版窗口在页面加载完成前隐藏（on_page_load 里 show），避免露出白色画布
-    #[cfg(feature = "inproc-backends")]
-    let builder = builder.visible(false);
+    // 与主窗口同一模式：窗口始终可见，创建即带主题背景色（compare.html 首帧自设
+    // 同步主题背景，不会露白）。❌ 不许用 visible(false) + on_page_load 延迟 show：
+    // 那里的 webview.show() 经 wry 只作用于 WKWebView 视图，NSWindow 仍隐藏，
+    // 沙盒版对比窗口将永远弹不出来（v2.5.44 实测 bug）。
     builder
         .build()
         .map_err(|error| format!("创建对比窗口失败: {error}"))?;
