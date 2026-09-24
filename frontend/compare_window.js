@@ -217,7 +217,7 @@ async function renderAt(index) {
           updateCompareSlider(slider ? slider.value : 50);
           syncZoomControls();
         },
-        onUserChange: () => { compareUserZoomed = true; },
+        onUserChange: () => { compareUserZoomed = compareViewer.mode !== 'fit'; },
       });
     }
     compareViewer.fit();
@@ -260,7 +260,7 @@ function updateCompareSlider(value) {
   var clipRight = Math.max(0, Math.min(100, 100 - clipLinePct));
 
   compareOriginalImg.style.clipPath = 'inset(0 ' + clipRight + '% 0 0)';
-  compareHandle.style.left = clipLinePct + '%';
+  compareHandle.style.left = line + 'px';
   compareHandle.style.display = 'block';
 }
 

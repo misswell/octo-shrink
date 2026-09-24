@@ -3,6 +3,7 @@
 .compare-page .compare-viewport {
   overflow: hidden;
   touch-action: none;
+  overscroll-behavior: none;
   cursor: zoom-in;
 }
 .compare-page .compare-viewport.is-zoomed { cursor: grab; }
@@ -16,8 +17,10 @@
 }
 .compare-page .compare-transform img {
   max-width: none;
+  max-height: none;
   pointer-events: none;
   user-select: none;
+  -webkit-user-drag: none;
 }
 .compare-page .compare-slider-bar {
   inset: auto 8px 8px;

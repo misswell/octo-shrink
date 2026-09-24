@@ -376,7 +376,7 @@ jobs:
           DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${ARCHIVE}"
           jq -n \
             --arg version "$VERSION" \
-            --arg notes "OctoShrink ${VERSION}: 更新了功能介绍与快速上手指南。应用功能与 v2.5.39 一致；README 说明了本机压缩、格式转换、历史恢复，以及暂停、停止和继续的用法。" \
+            --arg notes "OctoShrink ${VERSION}: 对比窗口支持图片居中适配、点击切换实际大小、鼠标位置缩放和平滑拖动；修复缩放后对比滑杆与裁剪线的位置。压缩和历史逻辑保持不变。" \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg signature "$SIGNATURE" \
             --arg url "$DOWNLOAD_URL" \
@@ -395,7 +395,7 @@ jobs:
             免费开源的本机图片压缩工具，图片不会上传到服务器。
 
             ### 本版
-            更新 README 的功能说明与快速上手步骤。应用功能与 v2.5.39 一致。
+            对比窗口支持图片居中适配、点击切换实际大小、鼠标位置缩放和平滑拖动，并修复缩放后对比滑杆与裁剪线的位置。压缩和历史逻辑保持不变。
 
             ### 下载
 

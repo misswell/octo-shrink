@@ -1,4 +1,4 @@
-// Image interaction layer shared by both pictures and the comparison handle.
+// Both images share one transform; the comparison handle stays in viewport coordinates.
 class CompareImageViewer {
   constructor({ viewport, wrapper, images, onTransform, onUserChange }) {
     this.viewport = viewport;
@@ -68,7 +68,7 @@ class CompareImageViewer {
   }
 
   zoomTo(scale, clientX, clientY, animated = false, mode = 'custom') {
-    const next = Math.max(0.02, Math.min(8, scale));
+    const next = Math.max(Math.min(0.02, this.fitScale * 0.5), Math.min(20, scale));
     const rect = this.viewport.getBoundingClientRect();
     const x = clientX - rect.left;
     const y = clientY - rect.top;
@@ -82,7 +82,7 @@ class CompareImageViewer {
       this.scale = next;
       this.tx = tx;
       this.ty = ty;
-      this.mode = mode;
+      this.mode = Math.abs(next - this.fitScale) < 0.001 ? 'fit' : mode;
       this.setTransform();
     }
     this.onUserChange();
@@ -92,7 +92,7 @@ class CompareImageViewer {
     this.viewport.addEventListener('wheel', (e) => {
       if (e.metaKey) return;
       e.preventDefault();
-      this.zoomTo(this.scale * (e.deltaY < 0 ? 1.1 : 0.9), e.clientX, e.clientY);
+      this.zoomTo(this.scale * (e.deltaY < 0 ? 1.12 : 0.89), e.clientX, e.clientY);
     }, { passive: false });
 
     this.viewport.addEventListener('pointerdown', (e) => {
