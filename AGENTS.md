@@ -616,7 +616,7 @@ xcrun altool --upload-app \
 
 | 凭据 | 存储位置 | 使用方式 | 是否需要用户输入 |
 |------|---------|---------|:---:|
-| Apple 公证凭据 | 钥匙串 profile `octoshrink-notary` —— ⚠️ **2026-09-23 实测本机已不存在**（`notarytool history --keychain-profile octoshrink-notary` 报 No Keychain password item found） | `xcrun notarytool ... --keychain-profile octoshrink-notary`（本机需先重建） | ✅ 本机需要；CI 不需要 |
+| Apple 公证凭据 | 钥匙串 profile `octoshrink-notary`（**2026-09-24 复测可用**：`notarytool history --keychain-profile octoshrink-notary` 返回提交历史。⚠️ 用 `security find-generic-password -s` 探会假报不存在） | `xcrun notarytool ... --keychain-profile octoshrink-notary` | ❌ 自动（本机已就绪）；CI 用 Secrets，与本机钥匙串无关 |
 | Developer ID 签名身份 | 钥匙串（自动检测） | `security find-identity -v -p codesigning` 自动取 `Developer ID Application: Guofeng Liu (U8U443D7ZL)` | ❌ 自动检测 |
 | Apple Distribution 证书 | 钥匙串 | App Store 版签名，`scripts/build_appstore.sh` 自动引用 | ❌ 自动检测 |
 | 3rd Party Mac Developer Installer | 钥匙串 | `productbuild` 打 PKG，`scripts/build_appstore.sh` 自动引用 | ❌ 自动检测 |
@@ -665,8 +665,14 @@ gh run watch --exit-status
 > Release 页正文（`release.yml` 里 `softprops/action-gh-release` 的 `body`）是**按 tag 那个提交里的 workflow 文本**生成的：改完 workflow 再拖到发布之后才补的正文改动不会进这一版，得 `gh release edit <tag> --notes-file` 手动补（v2.5.38 就这么补的）。
 
 
-**钥匙串 profile 已丢失（2026-09-23 实测）**：本机 `octoshrink-notary` 已不在钥匙串里，`bash scripts/notarize.sh` 会在公证前的自检处停下并打印下面这条命令（脚本第 146 行的探测是好的，不会让它变成莫名其妙的失败）。发布走 GitHub Actions 不受影响 —— CI 用的是 `APPLE_ID` / `APPLE_TEAM_ID` / `APPLE_APP_SPECIFIC_PASSWORD` 三个 Secrets，与本机钥匙串无关。
-用户需要在终端执行一次 `xcrun notarytool store-credentials octoshrink-notary --apple-id misswell@foxmail.com --team-id U8U443D7ZL`，输入 App 专用密码。这是唯一可能需要用户输入的情况。
+**钥匙串 profile：2026-09-24 复测可用**。`xcrun notarytool history --keychain-profile octoshrink-notary` 成功返回提交历史（2026-09-23 那条"已丢失"的记录已过时）。探测方式要用 notarytool 自己：
+```bash
+xcrun notarytool history --keychain-profile octoshrink-notary   # ✅ 唯一可信的探测
+```
+⚠️ **不要用 `security find-generic-password -s octoshrink-notary` 探测** —— notarytool 是按自己的 label 存这条凭证的，`find-generic-password` 会报 `The specified item could not be found`，看起来像"profile 没了"，实际好好的（2026-09-24 我照 AGENTS 旧记录据此误判过一次）。
+
+若哪天真丢了：`bash scripts/notarize.sh` 会在公证前的自检处停下并打印重建命令（脚本第 146 行的探测是好的，不会让它变成莫名其妙的失败），用户执行一次 `xcrun notarytool store-credentials octoshrink-notary --apple-id misswell@foxmail.com --team-id U8U443D7ZL` 并输入 App 专用密码即可。发布走 GitHub Actions 与这把 profile 无关 —— CI 用的是 `APPLE_ID` / `APPLE_TEAM_ID` / `APPLE_APP_SPECIFIC_PASSWORD` 三个 Secrets。
+
 
 **Direct 版一键签名公证**（仅 ARM，日常开发用；需先重建上面的 profile）：
 ```bash
