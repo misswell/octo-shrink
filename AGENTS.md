@@ -147,7 +147,7 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - ✅ 覆盖事务与崩溃安全已接入（**三条线一致**）：`output_transaction.rs::TransactionStore` ↔ Swift `OutputTransactionStore.swift` 在覆盖前记账、`history.add` 落盘后才销账，启动时 `recover()` 补记或自动回滚上次中断的覆盖；`history.json` 严格读取（损坏→隔离 + 按 `backup-meta.json` 重建 `recoveryAvailable` + 本次启动锁死备份 sweep）；`write_output_file` 全链路 `Result`（任一步失败必须把 `CompressResult.success` 翻成 false）；备份 key 从 `DefaultHasher` 迁到 FNV-1a 64（老 key 只读复用/续认，含书签）；`MAX_HISTORY_ENTRIES = 10_000`
 - ✅ CPU 使用上限已接入（三条线一致）：设置页「性能」小节 + `CompressionScheduler`（暂停与并行预算同一套闸门）+两层预算（并发文件数 × 单编码器内部线程），检测见 `system_info.rs` / `SystemInfo.swift`，详见「CPU 使用上限（三条线共用不变量）」
 - ✅ Swift 原生线（`swift/`）与两条 Tauri 线功能对齐，历史/备份/覆盖事务/暂停语义一致，但存储根目录独立且少一层 `history/`（`~/Library/Application Support/com.misswell.octoshrink.swift`），三条线互不读写对方的 history.json
-- 🟡 App Store 审核待提交：2.2.9 已上传 ASC，需补全元数据 + 回复 network.server 解释（路径B）后提交审核
+- 🟡 App Store：**2.5.42 已提交审核**（2026-09-24，submission `ba53f122`，状态 WAITING_FOR_REVIEW，releaseType=AFTER_APPROVAL → 过审即自动上架），线上仍是 2.4.3。上一份草稿 2.5.24 在 ASC 里躺了整整一个月没能提交，根因只是新构建没设 `usesNonExemptEncryption`（`asc validate` 会报 `build.encryption.missing`）—— 不是有人故意压着不发，流程见 §6.5
 - ⬜ 引擎迁移后续：JXL（未来接入 jpegxl-sys 后可恢复 UI 选项）；GIF 减色优化（未来可用 imagequant 逐帧量化，当前有帧间闪烁风险暂不做）
 
 ### 8. 每次编译必须同时构建两条产物线（强制）
@@ -528,6 +528,31 @@ xcrun altool --upload-app \
 
 - 版本号（CFBundleVersion）必须比上次上传的**高**，否则报 `ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE`
 - 上传成功后约 15-30 分钟才出现在 App Store Connect 构建版本列表
+- ⚠️ **别再手搓 altool 了 —— 用 §6.5 的 `asc` 流程**（不需要 App 专用密码，上传+挂构建+元数据+提交一条链，还能跑就绪检查）
+
+### 6.5 用 `asc` CLI 走完整提交流程（2026-09-24 实测通过，推荐）
+
+本机已配好 App Store Connect API key：`asc auth status` 里的 profile **`octoshrink`**（keyId `25L89LAZD5`，私钥在 `~/.appstoreconnect/private_keys/`，issuer 存钥匙串）。**不需要 App 专用密码、不需要 Transporter、不需要问用户要任何东西。**
+
+```bash
+APP=6792604654                                    # OctoShrink 图片压缩（bundleId com.misswell.octoshrink.appstore）
+bash scripts/build_appstore.sh                    # 出 OctoShrink-<ver>.pkg（自带签名 + bundle 自检）
+asc builds upload --app $APP --pkg OctoShrink-<ver>.pkg --version <ver> --build-number <ver> --wait
+asc builds update --build-id <构建ID> --uses-non-exempt-encryption=false   # ← 漏了这步就卡死，见下
+asc versions update --version-id <可编辑版本ID> --version <ver>            # 复用 ASC 里已有的可编辑版本记录
+asc versions attach-build --version-id <版本ID> --build-id <构建ID>
+asc localizations update --version <版本ID> --locale zh-Hans --whats-new "$(cat /tmp/whatsnew.txt)"
+asc validate --app $APP --version-id <版本ID>      # 有 error 先修，全绿再提交
+asc review submit --app $APP --version-id <版本ID> --build <构建ID> --confirm
+```
+
+常用只读命令：`asc status --app $APP`（流水线看板）、`asc validate …`（就绪报告，带修复顺序）、`asc review doctor --app $APP`（还差什么才能提交）、`asc review details-for-version --version-id …`（审核备注）。
+
+⚠️ **三个真踩过的坑**：
+1. **每个新构建都要单独设 `usesNonExemptEncryption`**。漏了它的表现是 `asc validate` 报 `build.encryption.missing`（阻塞项），ASC 网页上"提交审核"按钮点不动。**草稿 2.5.24 就是这样在 ASC 里挂了整整一个月**：构建 VALID、元数据齐全、审核备注也在，只差这一个布尔值。上传完**先跑 `asc validate`**，它会直接点名。
+2. **`--profile` 必须写在子命令之前**（`asc --profile octoshrink builds …`）。写在子命令后面会被当成非法参数：CLI 只打印用法然后 **exit 0**，看起来像"跑过了"。默认 profile 也有这个 app 的权限，所以日常可以不带。
+3. **ASC 同时只允许一个可编辑版本**（PREPARE_FOR_SUBMISSION）。有草稿时别再 `versions create`，直接 `versions update --version-id <草稿ID> --version <新版本号>` 改号复用，元数据（描述/关键词/截图/审核备注）原样继承，省一大截事。
+
 - macOS beta 可能无法安装 Transporter app → 用 `xcrun altool` 命令行替代
 
 ### 7. App Store Connect 元数据（提交审核前必须补全）
