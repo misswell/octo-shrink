@@ -376,7 +376,7 @@ jobs:
           DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${ARCHIVE}"
           jq -n \
             --arg version "$VERSION" \
-            --arg notes "OctoShrink ${VERSION}: 统一三版本压缩生命周期协议。补齐会话与队列版本事件校验，清空后旧任务不会污染重新导入的文件；停止、继续、失败重试和队列进度保持一致。" \
+            --arg notes "OctoShrink ${VERSION}: 修复 App Store 版对比弹窗打不开的问题；对比窗口不再显示多余的滑动条，交互更顺手；顶栏图标更新为与应用图标一致的亮色新设计。" \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg signature "$SIGNATURE" \
             --arg url "$DOWNLOAD_URL" \
