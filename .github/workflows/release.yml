@@ -376,7 +376,7 @@ jobs:
           DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${ARCHIVE}"
           jq -n \
             --arg version "$VERSION" \
-            --arg notes "OctoShrink ${VERSION}: 「停止」改成了它本该有的样子 —— 它只结束这一轮，不再把还没轮到的图片标成「已跳过」。那些图片留在队列里，点「继续压缩」就接着跑，已经压好的绝不会重压。进度也不再清零：停在 40/100 就从 40/100 继续长，而不是从 0 重来。压缩失败的图片不再被「继续压缩」自动重试（要重试就点那一行的重试按钮），免得一个坏文件反复失败兜圈子。另外两处顺手的改动：进度条按真实比例显示（不再是一根假装在动的脉冲条），压缩设置面板默认折叠成一行摘要，想改再点开。三条产物线（直发 / App Store / Swift 原生）语义一致。" \
+            --arg notes "OctoShrink ${VERSION}: 更新了功能介绍与快速上手指南。应用功能与 v2.5.39 一致；README 说明了本机压缩、格式转换、历史恢复，以及暂停、停止和继续的用法。" \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg signature "$SIGNATURE" \
             --arg url "$DOWNLOAD_URL" \
@@ -392,7 +392,10 @@ jobs:
           body: |
             ## 章小压 · OctoShrink
 
-            免费开源的图片压缩神器，开箱即用。
+            免费开源的本机图片压缩工具，图片不会上传到服务器。
+
+            ### 本版
+            更新 README 的功能说明与快速上手步骤。应用功能与 v2.5.39 一致。
 
             ### 下载
 
@@ -405,17 +408,15 @@ jobs:
             | Linux | `.deb` / `.AppImage` | 内置压缩工具，开箱即用 |
 
             ### 功能
-            - 更新深色蓝光压缩图标，兼容 macOS 15、26、27
-            - 支持 PNG/JPG/GIF/WebP/AVIF/JPEG XL 压缩
-            - macOS 支持系统原生 JPEG/PNG/HEIF 转换与 Finder 尺寸档位
-            - 3 线程并发批量处理
-            - 暗黑模式（自动/亮色/暗黑）
-            - macOS Direct 版支持签名校验的在线更新
-            - 图片队列支持多次追加、重复去重、处理中追加与失败重试
-            - 压缩途中可暂停 / 继续，也可以「停止」本轮（正在压的跑完，其余留在队列里，点「继续压缩」接着跑）
-            - 压缩前后实时对比
-            - 一键恢复全部原图
-            - 压缩失败显示错误详情
+            - 支持 PNG、JPEG、GIF、WebP、AVIF 图片压缩与格式转换
+            - macOS 支持系统 JPEG、PNG、HEIF 转换、尺寸调整和元数据保留
+            - 图片与文件夹批量导入，支持追加、去重、排序和失败重试
+            - 支持覆盖原图、添加文件名后缀或输出到指定文件夹
+            - 覆盖前备份原图，提供压缩历史、原图恢复和备份保留设置
+            - 可暂停、继续或停止当前一轮；未开始的图片留在队列中
+            - 独立窗口对比压缩前后效果
+            - 可调整 CPU 并行上限，支持自动、亮色和暗色外观
+            - macOS GitHub 直发版支持应用内更新
           files: release/*
           fail_on_unmatched_files: true
           draft: false
