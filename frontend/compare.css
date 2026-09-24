@@ -22,24 +22,3 @@
   user-select: none;
   -webkit-user-drag: none;
 }
-.compare-page .compare-slider-bar {
-  inset: auto 8px 8px;
-  width: calc(100% - 16px);
-  height: 16px;
-  z-index: 40;
-  opacity: 0.65;
-}
-.compare-page .compare-slider-bar::-webkit-slider-runnable-track {
-  height: 3px;
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.85);
-  box-shadow: 0 0 2px rgba(0, 0, 0, 0.6);
-}
-.compare-page .compare-slider-bar::-webkit-slider-thumb {
-  width: 16px;
-  height: 16px;
-  margin-top: -6px;
-  border-radius: 50%;
-  background: white;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
-}

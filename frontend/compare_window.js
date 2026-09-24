@@ -31,6 +31,10 @@ let compareUserZoomed = false;
 let compareRequestId = 0;
 let compareSliderFrame = 0;
 let pendingCompareSliderValue = null;
+/// 分割位置（0–100）。以前这份状态寄存在图片底部那根 <input type=range> 上，
+/// 于是它必须画出来才"讲得通" —— 但它和拖拽图片移动分割线是同一件事的两种入口，
+/// 视觉上只是一根压住图片边缘的白线，删掉输入框、状态留在变量里。
+let compareSplitPercent = 50;
 
 // ─── Path utilities ─────────────────────────────────────────────
 function basename(p) {
@@ -213,8 +217,7 @@ async function renderAt(index) {
         wrapper: document.getElementById('compareImgWrapper'),
         images: [compareOriginalImg, compareCompressedImg],
         onTransform: () => {
-          const slider = document.getElementById('compareRange');
-          updateCompareSlider(slider ? slider.value : 50);
+          updateCompareSlider(compareSplitPercent);
           syncZoomControls();
         },
         onUserChange: () => { compareUserZoomed = compareViewer.mode !== 'fit'; },
@@ -248,9 +251,8 @@ function loadPayload(payload) {
 
 // ─── Slider: clip-path + handle position ────────────────────────
 function updateCompareSlider(value) {
-  var sliderBar = document.getElementById('compareRange');
   value = Math.max(0, Math.min(100, parseFloat(value) || 0));
-  if (sliderBar) sliderBar.value = Math.round(value);
+  compareSplitPercent = value;
 
   var viewport = document.getElementById('compareSliderContainer').getBoundingClientRect();
   var image = compareOriginalImg.getBoundingClientRect();
@@ -374,7 +376,6 @@ function closeCompareWindow() {
 // ─── Comparison slider and toolbar interactions ────────────────
 (function setupCompareDrag() {
   var outer = document.getElementById('compareSliderOuter');
-  var sliderBar = document.getElementById('compareRange');
   if (!outer) return;
 
   function getPercent(clientX) {
@@ -383,18 +384,12 @@ function closeCompareWindow() {
     return Math.max(0, Math.min(100, (x / rect.width) * 100));
   }
 
+  // 分割线跟着鼠标走（拖拽 / 悬停都算）；正在平移图片时不抢手势。
   outer.addEventListener('mousemove', function(e) {
-    if (e.target === sliderBar) return;
     if (compareViewer && compareViewer.drag) return;
     var pct = getPercent(e.clientX);
     scheduleCompareSlider(pct);
   });
-
-  if (sliderBar) {
-    sliderBar.addEventListener('input', function() {
-      scheduleCompareSlider(this.value);
-    });
-  }
 
   outer.addEventListener('wheel', function(e) {
     if (e.metaKey) {
