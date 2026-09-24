@@ -376,7 +376,7 @@ jobs:
           DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${ARCHIVE}"
           jq -n \
             --arg version "$VERSION" \
-            --arg notes "OctoShrink ${VERSION}: 对比窗口支持图片居中适配、点击切换实际大小、鼠标位置缩放和平滑拖动；修复缩放后对比滑杆与裁剪线的位置。压缩和历史逻辑保持不变。" \
+            --arg notes "OctoShrink ${VERSION}: 应用图标更新为新版亮色设计。压缩、对比窗口和历史功能保持不变。" \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg signature "$SIGNATURE" \
             --arg url "$DOWNLOAD_URL" \
@@ -395,7 +395,7 @@ jobs:
             免费开源的本机图片压缩工具，图片不会上传到服务器。
 
             ### 本版
-            对比窗口支持图片居中适配、点击切换实际大小、鼠标位置缩放和平滑拖动，并修复缩放后对比滑杆与裁剪线的位置。压缩和历史逻辑保持不变。
+            应用图标更新为新版亮色设计。压缩、对比窗口和历史功能保持不变。
 
             ### 下载
 
