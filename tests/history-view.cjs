@@ -250,6 +250,14 @@ const actionsOf = row => row.children[4].children.map(btn => btn.dataset.history
   assert.equal(context.queueItems.get('/Pictures/a.png').result, null, '结果一并清掉');
   assert.equal(rowA.querySelector('.queue-item-status').textContent, '已恢复');
 
+  // 恢复一条旧历史时，同路径新导入的待压缩项仍是新任务，不能跟着变 restored。
+  context.queueItems.set('/Pictures/a.png', {
+    path: '/Pictures/a.png', state: 'pending', result: null, originalSize: 2048576,
+  });
+  context.markQueueRowRestored('/Pictures/a.png');
+  assert.equal(context.queueItems.get('/Pictures/a.png').state, 'pending',
+    '历史恢复只允许 done → restored，不吞掉同路径新任务');
+
   // 恢复全部：一次后端调用，按后端回报的文件逐行标记。
   const rowB = makeEl('div');
   context.fileRows['/Pictures/b.png'] = rowB;

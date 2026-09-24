@@ -326,14 +326,25 @@ pub enum ProgressStatus {
 #[serde(rename_all = "camelCase")]
 pub struct ProgressPayload {
     session_id: String,
+    /// Frontend queue generation; an event from before Clear All must be ignored.
+    queue_revision: u64,
     file: String,
     status: ProgressStatus,
+    /// Unix milliseconds, for diagnostics and consistent event envelopes.
+    timestamp: u64,
     /// 本轮的目标文件数（停止后重新开始的那一轮只数 pending）。
     session_total: usize,
     /// 本轮真正处理完的数量 + 明确取消的数量；`Deferred` **不增加**它。
     session_processed: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     result: Option<CompressResult>,
+}
+
+fn event_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 /// 一轮执行的收尾报告。只用于诊断：界面总进度看队列，不看这里。
@@ -781,6 +792,7 @@ async fn compress_batch(
     app: &AppHandle,
     state: &AppState,
     session_id: String,
+    queue_revision: u64,
     file_paths: Vec<String>,
     options: CompressOptions,
     use_smart: bool,
@@ -814,8 +826,10 @@ async fn compress_batch(
             "compress-progress",
             ProgressPayload {
                 session_id: session_id.clone(),
+                queue_revision,
                 file: fp.clone(),
                 status: ProgressStatus::Queued,
+                timestamp: event_timestamp(),
                 session_total,
                 session_processed: 0,
                 result: None,
@@ -859,8 +873,10 @@ async fn compress_batch(
                     "compress-progress",
                     ProgressPayload {
                         session_id: session_id_arc.to_string(),
+                        queue_revision,
                         file: file_path.clone(),
                         status: ProgressStatus::Cancelled,
+                        timestamp: event_timestamp(),
                         session_total,
                         session_processed: done,
                         result: None,
@@ -877,8 +893,10 @@ async fn compress_batch(
                     "compress-progress",
                     ProgressPayload {
                         session_id: session_id_arc.to_string(),
+                        queue_revision,
                         file: file_path.clone(),
                         status: ProgressStatus::Deferred,
+                        timestamp: event_timestamp(),
                         session_total,
                         session_processed: done,
                         result: None,
@@ -895,8 +913,10 @@ async fn compress_batch(
                 "compress-progress",
                 ProgressPayload {
                     session_id: session_id_arc.to_string(),
+                    queue_revision,
                     file: file_path.clone(),
                     status: ProgressStatus::Starting,
+                    timestamp: event_timestamp(),
                     session_total,
                     session_processed: pr,
                     result: None,
@@ -954,8 +974,10 @@ async fn compress_batch(
                     "compress-progress",
                     ProgressPayload {
                         session_id: session_id_c.to_string(),
+                        queue_revision,
                         file: fp.clone(),
                         status,
+                        timestamp: event_timestamp(),
                         session_total,
                         session_processed: done,
                         result: Some(result.clone()),
@@ -977,8 +999,10 @@ async fn compress_batch(
                 "compress-progress",
                 ProgressPayload {
                     session_id: session_id_arc.to_string(),
+                    queue_revision,
                     file: fp.clone(),
                     status: ProgressStatus::Failed,
+                    timestamp: event_timestamp(),
                     session_total,
                     session_processed: done,
                     result: Some(failed_result(fp)),
@@ -1098,10 +1122,11 @@ pub async fn compress_files(
     app: AppHandle,
     state: State<'_, AppState>,
     session_id: String,
+    queue_revision: u64,
     file_paths: Vec<String>,
     options: CompressOptions,
 ) -> Result<CompressionSessionResult, String> {
-    Ok(compress_batch(&app, state.inner(), session_id, file_paths, options, false).await)
+    Ok(compress_batch(&app, state.inner(), session_id, queue_revision, file_paths, options, false).await)
 }
 
 #[tauri::command]
@@ -1109,10 +1134,11 @@ pub async fn compress_smart(
     app: AppHandle,
     state: State<'_, AppState>,
     session_id: String,
+    queue_revision: u64,
     file_paths: Vec<String>,
     options: CompressOptions,
 ) -> Result<CompressionSessionResult, String> {
-    Ok(compress_batch(&app, state.inner(), session_id, file_paths, options, true).await)
+    Ok(compress_batch(&app, state.inner(), session_id, queue_revision, file_paths, options, true).await)
 }
 
 #[tauri::command]
@@ -2016,6 +2042,25 @@ mod tests {
         ] {
             assert_eq!(serde_json::to_string(&status).unwrap(), wire);
         }
+    }
+
+    #[test]
+    fn progress_events_echo_the_queue_generation() {
+        let payload = ProgressPayload {
+            session_id: "session-7".into(),
+            queue_revision: 42,
+            file: "/image.png".into(),
+            status: ProgressStatus::Deferred,
+            timestamp: event_timestamp(),
+            session_total: 1,
+            session_processed: 0,
+            result: None,
+        };
+        let wire = serde_json::to_value(payload).unwrap();
+        assert_eq!(wire["sessionId"], "session-7");
+        assert_eq!(wire["queueRevision"], 42);
+        assert_eq!(wire["status"], "deferred");
+        assert!(wire["timestamp"].as_u64().unwrap() > 0);
     }
 
     /// 前端认的是四个字面量（app.js 的 COMPRESSION_STATES 与事件载荷）：序列化结果必须

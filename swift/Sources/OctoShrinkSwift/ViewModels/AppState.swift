@@ -124,6 +124,9 @@ final class AppState: ObservableObject {
     // 下面 isCompressing / compressionPaused 是它的派生镜像，**只有 setCompressionPhase 能写**，
     // 别处一律只读 —— 两个真相并存就是"暂停了但界面还在转"的来源。
     @Published private(set) var compressionPhase: CompressionPhase = .idle
+    /// 清空队列后递增；旧 worker 的回调不能写入重新导入的同名文件。
+    private var queueRevision = 0
+    private var activeSessionID: UUID?
     var compressionPaused: Bool { compressionPhase == .paused }
     var compressionStopping: Bool { compressionPhase == .stopping }
 
@@ -551,7 +554,7 @@ final class AppState: ObservableObject {
             showToast("文件夹中没有找到可压缩的图片")
             return
         }
-        let existing = Set(items.map(\.path))
+        let existing = Set(items.filter { $0.status != .removed && $0.status != .restored }.map(\.path))
         var added = 0
         for path in expanded where !existing.contains(path) {
             // 已移除 / 已恢复的行只是历史展示，重新加入时创建全新的 pending 行
@@ -632,6 +635,7 @@ final class AppState: ObservableObject {
         alert.addButton(withTitle: "清空")
         alert.addButton(withTitle: "取消")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        queueRevision += 1
         // 压缩中清空时先取消当前批次（与 Tauri clearAllFiles 语义一致）
         if isCompressing {
             // 只叫醒等待者，让它们看见"自己已被取消"；暂停状态不动，闸门不偷偷开。
@@ -681,10 +685,9 @@ final class AppState: ObservableObject {
             showToast("请先选择输出目录")
             return
         }
-        if let idx = items.firstIndex(where: { $0.path == path }) {
-            items[idx].status = .pending
-            items[idx].result = nil
-        }
+        guard let idx = items.firstIndex(where: { $0.path == path && ($0.status == .failed || $0.status == .restored) }) else { return }
+        items[idx].status = .pending
+        items[idx].result = nil
         runBatch(paths: [path])
     }
 
@@ -715,6 +718,15 @@ final class AppState: ObservableObject {
     private func runBatch(paths: [String]) {
         guard !paths.isEmpty else { return }
 
+        let sessionID = UUID()
+        let revision = queueRevision
+        activeSessionID = sessionID
+        let targets = paths.compactMap { path -> (path: String, itemID: UUID)? in
+            guard let item = items.first(where: { $0.path == path && $0.status == .pending }) else { return nil }
+            return (path, item.id)
+        }
+        guard !targets.isEmpty else { activeSessionID = nil; return }
+
         setCompressionPhase(.running)
         compressButtonText = ""
         cancelBox.removeAll()
@@ -733,7 +745,7 @@ final class AppState: ObservableObject {
         let journal = transactions
         let retention = retentionDays
 
-        for path in paths {
+        for (path, itemID) in targets {
             group.enter()
             queue.async { [self] in
                 // 每条出口都必须 leave 一次，否则被取消的文件会把整批吊住。
@@ -744,7 +756,7 @@ final class AppState: ObservableObject {
                 switch gate.acquireOutcome(cancelled: { [self] in self.isCancelled(path) }) {
                 case .cancelled:
                     // 用户明确把它移出了队列：它本轮到此为止，不回到 pending。
-                    DispatchQueue.main.async { self.updateStatus(path, .removed) }
+                    DispatchQueue.main.async { self.updateStatus(path, itemID: itemID, revision: revision, sessionID: sessionID, .removed) }
                     return
                 case .stopped:
                     // 整批被停止，这一轮没轮到它：**什么都不做**，队列里它仍然是 pending，
@@ -754,7 +766,8 @@ final class AppState: ObservableObject {
                     defer { permit.release() }
                     // 「压缩中」只在真正开工这一刻标记，等待中的行保持「等待」。
                     DispatchQueue.main.async {
-                        if let idx = self.items.firstIndex(where: { $0.path == path }),
+                        if self.queueRevision == revision, self.activeSessionID == sessionID,
+                           let idx = self.items.firstIndex(where: { $0.id == itemID && $0.path == path }),
                            self.items[idx].status == .pending {
                             self.items[idx].status = .running
                         }
@@ -763,13 +776,14 @@ final class AppState: ObservableObject {
                         path: path, options: opts, useSmart: useSmart,
                         history: store, transactions: journal, retentionDays: retention
                     )
-                    DispatchQueue.main.async { self.applyResult(path, result: result) }
+                    DispatchQueue.main.async { self.applyResult(path, itemID: itemID, revision: revision, sessionID: sessionID, result: result) }
                 }
             }
         }
 
         group.notify(queue: .main) { [self] in
             gate.endBatch()
+            if activeSessionID == sessionID { activeSessionID = nil }
             // 用户按过停止：这一轮就地结束，绝不许被"自动压缩"再拉起来跑下一轮。
             let stoppedByUser = compressionStopping
             setCompressionPhase(.idle)
@@ -876,14 +890,16 @@ final class AppState: ObservableObject {
         cancelBox.contains(path)
     }
 
-    private func updateStatus(_ path: String, _ status: QueueStatus) {
-        if let idx = items.firstIndex(where: { $0.path == path }) {
+    private func updateStatus(_ path: String, itemID: UUID, revision: Int, sessionID: UUID, _ status: QueueStatus) {
+        guard queueRevision == revision, activeSessionID == sessionID else { return }
+        if let idx = items.firstIndex(where: { $0.id == itemID && $0.path == path && $0.status == .pending }) {
             items[idx].status = status
         }
     }
 
-    private func applyResult(_ path: String, result: CompressResult) {
-        guard let idx = items.firstIndex(where: { $0.path == path }) else { return }
+    private func applyResult(_ path: String, itemID: UUID, revision: Int, sessionID: UUID, result: CompressResult) {
+        guard queueRevision == revision, activeSessionID == sessionID,
+              let idx = items.firstIndex(where: { $0.id == itemID && $0.path == path && $0.status == .running }) else { return }
         items[idx].result = result
         items[idx].status = result.success ? .done : .failed
     }
@@ -1077,7 +1093,7 @@ final class AppState: ObservableObject {
 
     /// 后端确认恢复成功后，把指向同一源路径的行改成「已恢复」。
     private func markItemsRestored(forSource sourcePath: String) {
-        for index in items.indices where canonicalPath(items[index].path) == sourcePath {
+        for index in items.indices where canonicalPath(items[index].path) == sourcePath && items[index].status == .done {
             items[index].result = nil
             items[index].status = .restored
             let size = fileLength(sourcePath)
@@ -1253,7 +1269,7 @@ final class AppState: ObservableObject {
 
     /// 对比窗口恢复后同步主窗口行状态（真正的恢复已走统一服务）
     func markRestored(path: String) {
-        guard let idx = items.firstIndex(where: { $0.path == path }) else { return }
+        guard let idx = items.firstIndex(where: { $0.path == path && $0.status == .done }) else { return }
         items[idx].result = nil
         items[idx].status = .restored
         refreshHistory()

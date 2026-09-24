@@ -42,7 +42,7 @@ const context = vm.createContext({
   invoke: async (command, args) => {
     if (command === 'expand_image_files') return args.filePaths;
     if (command === 'get_file_sizes') return args.filePaths.map(() => 1024);
-    return new Promise(resolve => runs.push({ command, paths: args.filePaths, sessionId: args.sessionId, resolve }));
+    return new Promise(resolve => runs.push({ command, paths: args.filePaths, sessionId: args.sessionId, queueRevision: args.queueRevision, resolve }));
   },
   formatBytes: String, showToast(message) { context._toasts.push(message); }, iconMarkup() {},
   _toasts: [],
@@ -81,7 +81,7 @@ context.renderFileQueue = () => context.files.forEach(file => {
 const flush = async () => { for (let i=0;i<16;i++) await Promise.resolve(); };
 const run = () => runs[runs.length - 1];
 // 后端事件：payload 一定带着当前这一轮的 sessionId。
-const emit = payload => progress(Object.assign({ sessionId: run().sessionId }, payload));
+const emit = payload => progress(Object.assign({ sessionId: run().sessionId, queueRevision: run().queueRevision }, payload));
 const settle = file => emit({ file, status: 'completed', result: {file, success:true, savings:10, originalSize: 100, compressedSize: 90} });
 const startSession = file => emit({ file, status: 'starting' });
 const defer = file => emit({ file, status: 'deferred' });

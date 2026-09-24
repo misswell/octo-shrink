@@ -43,7 +43,7 @@ const context = vm.createContext({
     if (command === 'expand_image_files') return args.filePaths;
     if (command === 'get_file_sizes') return args.filePaths.map(() => 2048);
     return new Promise(resolve => runs.push({
-      command, paths: args.filePaths, sessionId: args.sessionId, resolve,
+      command, paths: args.filePaths, sessionId: args.sessionId, queueRevision: args.queueRevision, resolve,
     }));
   },
   formatBytes: String, iconMarkup: () => '<svg></svg>',
@@ -83,7 +83,7 @@ context.renderFileQueue = () => context.files.forEach(file => {
 
 const flush = async () => { for (let i = 0; i < 16; i++) await Promise.resolve(); };
 const currentRun = () => runs[runs.length - 1];
-const emit = payload => progress(Object.assign({ sessionId: currentRun().sessionId }, payload));
+const emit = payload => progress(Object.assign({ sessionId: currentRun().sessionId, queueRevision: currentRun().queueRevision }, payload));
 const start = file => emit({ file, status: 'starting' });
 const done = (file, ok = true) => emit({
   file, status: ok ? 'completed' : 'failed',
@@ -174,8 +174,11 @@ const pendingPaths = () => context.getPendingQueuePaths();
   // 冒充"上一轮"发一条 deferred 和一条 cancelled：都不许碰这一轮。
   progress({ sessionId: 'session-old', file: stale[0], status: 'deferred' });
   progress({ sessionId: 'session-old', file: stale[1], status: 'cancelled' });
+  progress({ sessionId: liveSession, queueRevision: currentRun().queueRevision - 1,
+    file: stale[2], status: 'cancelled' });
+  emit({ file: '/outside-snapshot.png', status: 'starting' });
   assert.deepEqual(stale.map(stateOf), ['pending', 'pending', 'pending', 'pending'],
-    '旧会话的事件必须被会话号拦住');
+    '旧会话、旧队列版本和快照外事件都不能改当前队列');
   stale.forEach(file => { start(file); done(file); });
   settleRun();
   await fourthRun;
@@ -228,6 +231,21 @@ const pendingPaths = () => context.getPendingQueuePaths();
   assert.equal(stateOf(removable[1]), 'removed', '明确取消的才是 removed');
   assert.equal(progressOf().total, 23, 'removed 从队列总数里排除');
   assert.equal(progressOf().pending, 0);
+
+  // 同一路径在旧 worker 结束前移除又导入：旧结果不能写到新队列项。
+  const reused = '/reused.png';
+  await context.handleFilePaths([reused]);
+  const seventhRun = context.startCompression(false);
+  await flush();
+  const oldItem = context.queueItems.get(reused);
+  start(reused);
+  cancelAck(reused);
+  await context.handleFilePaths([reused]);
+  assert.notEqual(context.queueItems.get(reused), oldItem);
+  done(reused);
+  assert.equal(stateOf(reused), 'pending', '旧 worker 的完成事件不能覆盖重新导入的项');
+  settleRun();
+  await seventhRun;
 
   console.log('PASS: 会话模型（暂停续跑同轮、停止继续换轮、旧事件隔离、失败不自动重试、进度不倒扣）');
 })().catch(error => { console.error(error); process.exitCode = 1; });

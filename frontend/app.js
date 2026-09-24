@@ -1072,6 +1072,12 @@ function eventBelongsToCurrentSession(data) {
 
 // ─── 压缩主流程 ─────────────────────────────────────────────────
 
+function handlePrimaryAction() {
+  if (compressionState === COMPRESSION_PAUSED) return toggleCompressionPause();
+  if (compressionState !== COMPRESSION_IDLE) return;
+  return startCompression(false);
+}
+
 async function startCompression(isIncrement) {
   return startCompressionForPaths(isIncrement, null);
 }
@@ -1126,6 +1132,7 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
   var batchOptions = config.options;
   currentCompressOptions = batchOptions;
   var session = beginExecutionSession(batchPaths);
+  var targetItems = new Map(batchPaths.map(function(filePath) { return [filePath, queueItems.get(filePath)]; }));
   var settled = new Set();
 
   var queueStats = document.getElementById('queueStats');
@@ -1148,13 +1155,16 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
     if (!data) return;
     // 会话身份先对齐：上一轮迟到的 deferred / cancelled 事件绝不许碰这一轮。
     if (!executionSession || data.sessionId !== executionSession.id) return;
-    if (runRevision !== queueRevision) return;
+    if (runRevision !== queueRevision || data.queueRevision !== runRevision) return;
     var file = data.file;
+    if (session.targetPaths.indexOf(file) < 0) return;
     var item = queueItems.get(file);
-    if (!item) return;
+    // 同一路径在这一轮执行时可能被移除又重新导入；新项不能接旧 worker 的结果。
+    if (!item || item !== targetItems.get(file)) return;
 
     if (data.status === 'starting') {
-      if (item.state === 'pending') item.state = 'running';
+      if (item.state !== 'pending') return;
+      item.state = 'running';
       settled.delete(file);
       paintQueueRow(file);
       applyQueueView();
@@ -1164,8 +1174,11 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
 
     if (data.status === 'completed' || data.status === 'failed') {
       var result = data.result;
-      if (!result || settled.has(result.file)) return;
-      settled.add(result.file);
+      if (!result || result.file !== file || settled.has(file)) return;
+      // invoke 的收尾结果能补偿丢失的 starting/completed 事件；实时事件则
+      // 必须先见过 starting，避免已移除或已恢复的行被迟到结果写回 done。
+      if (item.state !== 'running' && !(data.fromSessionResult && item.state === 'pending')) return;
+      settled.add(file);
       result.compressOptions = batchOptions;
       item.result = result;
       item.state = result.success ? 'done' : 'failed';
@@ -1178,7 +1191,7 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
 
     if (data.status === 'cancelled') {
       // 用户明确把它移出了队列：它本轮到此为止，不回到 pending。
-      if (settled.has(file)) return;
+      if (settled.has(file) || (item.state !== 'pending' && item.state !== 'running')) return;
       settled.add(file);
       item.state = 'removed';
       var idx = files.indexOf(file);
@@ -1213,6 +1226,7 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
     });
     var sessionResult = await invoke(config.useSmartIpc ? 'compress_smart' : 'compress_files', {
       sessionId: session.id,
+      queueRevision: session.queueRevision,
       filePaths: batchPaths,
       options: batchOptions,
     });
@@ -1222,9 +1236,11 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
     results.forEach(function(result) {
       progressHandler({
         sessionId: sessionResult.sessionId,
+        queueRevision: session.queueRevision,
         file: result.file,
         status: result.success ? 'completed' : 'failed',
         result: result,
+        fromSessionResult: true,
       });
     });
     if (runRevision === queueRevision) {
@@ -1361,11 +1377,11 @@ async function restoreOriginal(filePath, force) {
 
 function markQueueRowRestored(filePath) {
   var item = queueItems.get(filePath);
-  if (item) {
+  if (item && item.state === 'done') {
     item.result = null;
     item.state = 'restored';
+    paintQueueRow(filePath);
   }
-  paintQueueRow(filePath);
 }
 
 async function restoreAllOriginals() {

@@ -310,6 +310,8 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 
 ### 安全暂停 / 继续 / 停止（会话状态机 + 队列状态，三条线同一套语义）
 
+统一协议见 `core/state-machine.md`。Tauri 的 `compress-progress` 事件同时带 `sessionId`、`queueRevision`、`timestamp`；前端先校验会话、队列版本、目标文件快照及队列项对象身份，再改队列。Swift worker 回调使用同样的会话/版本判据，并核对 `QueueItem.id`，清空或移除后重新导入同路径不会被旧回调污染。
+
 > ⚠️ 这一节在 v2.5.39 做过一次语义纠正，读旧代码/旧笔记请以本节为准：**「停止」结束的是这一轮（session），不是那些文件**。停止之后没轮到的文件仍然是 `pending`，用户点「继续压缩」时新一轮会把它们带上。老实现用 `cancelled` 同时表达"用户取消"和"停止没轮到"，于是停止之后剩下的图全部变成"已跳过"、再也压不动。
 
 **两条正交的状态**，先分清再谈行为：
