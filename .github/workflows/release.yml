@@ -376,7 +376,7 @@ jobs:
           DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${ARCHIVE}"
           jq -n \
             --arg version "$VERSION" \
-            --arg notes "OctoShrink ${VERSION}: 应用图标更新为新版亮色设计。压缩、对比窗口和历史功能保持不变。" \
+            --arg notes "OctoShrink ${VERSION}: 顶栏图标换成新版亮色设计，跟应用图标一致（之前顶栏还留在旧版图标上，换图标时漏了它）。对比窗口去掉图片下沿那条说不清用途的白色滑条 —— 分割线本来就跟着鼠标走，在图片上直接拖就行；顺带修掉「焦点落在隐藏滑条上时左右方向键不再切换上一张/下一张」的小毛病。" \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg signature "$SIGNATURE" \
             --arg url "$DOWNLOAD_URL" \
