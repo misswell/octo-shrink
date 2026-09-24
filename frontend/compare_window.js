@@ -23,11 +23,10 @@ const prevBtn = document.getElementById('prevBtn');
 const nextBtn = document.getElementById('nextBtn');
 
 // ─── State ──────────────────────────────────────────────────────
-const MIN_COMPARE_ZOOM = 0.02; // 超大图（数千像素宽）适配窗口时需要的缩放可低于 0.1
 let compareResults = [];
 let currentIndex = -1;
 let currentResult = null;
-let currentCompareZoom = 1;
+let compareViewer = null;
 let compareUserZoomed = false;
 let compareRequestId = 0;
 let compareSliderFrame = 0;
@@ -170,17 +169,9 @@ function setNavButtonsState() {
   if (nextBtn) nextBtn.disabled = currentIndex < 0 || currentIndex >= compareResults.length - 1;
 }
 
-function computeFitZoom() {
-  const outer = document.getElementById('compareSliderOuter');
-  const fitW = compareOriginalImg.naturalWidth || compareCompressedImg.naturalWidth || 1;
-  const fitH = compareOriginalImg.naturalHeight || compareCompressedImg.naturalHeight || 1;
-  let fitZoom = Math.min(outer.clientWidth / fitW, outer.clientHeight / fitH, 1);
-  if (!isFinite(fitZoom) || fitZoom <= 0) fitZoom = 1;
-  return fitZoom;
-}
-
 function fitToWindow() {
-  setCompareZoom(computeFitZoom(), true);
+  if (compareViewer) compareViewer.fit();
+  compareUserZoomed = false;
 }
 
 async function renderAt(index) {
@@ -216,7 +207,21 @@ async function renderAt(index) {
     // 先让面板可见再测量视口：display:none 时 clientWidth/Height 为 0，
     // fitZoom 会被兜底成 1（100%），大图打开时只显示局部而不是铺满适配
     showPanel();
-    setCompareZoom(computeFitZoom(), true);
+    if (!compareViewer) {
+      compareViewer = new CompareImageViewer({
+        viewport: document.getElementById('compareSliderContainer'),
+        wrapper: document.getElementById('compareImgWrapper'),
+        images: [compareOriginalImg, compareCompressedImg],
+        onTransform: () => {
+          const slider = document.getElementById('compareRange');
+          updateCompareSlider(slider ? slider.value : 50);
+          syncZoomControls();
+        },
+        onUserChange: () => { compareUserZoomed = true; },
+      });
+    }
+    compareViewer.fit();
+    compareUserZoomed = false;
     updateCompareSlider(50);
     refreshInfo();
   } catch (err) {
@@ -247,16 +252,11 @@ function updateCompareSlider(value) {
   value = Math.max(0, Math.min(100, parseFloat(value) || 0));
   if (sliderBar) sliderBar.value = Math.round(value);
 
-  var outer = document.getElementById('compareSliderOuter');
-  var container = document.getElementById('compareSliderContainer');
-  var zoom = currentCompareZoom || 1;
-  var cw = outer.clientWidth;
-  var sl = container.scrollLeft;
-  var imgW = compareOriginalImg.naturalWidth || compareCompressedImg.naturalWidth || cw;
-
-  var clipLinePx = sl + (value / 100) * cw;
-  var imgWidth = imgW * zoom;
-  var clipLinePct = (clipLinePx / imgWidth) * 100;
+  var viewport = document.getElementById('compareSliderContainer').getBoundingClientRect();
+  var image = compareOriginalImg.getBoundingClientRect();
+  if (!image.width || !viewport.width) return;
+  var line = (value / 100) * viewport.width;
+  var clipLinePct = ((line - (image.left - viewport.left)) / image.width) * 100;
   var clipRight = Math.max(0, Math.min(100, 100 - clipLinePct));
 
   compareOriginalImg.style.clipPath = 'inset(0 ' + clipRight + '% 0 0)';
@@ -273,52 +273,19 @@ function scheduleCompareSlider(value) {
   });
 }
 
-function setCompareZoom(level, resetView) {
-  level = Math.max(MIN_COMPARE_ZOOM, Math.min(8, level));
-  var outer = document.getElementById('compareSliderOuter');
-  var container = document.getElementById('compareSliderContainer');
-  var wrapper = document.getElementById('compareImgWrapper');
-  var oldZoom = currentCompareZoom || 1;
-  var cw = outer.clientWidth;
-  var ch = outer.clientHeight;
-  var imgW = compareOriginalImg.naturalWidth || compareCompressedImg.naturalWidth || 1;
-  var imgH = compareOriginalImg.naturalHeight || compareCompressedImg.naturalHeight || 1;
-
-  var sliderBar = document.getElementById('compareRange');
-  var sliderVal = sliderBar ? parseFloat(sliderBar.value) : 50;
-
-  var oldImgW = imgW * oldZoom;
-  var oldImgH = imgH * oldZoom;
-  var axisRatio = resetView ? 0.5 : (container.scrollLeft + (sliderVal / 100) * cw) / oldImgW;
-  var centerYRatio = resetView ? 0.5 : (container.scrollTop + ch / 2) / oldImgH;
-
-  currentCompareZoom = level;
-  if (resetView) compareUserZoomed = false;
-  wrapper.style.width = (imgW * level) + 'px';
-  wrapper.style.height = (imgH * level) + 'px';
-
-  var newImgW = imgW * level;
-  var newImgH = imgH * level;
-  if (resetView) {
-    // 适配窗口：内容小于视口时居左上，超出一侧时居中
-    container.scrollLeft = Math.max(0, (newImgW - cw) / 2);
-    container.scrollTop = Math.max(0, (newImgH - ch) / 2);
-  } else {
-    container.scrollLeft = axisRatio * newImgW - (sliderVal / 100) * cw;
-    container.scrollTop = centerYRatio * newImgH - ch / 2;
-  }
-
+function syncZoomControls() {
+  if (!compareViewer) return;
+  var level = compareViewer.scale;
   var zoomSlider = document.getElementById('zoomSlider');
   if (zoomSlider) zoomSlider.value = level;
   var zoomValue = document.getElementById('zoomValue');
   if (zoomValue) zoomValue.textContent = Math.round(level * 100) + '%';
-
-  updateCompareSlider(sliderVal);
 }
 
 function stepZoom(delta) {
-  compareUserZoomed = true;
-  setCompareZoom(currentCompareZoom + delta);
+  if (!compareViewer) return;
+  const rect = compareViewer.viewport.getBoundingClientRect();
+  compareViewer.zoomTo(compareViewer.scale + delta, rect.left + rect.width / 2, rect.top + rect.height / 2);
 }
 
 // ─── Navigation ─────────────────────────────────────────────────
@@ -404,14 +371,11 @@ function closeCompareWindow() {
   getCurrentWindow().close();
 }
 
-// ─── Slider drag / wheel interactions ───────────────────────────
+// ─── Comparison slider and toolbar interactions ────────────────
 (function setupCompareDrag() {
   var outer = document.getElementById('compareSliderOuter');
-  var container = document.getElementById('compareSliderContainer');
   var sliderBar = document.getElementById('compareRange');
-  if (!outer || !container) return;
-
-  var isPointerDown = false;
+  if (!outer) return;
 
   function getPercent(clientX) {
     var rect = outer.getBoundingClientRect();
@@ -420,36 +384,11 @@ function closeCompareWindow() {
   }
 
   outer.addEventListener('mousemove', function(e) {
+    if (e.target === sliderBar) return;
+    if (compareViewer && compareViewer.drag) return;
     var pct = getPercent(e.clientX);
     scheduleCompareSlider(pct);
   });
-
-  function onPointerDown(e) {
-    isPointerDown = true;
-    e.preventDefault();
-    if (window.getSelection) {
-      var selection = window.getSelection();
-      if (selection) selection.removeAllRanges();
-    }
-    var clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    scheduleCompareSlider(getPercent(clientX));
-  }
-
-  function onPointerMove(e) {
-    if (!isPointerDown) return;
-    e.preventDefault();
-    var clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    scheduleCompareSlider(getPercent(clientX));
-  }
-
-  function onPointerUp() { isPointerDown = false; }
-
-  outer.addEventListener('mousedown', onPointerDown);
-  outer.addEventListener('touchstart', onPointerDown, { passive: false });
-  document.addEventListener('mousemove', onPointerMove);
-  document.addEventListener('mouseup', onPointerUp);
-  document.addEventListener('touchmove', onPointerMove, { passive: false });
-  document.addEventListener('touchend', onPointerUp);
 
   if (sliderBar) {
     sliderBar.addEventListener('input', function() {
@@ -461,55 +400,15 @@ function closeCompareWindow() {
     if (e.metaKey) {
       e.preventDefault();
       navigateCompare(e.deltaY < 0 ? -1 : 1);
-      return;
     }
-    // 普通滚轮滚动放大后的图片；Ctrl/Alt+滚轮缩放
-    if (!e.ctrlKey && !e.altKey) {
-      e.preventDefault();
-      container.scrollLeft += e.deltaX || (e.shiftKey ? e.deltaY : 0);
-      container.scrollTop += e.deltaY;
-      return;
-    }
-    e.preventDefault();
-    var oldZoom = currentCompareZoom || 1;
-    var delta = e.deltaY < 0 ? 0.25 : -0.25;
-    var newZoom = Math.max(MIN_COMPARE_ZOOM, Math.min(8, oldZoom + delta));
-    compareUserZoomed = true;
-
-    var rect = outer.getBoundingClientRect();
-    var mouseX = e.clientX - rect.left;
-    var cw = outer.clientWidth;
-    var ch = outer.clientHeight;
-    var imgW = compareOriginalImg.naturalWidth || compareCompressedImg.naturalWidth || cw;
-    var imgH = compareOriginalImg.naturalHeight || compareCompressedImg.naturalHeight || ch;
-    var mouseImgX = (container.scrollLeft + mouseX) / (imgW * oldZoom);
-    var mouseImgY = (container.scrollTop + (e.clientY - rect.top)) / (imgH * oldZoom);
-
-    currentCompareZoom = newZoom;
-    var wrapper = document.getElementById('compareImgWrapper');
-    wrapper.style.width = (imgW * newZoom) + 'px';
-    wrapper.style.height = (imgH * newZoom) + 'px';
-    container.scrollLeft = mouseImgX * (imgW * newZoom) - mouseX;
-    container.scrollTop = mouseImgY * (imgH * newZoom) - (e.clientY - rect.top);
-
-    var zoomSlider = document.getElementById('zoomSlider');
-    if (zoomSlider) zoomSlider.value = newZoom;
-    var zoomValue = document.getElementById('zoomValue');
-    if (zoomValue) zoomValue.textContent = Math.round(newZoom * 100) + '%';
-
-    var sliderVal = sliderBar ? parseFloat(sliderBar.value) : 50;
-    updateCompareSlider(sliderVal);
   }, { passive: false });
-
-  container.addEventListener('scroll', function() {
-    if (sliderBar) scheduleCompareSlider(sliderBar.value);
-  });
 
   var zoomSliderEl = document.getElementById('zoomSlider');
   if (zoomSliderEl) {
     zoomSliderEl.addEventListener('input', function() {
-      compareUserZoomed = true;
-      setCompareZoom(parseFloat(this.value));
+      if (!compareViewer) return;
+      const rect = compareViewer.viewport.getBoundingClientRect();
+      compareViewer.zoomTo(parseFloat(this.value), rect.left + rect.width / 2, rect.top + rect.height / 2);
     });
   }
 })();

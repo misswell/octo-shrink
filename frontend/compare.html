@@ -26,6 +26,7 @@
     html[data-theme="dark"], html[data-theme="dark"] body { background: #1c1c1e; }
   </style>
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="compare.css">
 </head>
 <body class="compare-page">
   <!-- 统一线条图标系统：24 网格 / 20 可视区 / 1.8 描边 / 圆头圆角；实心点缀自带 fill。 -->
@@ -72,8 +73,8 @@
     <div class="compare-empty" id="compareEmpty">加载中…</div>
     <div class="compare-modal-body" id="compareModalBody" style="display:none;">
       <div class="compare-slider-outer" id="compareSliderOuter">
-        <div class="compare-slider-container" id="compareSliderContainer">
-          <div class="compare-img-wrapper" id="compareImgWrapper">
+        <div class="compare-slider-container compare-viewport" id="compareSliderContainer">
+          <div class="compare-img-wrapper compare-transform" id="compareImgWrapper">
             <img id="compareCompressedImg" class="compare-img-base" alt="压缩后" draggable="false">
             <img id="compareOriginalImg" class="compare-img-overlay" alt="原图" draggable="false">
             <div class="compare-handle" id="compareHandle">
@@ -136,6 +137,7 @@
     </div>
   </div>
 
+  <script src="compare_viewer.js"></script>
   <script src="compare_window.js"></script>
 </body>
 </html>
