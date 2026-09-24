@@ -699,6 +699,11 @@ gh run watch --exit-status
 >
 > **发完之后怎么核对（别被某个端点骗了）**：`gh release view <tag>` / `releases/tags/<tag>` 这个按 tag 查的端点可能报 `assets: 0`，而资产其实好好的（v2.5.38 实测：按 tag 查 0 个，按 release id 查 10 个，公开页面也齐）。可靠的三条判据：① `gh api repos/<owner>/<repo>/releases/<id>/assets`（id 从 tag 查不到就 `gh api .../releases?per_page=10` 取）；② 公开页面 `releases/expanded_assets/<tag>`；③ 最关键的一条 —— 用**应用真正轮询的那个 URL** 验一遍：`curl -sL https://github.com/<owner>/<repo>/releases/latest/download/latest.json`，确认 `version` 是新版本、`notes` 是这次写的实话、`platforms.darwin-*.url` 指向本版更新包，再 `curl -sIL` 那个 tar.gz 看到 200。自动更新走的是 `releases/latest/download/…`（`tauri.conf.json` 的 updater.endpoints），不是按 tag 的 API，所以后者抽风不影响用户。
 >
+> ⚠️ **`gh run watch` 的退出码不可信**：网络抖动时它会打印 `failed to get run: ... EOF`，然后 **exit 0** —— 看起来像「发布成功」，其实那次运行还在跑（v2.5.43 实测：watch 报 0 的同时 `gh run view <id> --json status` 还是 `in_progress`）。等发布要轮询状态、不要信退出码：
+> ```bash
+> gh run view <id> --json status,conclusion     # 直到 status == completed，再看 conclusion
+> ```
+>
 > Release 页正文（`release.yml` 里 `softprops/action-gh-release` 的 `body`）是**按 tag 那个提交里的 workflow 文本**生成的：改完 workflow 再拖到发布之后才补的正文改动不会进这一版，得 `gh release edit <tag> --notes-file` 手动补（v2.5.38 就这么补的）。
 
 
