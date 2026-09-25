@@ -1544,6 +1544,11 @@ impl RestoreOutcome {
 }
 
 /// 沙盒下书签失效时，请用户重新授权目标文件夹；Direct 版这条路径不会走到。
+///
+/// ⚠️ 阻塞式弹窗**绝不能在主线程上调**：它要等主线程 runloop 响应，自己却把
+/// 调用线程堵死 —— 主线程上调用 = 弹窗永远弹不出来、整个应用卡死。
+/// 所以 `restore_original` / `restore_history_entry` / `restore_all` 三个命令
+/// **必须是 async**（async 命令跑在 tokio 工作线程上），别"顺手"改回同步。
 fn request_folder_access(app: &AppHandle, state: &AppState, target: &Path) -> bool {
     let Some(picked) = app
         .dialog()
@@ -1594,29 +1599,33 @@ fn entry_for_source(state: &AppState, file_path: &str) -> Option<HistoryEntry> {
 }
 
 #[tauri::command]
-pub fn restore_original(
+pub async fn restore_original(
     app: AppHandle,
     state: State<'_, AppState>,
     file_path: String,
     force: Option<bool>,
-) -> RestoreOutcome {
-    match entry_for_source(state.inner(), &file_path) {
+) -> Result<RestoreOutcome, String> {
+    // Result 只是 Tauri 对「async 命令带引用参数」的硬性要求；恢复路径的所有失败
+    // 都已经装在 RestoreOutcome.failure 里回给前端了，这里永远 Ok。
+    let outcome = match entry_for_source(state.inner(), &file_path) {
         Some(entry) => restore_entry(&app, state.inner(), &entry, force.unwrap_or(false)),
         None => RestoreOutcome::failure(None, RestoreError::NotFound),
-    }
+    };
+    Ok(outcome)
 }
 
 #[tauri::command]
-pub fn restore_history_entry(
+pub async fn restore_history_entry(
     app: AppHandle,
     state: State<'_, AppState>,
     history_id: String,
     force: Option<bool>,
-) -> RestoreOutcome {
-    match state.history_store.find(&history_id) {
+) -> Result<RestoreOutcome, String> {
+    let outcome = match state.history_store.find(&history_id) {
         Some(entry) => restore_entry(&app, state.inner(), &entry, force.unwrap_or(false)),
         None => RestoreOutcome::failure(None, RestoreError::NotFound),
-    }
+    };
+    Ok(outcome)
 }
 
 /// 一键恢复全部原图
@@ -1632,11 +1641,11 @@ pub struct RestoreAllResult {
 }
 
 #[tauri::command]
-pub fn restore_all(
+pub async fn restore_all(
     app: AppHandle,
     state: State<'_, AppState>,
     results: Vec<CompressResult>,
-) -> RestoreAllResult {
+) -> Result<RestoreAllResult, String> {
     let mut restored = 0usize;
     let mut failed = 0usize;
     let mut conflicts = 0usize;
@@ -1669,13 +1678,15 @@ pub fn restore_all(
     } else if failed > 0 {
         message.push_str(&format!("，{failed} 个未能恢复"));
     }
-    RestoreAllResult {
+    // Ok 包裹是 Tauri 对「async 命令带引用参数」的硬性要求；失败的条目已经
+    // 计在 failed/conflicts 里回给前端了，这里永远 Ok。
+    Ok(RestoreAllResult {
         success: true,
         restored,
         failed,
         message,
         restored_files,
-    }
+    })
 }
 
 #[tauri::command]
