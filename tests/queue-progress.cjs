@@ -18,6 +18,7 @@ let progress;
 let sessionSeq = 0;
 const context = vm.createContext({
   console, Set, Map, Promise,
+  window: { OctoShrinkI18n: { translateText: value => value } },
   files: [], inputPaths: [], pendingAutoCompress: false, processingMode: 'advanced',
   queueItems: new Map(),
   fileRows: {},

@@ -21,11 +21,13 @@
 - 任何新增能力不得依赖 --features appstore
 - 修改 engine.rs / commands.rs / lib.rs / frontend/* 时，默认分支行为必须保留，用 #[cfg(feature = "inproc-backends")] 加新实现，不要改写 #[cfg(feature = "cli-backends")] 下的现有实现
 
-### 3. 不允许出现只有一条线的代码
+### 3. 不允许出现只有一条产物线或实现的功能
 
-- 新增压缩引擎函数 → 必须同时提供 cli-backends 版本（现状）和 inproc-backends 版本（进程内），同一接口签名
-- 新增 tauri command / 前端 invoke → 两个 feature 下行为必须一致；若 App Store 版不同，用 #[cfg] 分叉，并在本文件记录差异
+- 新增压缩引擎函数 → 必须同时提供 cli-backends 版本（现状）和 inproc-backends 版本（进程内），同一接口签名；Swift 原生线也必须实现同样的格式、选项与结果选择
+- 新增用户可见的设置、操作、页面或队列/历史行为 → 同一改动里同步实现到 Swift 原生线；Swift 使用 SwiftUI / AppState，不复制 Tauri 的 IPC 形式
+- 新增 tauri command / 前端 invoke → 两个 feature 下行为必须一致；同时补 Swift 对应能力。若 App Store 沙盒或平台分发导致行为不同，用 #[cfg] 分叉并在本文件记录差异
 - 接口（CompressOptions / EngineResult / CompressResult 等）跨 feature 必须保持一致，不得为某一条线改类型签名
+- Direct / App Store / Swift 允许有不同的编码器实现与文件访问机制，但用户可见的选项、默认值、成功判据和队列/历史语义必须一致；未列入差异表的差异按 bug 处理
 
 ### 4. 不在主分支上做"切换主路径"的改动
 
@@ -147,16 +149,18 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - ✅ 覆盖事务与崩溃安全已接入（**三条线一致**）：`output_transaction.rs::TransactionStore` ↔ Swift `OutputTransactionStore.swift` 在覆盖前记账、`history.add` 落盘后才销账，启动时 `recover()` 补记或自动回滚上次中断的覆盖；`history.json` 严格读取（损坏→隔离 + 按 `backup-meta.json` 重建 `recoveryAvailable` + 本次启动锁死备份 sweep）；`write_output_file` 全链路 `Result`（任一步失败必须把 `CompressResult.success` 翻成 false）；备份 key 从 `DefaultHasher` 迁到 FNV-1a 64（老 key 只读复用/续认，含书签）；`MAX_HISTORY_ENTRIES = 10_000`
 - ✅ CPU 使用上限已接入（三条线一致）：设置页「性能」小节 + `CompressionScheduler`（暂停与并行预算同一套闸门）+两层预算（并发文件数 × 单编码器内部线程），检测见 `system_info.rs` / `SystemInfo.swift`，详见「CPU 使用上限（三条线共用不变量）」
 - ✅ Swift 原生线（`swift/`）与两条 Tauri 线功能对齐，历史/备份/覆盖事务/暂停语义一致，但存储根目录独立且少一层 `history/`（`~/Library/Application Support/com.misswell.octoshrink.swift`），三条线互不读写对方的 history.json
+- ✅ 压缩设置有三线回归守卫：默认质量、Smart Mode 与输出模式保持一致；Swift 与 Direct 共用 CLI 编码器时逐项核对参数，App Store 进程内编码器映射同一质量档位。改动这些设置、编码器或 fallback 时必须同步更新 `tests/compression-parity.cjs`，由前端测试、全量构建和 Release 门禁运行
 - 🟡 App Store：**2.5.42 已提交审核**（2026-09-24，submission `ba53f122`，状态 WAITING_FOR_REVIEW，releaseType=AFTER_APPROVAL → 过审即自动上架），线上仍是 2.4.3。上一份草稿 2.5.24 在 ASC 里躺了整整一个月没能提交，根因只是新构建没设 `usesNonExemptEncryption`（`asc validate` 会报 `build.encryption.missing`）—— 不是有人故意压着不发，流程见 §6.5
 - ⬜ 引擎迁移后续：JXL（未来接入 jpegxl-sys 后可恢复 UI 选项）；GIF 减色优化（未来可用 imagequant 逐帧量化，当前有帧间闪烁风险暂不做）
 
-### 8. 每次编译必须同时构建两条产物线（强制）
+### 8. 每次全量编译必须同时构建两条 Tauri 产物线和 Swift 原生版（强制）
 
-日常开发首选 `bash scripts/build_all.sh`，一次编译两版：
+日常开发首选 `bash scripts/build_all.sh`，一次编译三版：
 - **Direct 版**（default=cli-backends）→ 产物 `OctoShrink_direct.app`（加 `_direct` 后缀，与 App Store 版区分）
 - **App Store 版**（appstore=inproc-backends）→ 产物 `OctoShrink.app`（原名）
+- **Swift 原生版** → 产物 `swift/.build/OctoShrink_swift.app`
 
-两条线的 `productName` 都是 "OctoShrink"，Tauri 输出到同一路径。build_all.sh 先建 Direct 再重命名，避免覆盖。**不要只编译一版**——改完代码必须两版都过 `cargo check`，发布时用 `build_all.sh` 同时出两版。单独发布某一条线时用 `notarize.sh`（Direct）或 `build_appstore.sh`（App Store）。
+两条 Tauri 线的 `productName` 都是 "OctoShrink"，输出到同一路径；build_all.sh 先建 Direct 再重命名，避免覆盖。**全量构建中任意一版失败都必须让脚本失败**，不可吞掉 Swift 构建错误后报告三版完成。改完代码必须两条 feature 都过 `cargo check`，再用 `build_all.sh` 产出三版。单独发布 Tauri 产物时用 `notarize.sh`（Direct）或 `build_appstore.sh`（App Store）；Swift 原生版当前是独立构建产物。
 
 ---
 
@@ -428,6 +432,7 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - tests/app-slices.cjs — 前端单文件脚本的切片助手：队列状态 / 执行会话 / 状态机 / 行渲染那几段的标记只写在这里一处，各测试共用（免得某个测试的切片范围漂掉，跑的其实不是真实代码）
 - tests/history-view.cjs（`npm run test:frontend`）— 前端历史页（每行按钮集合 / 重建条目 / 恢复只交 historyId / 冲突 force 重试 / 不保留档位 / 压缩中拒绝清空）、CPU 上限纯逻辑自检
 - tests/settings-collapse.cjs（`npm run test:frontend`）— 压缩设置**默认折叠**：`#settingsPanel` 的 class 里必须带 `collapsed`（写在 HTML，不靠 JS 事后补）、全文只有 `toggleSettings()` 一处写这个 class（不许任何路径自动展开）、折叠时那一行摘要真有内容、点得开也收得回。Swift 线对应 `AppState.settingsExpanded = false` 且无自动展开路径
+- tests/compression-parity.cjs（`npm run test:frontend`、`build_all.sh`、Release workflow）— 核对三线默认压缩质量/Smart Mode/输出模式、Smart PNG 候选、App Store 进程内编码参数，以及 Swift 与 Direct 共用 CLI 编码器的参数和 Swift bundle 编码器清单；编码路径变化时同步扩展此契约
 - tests/compare-slider.cjs（`npm run test:frontend`）— 对比窗口：底部那根悬浮滑条不许回来（含它的 CSS/JS 引用）、分割数学照常（裁剪百分比 / 手柄位置 / 越界与非法值）、连续拖动合并到一帧、拖拽入口与「平移时不抢手势」的守卫都在
 - tests/update-panel.cjs（`npm run test:frontend`）— 更新面板：控件必须只在设置页容器内、标题栏不许留死样式，Direct 与 App Store 的显隐，下载进度在取消/失败后归零
 - scripts/test_swift_history.sh — Swift 线历史·备份·覆盖事务·恢复·取消与暂停·停止·队列进度·CPU 上限·历史行按钮自检（真跑文件系统，29 组）
@@ -671,9 +676,10 @@ asc profiles inspect --path src-tauri/OctoShrink_AppStore.provisionprofile   # �
 #### 发布新版本完整流程（无密码）
 
 ```bash
-# 0. 发版前必须改的三处（CI 不会替你生成，漏了就发出一条描述上一版的下载提示）
+# 0. 发版前必须同步版本号并更新本版说明（CI 不会替你生成）
 #    - src-tauri/tauri.conf.json  -> "version"（Direct）
-#    - src-tauri/tauri.conf.appstore.json -> "version"（两条线版本号保持一致）
+#    - src-tauri/tauri.conf.appstore.json -> "version"（与 Direct 一致）
+#    - swift/Info.plist -> CFBundleShortVersionString 与 CFBundleVersion（Swift 版也保持同一版本号）
 #    - .github/workflows/release.yml 里 latest.json 的 --arg notes "..." 换成这一版的实话
 #      （这段文字就是应用内「检查更新」弹出的更新说明，硬编码在 workflow 里）
 
@@ -697,7 +703,7 @@ gh run watch --exit-status
 
 也可在 GitHub Actions 手动运行 `Release` workflow：输入 `vX.Y.Z` 作为产物版本标签；`publish=false`（默认）只完整验证构建、签名与公证，`publish=true` 才正式发布。CI 签名公证实现位于 `scripts/sign_notarize_macos_ci.sh`；本地不再需要下载、重签或覆盖 Release 资产。
 
-> ⚠️ **`release.yml` 不跑任何测试套件**（只构建 / 签名 / 公证 / 发布），所以推 tag 之前本地那几套自检是唯一的门禁：`npm run test:frontend`、`cargo test --lib`（默认 feature）、`cargo test --lib --features appstore --no-default-features`、`bash scripts/test_swift_history.sh`，再加一次 `cargo check --release`（release profile 与 dev 不同，历史上踩过 proc-macro 半写坏的坑）。CI 一轮约 33 分钟、不可中断重来代价高。
+> ⚠️ `release.yml` 只跑轻量的 `compression-parity.cjs` 源码契约检查，不跑完整测试套件；推 tag 之前仍须本地运行：`npm run test:frontend`、`cargo test --lib`（默认 feature）、`cargo test --lib --features appstore --no-default-features`、`bash scripts/test_swift_history.sh`，再加一次 `cargo check --release`（release profile 与 dev 不同，历史上踩过 proc-macro 半写坏的坑）。CI 一轮约 33 分钟、不可中断重来代价高。
 >
 > 一次完整发布的耗时参考：v2.5.37 33m22s，v2.5.36 38m18s。`gh run watch <run-id> --exit-status --interval 60` 可以挂着等。
 >

@@ -15,10 +15,18 @@ SRC_DIR="$SWIFT_DIR/Sources/OctoShrinkSwift"
 BUILD_DIR="$SWIFT_DIR/.build"
 APP_NAME="OctoShrink"
 OUT_APP="$BUILD_DIR/${APP_NAME}_swift.app"
+TAURI_RES="$PROJECT_DIR/src-tauri/resources"
+ENCODER_TOOLS=(pngquant oxipng cjpeg cwebp avifenc gifsicle)
 
 log()  { echo "==> $*"; }
 ok()   { echo "    ✓ $*"; }
 fail() { echo "✗ $*" >&2; exit 1; }
+
+# Swift 与 Direct 共用这些 CLI 编码器和参数。缺任意一个都会静默走到不同的
+# ImageIO fallback，导致压缩结果偏离 Direct；打包前就明确失败。
+for tool in "${ENCODER_TOOLS[@]}"; do
+  [ -x "$TAURI_RES/bin/$tool" ] || fail "缺少 Direct 共用编码器：$TAURI_RES/bin/$tool"
+done
 
 # ─── 清理旧产物 ───
 log "清理旧构建产物"
@@ -58,15 +66,16 @@ fi
 
 # ─── 复制 CLI 工具和动态库（同 Direct 线） ───
 log "复制 CLI 工具和动态库"
-TAURI_RES="$PROJECT_DIR/src-tauri/resources"
 COPY_COUNT=0
-for tool in pngquant oxipng cjpeg cwebp avifenc gifsicle; do
-  if [ -f "$TAURI_RES/bin/$tool" ]; then
-    cp "$TAURI_RES/bin/$tool" "$OUT_APP/Contents/Resources/bin/"
-    COPY_COUNT=$((COPY_COUNT + 1))
-  fi
+for tool in "${ENCODER_TOOLS[@]}"; do
+  cp "$TAURI_RES/bin/$tool" "$OUT_APP/Contents/Resources/bin/"
+  COPY_COUNT=$((COPY_COUNT + 1))
 done
 ok "$COPY_COUNT 个 CLI 工具"
+
+for tool in "${ENCODER_TOOLS[@]}"; do
+  [ -x "$OUT_APP/Contents/Resources/bin/$tool" ] || fail "Swift bundle 缺少编码器：$tool"
+done
 
 DYLIB_COUNT=0
 if [ -d "$TAURI_RES/lib" ]; then

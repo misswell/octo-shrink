@@ -107,12 +107,14 @@ struct CompressOptions {
     var systemImageSize: SystemImageSize = .actual
     var preserveMetadata: Bool = true
     var quality: Int = 75
-    var smartMode: Bool = false
+    // Direct / App Store 的 UI 默认勾选智能模式；Swift 默认也必须打开，
+    // 否则 PNG 不会同时比较 PNG 与 WebP 候选，压缩结果会明显偏大。
+    var smartMode: Bool = true
     var outputFormat: OutputFormat = .original
     var backend: CompressionBackend = .auto
     var effort: CompressionEffort = .balanced
     var convertToWebp: Bool = false
-    var outputMode: OutputMode = .suffix
+    var outputMode: OutputMode = .replace
     var outputSuffix: String = "_compressed"
     var outputDir: String?
     var sourceRoots: [String] = []

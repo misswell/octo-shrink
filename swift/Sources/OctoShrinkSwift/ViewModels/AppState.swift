@@ -499,6 +499,13 @@ final class AppState: ObservableObject {
 
     private func loadSettings() {
         let d = UserDefaults.standard
+        // 旧版 Swift 默认关闭智能模式，而 Direct / App Store 一直默认开启。
+        // 一次性迁移旧设置，之后用户可以像其他压缩选项一样手动关闭。
+        let smartModeParityMigrationKey = "setting-smartMode-direct-default-v1"
+        if !d.bool(forKey: smartModeParityMigrationKey) {
+            d.set(true, forKey: "setting-smartMode")
+            d.set(true, forKey: smartModeParityMigrationKey)
+        }
         if let raw = d.string(forKey: "setting-processingMode"), let v = ProcessingMode(rawValue: raw) { options.processingMode = v }
         if let raw = d.string(forKey: "setting-systemImageSize"), let v = SystemImageSize(rawValue: raw) { options.systemImageSize = v }
         if d.object(forKey: "setting-preserveMetadata") != nil { options.preserveMetadata = d.bool(forKey: "setting-preserveMetadata") }

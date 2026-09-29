@@ -21,6 +21,18 @@ env:
   SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.ref_name }}
 
 jobs:
+  compression-parity:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_REF }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify Swift compression parity
+        run: node tests/compression-parity.cjs
+
   # ═══ macOS ARM64 / Intel 分别构建，确保内置 CLI 与主程序架构一致 ═══
   build-macos:
     strategy:
@@ -364,7 +376,7 @@ jobs:
 
   # ═══ 发布 Release ═══
   release:
-    needs: [build-macos, build-macos-universal, verify-appstore, build-windows, build-linux]
+    needs: [compression-parity, build-macos, build-macos-universal, verify-appstore, build-windows, build-linux]
     if: github.event_name == 'push' || inputs.publish
     runs-on: ubuntu-latest
     permissions:
@@ -395,7 +407,7 @@ jobs:
           DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${ARCHIVE}"
           jq -n \
             --arg version "$VERSION" \
-            --arg notes "OctoShrink ${VERSION}: 增加简体中文和 English 全界面支持，默认跟随系统语言，可在设置中选择自动、简体中文或 English。" \
+            --arg notes "OctoShrink ${VERSION}: 修复 Swift 原生版未默认启用 Smart Mode 导致 PNG 压缩结果偏大的问题；统一压缩设置默认值，并增加 Direct / App Store / Swift 三线压缩参数回归检查。" \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg signature "$SIGNATURE" \
             --arg url "$DOWNLOAD_URL" \

@@ -108,7 +108,7 @@ sudo xattr -dr com.apple.quarantine /Applications/OctoShrink.app
 
 ## 技术架构
 
-基于 **Tauri 2**（Rust 后端 + 原生 HTML/CSS/JS 前端，无构建步骤），另有第三条 **Swift 原生**产物线。macOS 要求 11.0+（App Store 版 12.0+）。
+基于 **Tauri 2**（Rust 后端 + 原生 HTML/CSS/JS 前端，无构建步骤），另有第三条 **Swift 原生**产物线。macOS 要求 11.0+（App Store 版 12.0+，Swift 原生版 13.0+）。
 
 ### 三条产物线
 
@@ -118,24 +118,25 @@ sudo xattr -dr com.apple.quarantine /Applications/OctoShrink.app
 |--------|---------|---------|---------|------|
 | Direct（直发） | GitHub Releases | 内置 CLI 工具（`cli-backends`，默认） | `scripts/notarize.sh` | `.app` + `.dmg` |
 | App Store | Mac App Store | 全进程内 Rust 库（`appstore` = `inproc-backends`），沙盒 | `scripts/build_appstore.sh` | `.app` + `.pkg` |
-| Swift 原生 | 源码 / 自行打包 | 同为进程内实现 | `scripts/build_swift.sh` | `.app` + `.dmg` |
+| Swift 原生 | 源码 / 自行打包 | 与 Direct 共用内置 CLI 编码器；系统转换走 ImageIO | `scripts/build_swift.sh` | `.app` + `.dmg` |
 
 - App Store 版**不打包、也不 spawn 任何第三方可执行文件**：所有格式走进程内 Rust 库，前端由进程内本地 HTTP 服务器提供（沙盒阻止 `tauri://`），文件访问经 security-scoped bookmark 授权
+- Swift 版与 Direct 共用 pngquant、oxipng、cjpeg、cwebp、avifenc、gifsicle 六个编码器及其压缩参数；构建会校验编码器齐全，Smart Mode 默认也保持一致
 - 三条线的历史记录与备份存储根互相独立，原图备份永不落临时目录
 - 工程规则详见 [AGENTS.md](AGENTS.md)（两条产物线并行、文件访问差异表、entitlements 对照）
 
 ### 压缩引擎对照
 
-| 格式 | Direct（CLI） | App Store（进程内 crate） |
-|------|--------------|--------------------------|
-| PNG | pngquant / oxipng | imagequant / oxipng |
-| JPEG | cjpeg (mozjpeg) | mozjpeg |
-| WebP | cwebp | webp |
-| AVIF | avifenc | ravif |
-| GIF | gifsicle（可减色） | image crate 重编码 |
-| 系统转换 | macOS ImageIO + CoreGraphics（三线共用，对齐 Finder） | 同左 |
+| 格式 | Direct（CLI） | App Store（进程内 crate） | Swift 原生（CLI） |
+|------|--------------|--------------------------|-------------------|
+| PNG | pngquant / oxipng | imagequant / oxipng | 与 Direct 共用二进制 |
+| JPEG | cjpeg (mozjpeg) | mozjpeg | cjpeg (mozjpeg) |
+| WebP | cwebp | webp | cwebp |
+| AVIF | avifenc | ravif | avifenc |
+| GIF | gifsicle（可减色） | image crate 重编码 | gifsicle（可减色） |
+| 系统转换 | macOS ImageIO + CoreGraphics | 同左 | 同左 |
 
-所有 CLI 工具及其依赖库均已打包进 Direct 版应用内（`Contents/Resources/bin|lib`），通过 `DYLD_FALLBACK_LIBRARY_PATH` 加载，用户无需安装任何依赖。
+Direct 与 Swift 所需的 CLI 工具及依赖库都打包在各自应用的 `Contents/Resources/bin|lib` 中，通过 `DYLD_FALLBACK_LIBRARY_PATH` 加载，用户无需安装任何依赖；App Store 版不携带这些文件。
 
 ## 本地开发
 
@@ -184,7 +185,7 @@ octo-shrink/
 │   │   ├── history.rs           # 压缩历史 + 原图备份 + 统一恢复服务
 │   │   ├── output_transaction.rs# 覆盖事务凭证，启动时补记或回滚
 │   │   └── app_settings.rs      # 保留天数 + CPU 上限（同一份 settings.json）
-│   ├── resources/bin|lib/       # 内置 CLI 工具与动态库（仅 Direct 版打包）
+│   ├── resources/bin|lib/       # Direct / Swift 共用的 CLI 工具与动态库来源；App Store 不打包
 │   ├── entitlements*.plist      # Direct / App Store
 │   └── tauri.conf*.json         # Direct / App Store 两份配置
 ├── swift/                  # Swift 原生线（功能对齐，独立存储根）

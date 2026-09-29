@@ -1,16 +1,18 @@
 #!/bin/bash
-# scripts/build_all.sh — 同时构建两条产物线
+# scripts/build_all.sh — 同时构建两条 Tauri 产物线和 Swift 原生版
 #
 # 1. Direct 版 (default=cli-backends) → OctoShrink_direct.app
 # 2. App Store 版 (appstore=inproc-backends) → OctoShrink.app
+# 3. Swift 原生版 → swift/.build/OctoShrink_swift.app
 #
 # 用法：
-#   bash scripts/build_all.sh            # 编译两版 + 复制资源（不签名）
-#   SIGN=1 bash scripts/build_all.sh     # 编译 + 签名两版
+#   bash scripts/build_all.sh            # 编译三版 + 复制资源（不签名）
+#   SIGN=1 bash scripts/build_all.sh     # 编译三版 + 签名 Tauri 两版
 #
 # 产物路径：
 #   Direct    : target/release/bundle/macos/OctoShrink_direct.app
 #   App Store : target/release/bundle/macos/OctoShrink.app
+#   Swift     : swift/.build/OctoShrink_swift.app
 
 set -euo pipefail
 
@@ -18,6 +20,9 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TAURI_DIR="$PROJECT_DIR/src-tauri"
 BUNDLE_DIR="$TAURI_DIR/target/release/bundle/macos"
 APP_NAME="OctoShrink"
+
+# 压缩参数和编码器行为必须与 Swift 原生线同步；失败时不要生成看似正常的三版产物。
+node "$PROJECT_DIR/tests/compression-parity.cjs"
 
 log()  { echo "==> $*"; }
 ok()   { echo "    ✓ $*"; }
@@ -127,7 +132,7 @@ fi
 
 # ========== 3. 原生 Swift 版 ==========
 log "构建原生 Swift 版"
-bash "$PROJECT_DIR/scripts/build_swift.sh" || echo "    ⚠ Swift 版构建失败（不影响其他两版）"
+bash "$PROJECT_DIR/scripts/build_swift.sh" || fail "Swift 版构建失败"
 SWIFT_APP="$PROJECT_DIR/swift/.build/OctoShrink_swift.app"
 
 # ========== 4. 报告 ==========
