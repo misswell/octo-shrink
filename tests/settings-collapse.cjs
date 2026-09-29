@@ -13,7 +13,7 @@ const fs = require('node:fs');
 
 const html = fs.readFileSync('frontend/index.html', 'utf8');
 const css = fs.readFileSync('frontend/style.css', 'utf8');
-const { source, slice } = require('./app-slices.cjs');
+const { source, slice, installTranslationFallback } = require('./app-slices.cjs');
 
 // ── ① 初始折叠：写在 HTML 的 class 里 ─────────────────────────────────
 const panelTag = html.match(/<div[^>]*id="settingsPanel"[^>]*>/);
@@ -36,10 +36,10 @@ assert.doesNotMatch(source, /settingsPanel'\)\.classList\.remove\('collapsed'\)/
   '不许有任何代码路径自动展开设置面板');
 assert.equal((html.match(/id="settingsPanel"/g) || []).length, 1, '面板只有一个');
 
-// 另外三个 .settings-panel 是设置页里的静态卡片（历史记录与原图 / 性能 / 更新），
+// 设置页里的静态卡片（语言 / 历史记录与原图 / 性能 / 更新），
 // 它们没有折叠这回事，别被顺手加上 collapsed。
 const otherPanels = (html.match(/<div class="settings-panel"/g) || []).length;
-assert.equal(otherPanels, 3, '设置页那三张卡片保持原样（不带 collapsed）');
+assert.equal(otherPanels, 4, '设置页各卡片保持原样（不带 collapsed）');
 
 // ── ③ 折叠时那一行真有摘要 ───────────────────────────────────────────
 assert.ok(css.includes('.settings-panel.collapsed .settings-body { display: none; }'),
@@ -64,6 +64,7 @@ const context = vm.createContext({
   },
   getOutputSuffix: () => '_compressed',
 });
+installTranslationFallback(context);
 vm.runInContext(slice('function updateSettingsSummary(', 'function resetSettings('), context);
 context.updateSettingsSummary();
 assert.equal(elements.settingsSummary.textContent, 'Q75 · 原格式 · 智能 · 覆盖',

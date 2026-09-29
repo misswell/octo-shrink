@@ -16,6 +16,10 @@ function slice(from, to) {
   return source.slice(start, end);
 }
 
+function installTranslationFallback(context) {
+  if (typeof context.localizeUiText !== 'function') context.localizeUiText = value => value;
+}
+
 /// 「队列状态（唯一真相）」整段：queueItems + 派生进度 + 队列摘要。
 /// 任何跟"这个文件还需不需要处理"有关的判断都必须从这里读，所以测试也只切这里。
 function queueCore() {
@@ -39,26 +43,31 @@ function stateMachine() {
 }
 
 function installQueueCore(context) {
+  installTranslationFallback(context);
   vm.runInContext(queueCore(), context);
 }
 
 function installQueueRowPainter(context) {
+  installTranslationFallback(context);
   vm.runInContext(queueRowPainter(), context);
 }
 
 /// 把状态机装进测试上下文。必须在其他切片之前调用：它声明
 /// compressionState / isCompressing / compressionPaused 三个变量（初值 idle）。
 function installStateMachine(context) {
+  installTranslationFallback(context);
   vm.runInContext(stateMachine(), context);
 }
 
 /// 把执行会话装进上下文。必须在状态机之后（beginExecutionSession 读 compressionState）。
 function installSessionModel(context) {
+  installTranslationFallback(context);
   vm.runInContext(sessionModel(), context);
 }
 
 module.exports = {
   source, slice,
+  installTranslationFallback,
   queueCore, installQueueCore,
   queueRowPainter, installQueueRowPainter,
   sessionModel, installSessionModel,

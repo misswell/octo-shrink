@@ -7,6 +7,11 @@ const { invoke } = window.__TAURI__.core;
 const { listen, emit } = window.__TAURI__.event;
 const { getCurrentWindow } = window.__TAURI__.window;
 
+function localizeUiText(value) {
+  if (typeof window === 'undefined' || !window.OctoShrinkI18n) return value;
+  return window.OctoShrinkI18n.translateText(value);
+}
+
 // ─── DOM ────────────────────────────────────────────────────────
 const comparePanel = document.getElementById('comparePanel');
 const compareModalBody = document.getElementById('compareModalBody');
@@ -127,13 +132,13 @@ function releaseCompareImages() {
 
 // ─── Empty / panel switching ────────────────────────────────────
 function showEmpty(message) {
-  compareEmpty.textContent = message || '暂无可对比的内容';
+  compareEmpty.textContent = message || localizeUiText('暂无可对比的内容');
   compareEmpty.style.display = 'flex';
   compareModalBody.style.display = 'none';
 }
 
 function showLoading(message) {
-  compareEmpty.textContent = message || '加载中…';
+  compareEmpty.textContent = message || localizeUiText('加载中…');
   compareEmpty.style.display = 'flex';
   compareModalBody.style.display = 'none';
 }
@@ -182,7 +187,7 @@ async function renderAt(index) {
   if (!compareResults.length) {
     currentResult = null;
     currentIndex = -1;
-    showEmpty('暂无可对比的内容');
+    showEmpty(localizeUiText('暂无可对比的内容'));
     setNavButtonsState();
     return;
   }
@@ -191,7 +196,7 @@ async function renderAt(index) {
   currentResult = result;
   const requestId = ++compareRequestId;
 
-  showLoading('加载中…');
+  showLoading(localizeUiText('加载中…'));
   releaseCompareImages();
   setNavButtonsState();
 
@@ -204,7 +209,7 @@ async function renderAt(index) {
     ]);
     if (requestId !== compareRequestId || currentResult !== result) return;
     if (!loaded[0] || !loaded[1]) {
-      showEmpty(!loaded[0] ? '无法加载原图，文件可能已被移动或恢复' : '无法加载压缩图，文件可能已被移动或恢复');
+      showEmpty(!loaded[0] ? localizeUiText('无法加载原图，文件可能已被移动或恢复') : localizeUiText('无法加载压缩图，文件可能已被移动或恢复'));
       return;
     }
 
@@ -229,7 +234,7 @@ async function renderAt(index) {
     refreshInfo();
   } catch (err) {
     if (requestId !== compareRequestId) return;
-    showEmpty('打开对比失败: ' + (err.message || err));
+    showEmpty(localizeUiText('打开对比失败: ') + (err.message || err));
   }
 }
 
@@ -242,7 +247,7 @@ function loadPayload(payload) {
   if (!compareResults.length) {
     currentResult = null;
     currentIndex = -1;
-    showEmpty('没有可对比的结果');
+    showEmpty(localizeUiText('没有可对比的结果'));
     setNavButtonsState();
     return;
   }
@@ -320,7 +325,7 @@ async function recompressWithQuality(quality) {
       const loadedPreview = await loadOriginalImage(compareCompressedImg, newResult.outputPath);
       if (requestId !== compareRequestId || !currentResult || currentResult.file !== result.file) return;
       if (!loadedPreview) {
-        showToast('重新压缩预览加载失败');
+        showToast(localizeUiText('重新压缩预览加载失败'));
         return;
       }
       compareCompressedSize.textContent = newResult.compressedSizeFormatted || '?';
@@ -336,12 +341,12 @@ async function recompressWithQuality(quality) {
       });
       compareResults[currentIndex] = currentResult;
       emit('compare-recompressed', { filePath: result.file, result: currentResult });
-      showToast('重新压缩完成 (质量: ' + quality + '%)');
+      showToast(localizeUiText('重新压缩完成 (质量: ') + quality + '%)');
     } else {
-      showToast('重新压缩失败');
+      showToast(localizeUiText('重新压缩失败'));
     }
   } catch (err) {
-    showToast('重新压缩出错: ' + (err.message || err));
+    showToast(localizeUiText('重新压缩出错: ') + (err.message || err));
   } finally {
     if (recompressBtn) recompressBtn.disabled = false;
   }
@@ -362,10 +367,10 @@ async function restoreFromCompare() {
       emit('compare-restored', { filePath: r.file });
       closeCompareWindow();
     } else {
-      showToast('恢复失败: ' + ((result && result.error) || '未知错误'));
+      showToast(localizeUiText('恢复失败: ') + ((result && result.error) || localizeUiText('未知错误')));
     }
   } catch (err) {
-    showToast('恢复出错: ' + (err.message || err));
+    showToast(localizeUiText('恢复出错: ') + (err.message || err));
   }
 }
 
@@ -462,7 +467,7 @@ listen('compare-results-changed', function(event) {
     currentResult = null;
     currentIndex = -1;
     releaseCompareImages();
-    showEmpty('该文件已恢复原图或被移除');
+    showEmpty(localizeUiText('该文件已恢复原图或被移除'));
     return;
   }
 
@@ -487,9 +492,9 @@ listen('compare-results-changed', function(event) {
     if (payload) {
       loadPayload(payload);
     } else if (!currentResult) {
-      showEmpty('暂无可对比的内容');
+      showEmpty(localizeUiText('暂无可对比的内容'));
     }
   } catch (err) {
-    showEmpty('加载失败: ' + (err.message || err));
+    showEmpty(localizeUiText('加载失败: ') + (err.message || err));
   }
 })();

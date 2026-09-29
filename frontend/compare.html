@@ -21,6 +21,7 @@
       document.documentElement.style.backgroundColor = resolved === 'dark' ? '#1c1c1e' : '#ececed';
     })();
   </script>
+  <script src="i18n.js"></script>
   <style>
     html, body { background: #ececed; }
     html[data-theme="dark"], html[data-theme="dark"] body { background: #1c1c1e; }
@@ -136,6 +137,7 @@
     </div>
   </div>
 
+  <script>window.OctoShrinkI18n.applyToDocument(document);</script>
   <script src="compare_viewer.js"></script>
   <script src="compare_window.js"></script>
 </body>

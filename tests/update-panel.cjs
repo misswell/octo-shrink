@@ -50,6 +50,7 @@ function makeEnv(variant) {
   };
   const context = vm.createContext({
     console: { warn() {}, log() {} }, Set, Promise, String, Math, Object,
+    localizeUiText: value => value,
     BUILD_VARIANT: variant,
     window: { appVersion: '2.5.35' },
     document: { getElementById: id => els[id] || null },

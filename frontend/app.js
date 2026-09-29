@@ -4,6 +4,11 @@
 const { invoke, convertFileSrc } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
+function localizeUiText(value) {
+  if (typeof window === 'undefined' || !window.OctoShrinkI18n) return value;
+  return window.OctoShrinkI18n.translateText(value);
+}
+
 function iconMarkup(name, small) {
   return '<svg class="symbol-icon' + (small ? ' symbol-icon-small' : '') + '" aria-hidden="true"><use href="#icon-' + name + '"></use></svg>';
 }
@@ -108,8 +113,8 @@ function applyTheme(theme) {
   // 更新按钮提示
   const btn = document.getElementById('themeToggleBtn');
   if (btn) {
-    const labels = { auto: '自动（跟随系统）', light: '亮色模式', dark: '暗黑模式' };
-    btn.title = '当前: ' + labels[theme] + ' · 点击切换';
+    const labels = { auto: localizeUiText('自动（跟随系统）'), light: localizeUiText('亮色模式'), dark: localizeUiText('暗黑模式') };
+    btn.title = localizeUiText('当前: ') + labels[theme] + localizeUiText(' · 点击切换');
   }
 }
 
@@ -117,8 +122,8 @@ function cycleTheme() {
   const idx = THEMES.indexOf(currentTheme);
   const next = THEMES[(idx + 1) % THEMES.length];
   applyTheme(next);
-  const labels = { auto: '自动', light: '亮色', dark: '暗黑' };
-  showToast('主题: ' + labels[next]);
+  const labels = { auto: localizeUiText('自动'), light: localizeUiText('亮色'), dark: localizeUiText('暗黑') };
+  showToast(localizeUiText('主题: ') + labels[next]);
 }
 
 // 监听系统主题变化（auto 模式下实时响应）
@@ -210,11 +215,11 @@ function updateQualitySlider() {
 
 function processingActionText(stage) {
   var systemMode = processingMode === 'system';
-  if (stage === 'progress') return systemMode ? '转换中…' : '压缩中…';
-  if (stage === 'done') return systemMode ? '转换完成' : '压缩完成';
+  if (stage === 'progress') return systemMode ? localizeUiText('转换中…') : localizeUiText('压缩中…');
+  if (stage === 'done') return systemMode ? localizeUiText('转换完成') : localizeUiText('压缩完成');
   // 「继续」= 队列里还有没处理的（停止之后又重新开始一轮）。
-  if (stage === 'continue') return systemMode ? '继续转换' : '继续压缩';
-  return systemMode ? '开始转换' : '开始压缩';
+  if (stage === 'continue') return systemMode ? localizeUiText('继续转换') : localizeUiText('继续压缩');
+  return systemMode ? localizeUiText('开始转换') : localizeUiText('开始压缩');
 }
 
 function setProcessingMode(mode, skipSave) {
@@ -229,7 +234,7 @@ function setProcessingMode(mode, skipSave) {
     var advancedActive = processingMode === 'advanced';
     modeToggle.classList.toggle('active', advancedActive);
     modeToggle.setAttribute('aria-checked', advancedActive ? 'true' : 'false');
-    modeToggle.setAttribute('aria-label', '切换处理方式，当前为' + (advancedActive ? '高级压缩' : '系统转换'));
+    modeToggle.setAttribute('aria-label', localizeUiText('切换处理方式，当前为') + (advancedActive ? localizeUiText('高级压缩') : localizeUiText('系统转换')));
   }
   document.querySelectorAll('[data-processing-mode]').forEach(function(row) {
     row.style.display = row.dataset.processingMode === processingMode ? 'flex' : 'none';
@@ -237,8 +242,8 @@ function setProcessingMode(mode, skipSave) {
 
   var autoLabel = document.getElementById('autoCompressLabel');
   if (autoLabel) autoLabel.textContent = processingMode === 'system'
-    ? '拖入或选择后自动转换'
-    : '拖入或选择后自动压缩';
+    ? localizeUiText('拖入或选择后自动转换')
+    : localizeUiText('拖入或选择后自动压缩');
   if (!isCompressing) {
     var btnText = document.getElementById('compressBtnText');
     if (btnText) btnText.innerHTML = '<svg class="symbol-icon"><use href="#icon-compress"/></svg> ' + processingActionText('idle');
@@ -336,7 +341,7 @@ async function selectFiles() {
     }
   } catch (error) {
     console.error('File selection failed:', error);
-    showToast('选择图片失败，请重试');
+    showToast(localizeUiText('选择图片失败，请重试'));
   }
 }
 
@@ -348,7 +353,7 @@ async function selectFolder() {
     }
   } catch (error) {
     console.error('Folder selection failed:', error);
-    showToast('选择文件夹失败，请重试');
+    showToast(localizeUiText('选择文件夹失败，请重试'));
   }
 }
 
@@ -368,7 +373,7 @@ async function ensureSystemOutputAccess() {
   var selectedMode = document.querySelector('input[name="outputMode"]:checked');
   if (selectedMode && selectedMode.value === 'folder' && outputDir) return true;
 
-  showToast('请选择系统转换文件的输出文件夹');
+  showToast(localizeUiText('请选择系统转换文件的输出文件夹'));
   if (!await selectOutputDir()) return false;
   var folderMode = document.querySelector('input[name="outputMode"][value="folder"]');
   if (folderMode) folderMode.checked = true;
@@ -384,7 +389,7 @@ function handleFiles(fileList) {
     if (file.path) filePaths.push(file.path);
   }
   if (filePaths.length === 0 && fileList.length > 0) {
-    showToast('无法读取拖入文件，请使用“选择文件”');
+    showToast(localizeUiText('无法读取拖入文件，请使用“选择文件”'));
     return Promise.resolve([]);
   }
   return handleFilePaths(filePaths);
@@ -444,13 +449,13 @@ function handleFilePaths(filePaths) {
       expanded = await invoke('expand_image_files', { filePaths: incoming });
     } catch (e) {
       console.error('Image expansion failed:', e);
-      showToast('读取图片失败，请重试');
+      showToast(localizeUiText('读取图片失败，请重试'));
       return [];
     }
 
     expanded = uniqueFilePaths(expanded);
     if (expanded.length === 0) {
-      showToast('文件夹中没有找到可压缩的图片');
+      showToast(localizeUiText('文件夹中没有找到可压缩的图片'));
       return [];
     }
 
@@ -467,7 +472,7 @@ function handleFilePaths(filePaths) {
     if (container) container.scrollTop = 0;
 
     if (added.length === 0) {
-      showToast('所选图片已在队列中');
+      showToast(localizeUiText('所选图片已在队列中'));
       return added;
     }
 
@@ -482,7 +487,7 @@ function handleFilePaths(filePaths) {
     return added;
   }).catch(function(error) {
     console.error('Queue import failed:', error);
-    showToast('添加图片失败，请重试');
+    showToast(localizeUiText('添加图片失败，请重试'));
     return [];
   });
   return pendingImports;
@@ -562,11 +567,11 @@ function updateQueueSummary() {
   if (!summary) return;
   var p = getQueueProgress();
   if (p.total === 0) {
-    summary.textContent = files.length + ' 个文件';
+    summary.textContent = files.length + localizeUiText(' 个文件');
   } else {
     // 「已处理」而不是「已完成」：失败的文件也算处理过，说"完成"会把失败藏起来。
-    summary.textContent = p.processed + ' / ' + p.total + ' 已处理'
-      + (p.failed > 0 ? ' · 失败 ' + p.failed : '')
+    summary.textContent = p.processed + ' / ' + p.total + localizeUiText(' 已处理')
+      + (p.failed > 0 ? localizeUiText(' · 失败 ') + p.failed : '')
       + compressionStateSuffix()
       + cpuLimitText();
   }
@@ -580,8 +585,8 @@ function updateQueueSummary() {
 /// 不往里塞"还有几个在跑"的数字：那个数字在事件之后就没有下一个事件来更新它了。
 function compressionStateSuffix() {
   if (!isCompressing) return '';
-  if (compressionState === COMPRESSION_PAUSED) return ' · 已暂停';
-  if (compressionState === COMPRESSION_STOPPING) return ' · 正在停止';
+  if (compressionState === COMPRESSION_PAUSED) return localizeUiText(' · 已暂停');
+  if (compressionState === COMPRESSION_STOPPING) return localizeUiText(' · 正在停止');
   return '';
 }
 
@@ -614,7 +619,7 @@ function cpuCeiling() {
 function cpuLimitText() {
   if (!cpuStatus) return '';
   if (cpuStatus.configuredLimit === null || cpuStatus.configuredLimit === undefined) {
-    return ' · CPU 自动';
+    return localizeUiText(' · CPU 自动');
   }
   var ceiling = cpuCeiling();
   var limit = Math.min(Math.max(1, cpuStatus.effectiveLimit || 1), ceiling);
@@ -635,8 +640,8 @@ function applyQueueView() {
   var key = sort ? sort.value : 'import';
   var direction = document.getElementById('queueSortDirection');
   if (direction) {
-    direction.innerHTML = iconMarkup(queueSortDescending ? 'sort-desc' : 'sort-asc', true) + (queueSortDescending ? ' 降序' : ' 升序');
-    direction.setAttribute('aria-label', queueSortDescending ? '当前降序，点击切换升序' : '当前升序，点击切换降序');
+    direction.innerHTML = iconMarkup(queueSortDescending ? 'sort-desc' : 'sort-asc', true) + (queueSortDescending ? localizeUiText(' 降序') : localizeUiText(' 升序'));
+    direction.setAttribute('aria-label', queueSortDescending ? localizeUiText('当前降序，点击切换升序') : localizeUiText('当前升序，点击切换降序'));
   }
   // 排序键也全部从 queueItems 读：DOM class 只负责画，不参与任何判断。
   var states = ['failed', 'running', 'pending', 'done', 'restored', 'removed'];
@@ -764,7 +769,7 @@ function paintQueueRow(filePath) {
   if (state === 'failed' && result) {
     if (icon) icon.innerHTML = iconMarkup('error', true);
     if (statusEl) {
-      statusEl.textContent = '失败';
+      statusEl.textContent = localizeUiText('失败');
       appendErrorIcon(statusEl, result);
     }
     renderQueueResultActions(row, result);
@@ -772,14 +777,14 @@ function paintQueueRow(filePath) {
   }
   if (state === 'restored') {
     if (icon) icon.innerHTML = iconMarkup('restore', true);
-    if (statusEl) statusEl.textContent = '已恢复';
+    if (statusEl) statusEl.textContent = localizeUiText('已恢复');
     renderRestoredActions(row, filePath);
     return;
   }
 
   if (state === 'removed') {
     if (icon) icon.innerHTML = iconMarkup('minus', true);
-    if (statusEl) statusEl.textContent = '已移除';
+    if (statusEl) statusEl.textContent = localizeUiText('已移除');
   }
   // pending 的行此刻该写什么，交给同一张状态表（暂停时是「已暂停」）。
   renderTaskStatus(row, state === 'pending' ? waitingRowStatus() : state);
@@ -813,9 +818,9 @@ function createQueueRow(filePath) {
     '<span class="queue-item-icon">' + iconMarkup('queue', true) + '</span>' +
     '<span class="queue-item-name"></span>' +
     '<span class="queue-item-size"></span>' +
-    '<span class="queue-item-status">等待中</span>' +
+    localizeUiText('<span class="queue-item-status">等待中</span>') +
     '<span class="queue-item-actions"></span>' +
-    '<button class="queue-item-remove" title="移除">' + iconMarkup('close', true) + '</button>' +
+    localizeUiText('<button class="queue-item-remove" title="移除">') + iconMarkup('close', true) + '</button>' +
     '<div class="progress-file-bar"></div>';
   var nameEl = row.querySelector('.queue-item-name');
   if (nameEl) nameEl.textContent = name;
@@ -858,20 +863,20 @@ function renderQueueResultActions(row, result) {
     // 后缀 / 目录模式的原图从没被覆盖过：那一行按下去删的是这次生成的产物，
     // 按钮就不能写着「恢复原图」。历史页同一套判据（historyRowActionDefs）。
     var undo = result.outputMode === 'replace'
-      ? { action: 'restore', title: '恢复原图', icon: iconMarkup('restore', true) }
-      : { action: 'restore', title: '删除这次压缩结果', icon: iconMarkup('trash', true), danger: true };
+      ? { action: 'restore', title: localizeUiText('恢复原图'), icon: iconMarkup('restore', true) }
+      : { action: 'restore', title: localizeUiText('删除这次压缩结果'), icon: iconMarkup('trash', true), danger: true };
     actionDefs = [
-      { action: 'save', title: '另存为', icon: iconMarkup('save', true) },
-      { action: 'compare', title: '对比查看', icon: iconMarkup('compare', true) },
+      { action: 'save', title: localizeUiText('另存为'), icon: iconMarkup('save', true) },
+      { action: 'compare', title: localizeUiText('对比查看'), icon: iconMarkup('compare', true) },
       undo,
-      { action: 'finder', title: '在访达中显示', icon: iconMarkup('finder', true) },
+      { action: 'finder', title: localizeUiText('在访达中显示'), icon: iconMarkup('finder', true) },
     ];
   } else {
     actionDefs = [
-      { action: 'retry', title: '重试', icon: iconMarkup('recompress', true) },
+      { action: 'retry', title: localizeUiText('重试'), icon: iconMarkup('recompress', true) },
     ];
   }
-  actionDefs.push({ action: 'log', title: '复制日志', icon: iconMarkup('copy', true) });
+  actionDefs.push({ action: 'log', title: localizeUiText('复制日志'), icon: iconMarkup('copy', true) });
 
   actionDefs.forEach(function(def) {
     var btn = document.createElement('button');
@@ -895,37 +900,37 @@ function renderQueueResultActions(row, result) {
 function copyCompressLog(result) {
   var opts = result.compressOptions || {};
   var lines = [];
-  lines.push('版本: ' + BUILD_VARIANT);
-  lines.push('=== OctoShrink \u538b\u7f29\u65e5\u5fd7 ===');
+  lines.push(localizeUiText('版本: ') + BUILD_VARIANT);
+  lines.push(localizeUiText('=== OctoShrink \u538b\u7f29\u65e5\u5fd7 ==='));
   lines.push('');
-  lines.push('\u6587\u4ef6: ' + (result.file || ''));
-  lines.push('\u72b6\u6001: ' + (result.success ? '\u6210\u529f' : '\u5931\u8d25'));
+  lines.push(localizeUiText('\u6587\u4ef6: ') + (result.file || ''));
+  lines.push(localizeUiText('\u72b6\u6001: ') + (result.success ? localizeUiText('\u6210\u529f') : localizeUiText('\u5931\u8d25')));
   lines.push('');
-  lines.push('--- \u538b\u7f29\u53c2\u6570 ---');
-  lines.push('quality: ' + (opts.quality !== undefined ? opts.quality : '(\u672a\u8bbe\u7f6e)'));
-  lines.push('smartMode: ' + (opts.smartMode !== undefined ? opts.smartMode : '(\u672a\u8bbe\u7f6e)'));
-  lines.push('outputFormat: ' + (opts.outputFormat || '(\u672a\u8bbe\u7f6e)'));
-  lines.push('backend: ' + (opts.backend || '(\u672a\u8bbe\u7f6e)'));
-  lines.push('effort: ' + (opts.effort !== undefined ? opts.effort : '(\u672a\u8bbe\u7f6e)'));
-  lines.push('convertToWebp: ' + (opts.convertToWebp !== undefined ? opts.convertToWebp : '(\u672a\u8bbe\u7f6e)'));
-  lines.push('outputMode: ' + (opts.outputMode || '(\u672a\u8bbe\u7f6e)'));
-  lines.push('outputSuffix: ' + (opts.outputSuffix || '(\u672a\u8bbe\u7f6e)'));
+  lines.push(localizeUiText('--- \u538b\u7f29\u53c2\u6570 ---'));
+  lines.push('quality: ' + (opts.quality !== undefined ? opts.quality : localizeUiText('(\u672a\u8bbe\u7f6e)')));
+  lines.push('smartMode: ' + (opts.smartMode !== undefined ? opts.smartMode : localizeUiText('(\u672a\u8bbe\u7f6e)')));
+  lines.push('outputFormat: ' + (opts.outputFormat || localizeUiText('(\u672a\u8bbe\u7f6e)')));
+  lines.push('backend: ' + (opts.backend || localizeUiText('(\u672a\u8bbe\u7f6e)')));
+  lines.push('effort: ' + (opts.effort !== undefined ? opts.effort : localizeUiText('(\u672a\u8bbe\u7f6e)')));
+  lines.push('convertToWebp: ' + (opts.convertToWebp !== undefined ? opts.convertToWebp : localizeUiText('(\u672a\u8bbe\u7f6e)')));
+  lines.push('outputMode: ' + (opts.outputMode || localizeUiText('(\u672a\u8bbe\u7f6e)')));
+  lines.push('outputSuffix: ' + (opts.outputSuffix || localizeUiText('(\u672a\u8bbe\u7f6e)')));
   lines.push('');
-  lines.push('--- \u538b\u7f29\u7ed3\u679c ---');
+  lines.push(localizeUiText('--- \u538b\u7f29\u7ed3\u679c ---'));
   if (result.success) {
-    lines.push('\u539f\u59cb\u5927\u5c0f: ' + formatBytes(result.originalSize) + ' (' + result.originalSize + ' bytes)');
-    lines.push('\u538b\u7f29\u540e\u5927\u5c0f: ' + formatBytes(result.compressedSize) + ' (' + result.compressedSize + ' bytes)');
-    lines.push('\u538b\u7f29\u7387: ' + (result.savings >= 0 ? '-' : '+') + Math.abs(result.savings).toFixed(1) + '%');
-    lines.push('\u8f93\u51fa\u683c\u5f0f: ' + (result.type || '(\u672a\u77e5)'));
-    lines.push('\u7b97\u6cd5: ' + (result.algorithm || '(\u672a\u77e5)'));
+    lines.push(localizeUiText('\u539f\u59cb\u5927\u5c0f: ') + formatBytes(result.originalSize) + ' (' + result.originalSize + ' bytes)');
+    lines.push(localizeUiText('\u538b\u7f29\u540e\u5927\u5c0f: ') + formatBytes(result.compressedSize) + ' (' + result.compressedSize + ' bytes)');
+    lines.push(localizeUiText('\u538b\u7f29\u7387: ') + (result.savings >= 0 ? '-' : '+') + Math.abs(result.savings).toFixed(1) + '%');
+    lines.push(localizeUiText('\u8f93\u51fa\u683c\u5f0f: ') + (result.type || localizeUiText('(\u672a\u77e5)')));
+    lines.push(localizeUiText('\u7b97\u6cd5: ') + (result.algorithm || localizeUiText('(\u672a\u77e5)')));
   } else {
-    lines.push('\u538b\u7f29\u5931\u8d25');
+    lines.push(localizeUiText('\u538b\u7f29\u5931\u8d25'));
   }
   lines.push('');
-  lines.push('--- \u9519\u8bef\u4fe1\u606f ---');
-  lines.push(result.error ? result.error : '(\u65e0)');
+  lines.push(localizeUiText('--- \u9519\u8bef\u4fe1\u606f ---'));
+  lines.push(result.error ? result.error : localizeUiText('(\u65e0)'));
   var ok = copyTextToClipboard(lines.join('\n'));
-  showToast(ok ? '\u538b\u7f29\u65e5\u5fd7\u5df2\u590d\u5236\u5230\u526a\u8d34\u677f' : '\u590d\u5236\u5931\u8d25\uff0c\u8bf7\u624b\u52a8\u9009\u4e2d\u65e5\u5fd7\u6587\u672c');
+  showToast(ok ? localizeUiText('\u538b\u7f29\u65e5\u5fd7\u5df2\u590d\u5236\u5230\u526a\u8d34\u677f') : localizeUiText('\u590d\u5236\u5931\u8d25\uff0c\u8bf7\u624b\u52a8\u9009\u4e2d\u65e5\u5fd7\u6587\u672c'));
 }
 
 /// \u590d\u5236\u6587\u672c\u5230\u526a\u8d34\u677f\u3002execCommand \u662f\u6c99\u76d2 WebKit \u91cc\u552f\u4e00\u7a33\u7684\u8def\u5f84\uff1a
@@ -954,7 +959,7 @@ function renderRestoredActions(row, filePath) {
   var btn = document.createElement('button');
   btn.className = 'queue-action-btn';
   btn.type = 'button';
-  btn.title = '重新压缩';
+  btn.title = localizeUiText('重新压缩');
   btn.innerHTML = iconMarkup('recompress', true);
   btn.addEventListener('click', function(e) {
     e.stopPropagation();
@@ -979,7 +984,7 @@ function getCurrentCompressionConfig() {
   }
 
   if (outputMode === 'folder' && !outputDir) {
-    return { error: '请先选择输出目录' };
+    return { error: localizeUiText('请先选择输出目录') };
   }
 
   return {
@@ -1004,7 +1009,7 @@ function getCurrentCompressionConfig() {
 
 function clearAllFiles() {
   if (files.length === 0 && !isCompressing) return;
-  if (!confirm('确定要清空全部 ' + files.length + ' 个文件吗？')) return;
+  if (!confirm(localizeUiText('确定要清空全部 ') + files.length + localizeUiText(' 个文件吗？'))) return;
 
   // 正在跑的那次 invoke 不能提前作废：这里只把队列**标记**成不要了，
   // 真正把它收回来的仍然是发起它的那次调用（它会在 finally 里收尾）。
@@ -1098,7 +1103,7 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
     hasOutputAccess = await ensureSystemOutputAccess();
   } catch (error) {
     console.error('Output access check failed:', error);
-    showToast('无法确认输出目录，请重试');
+    showToast(localizeUiText('无法确认输出目录，请重试'));
   }
   if (!hasOutputAccess) {
     setCompressionState(COMPRESSION_IDLE, true);
@@ -1249,7 +1254,7 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
     }
   } catch (err) {
     console.error('Compression error:', err);
-    showToast((processingMode === 'system' ? '转换出错: ' : '压缩出错: ') + (err.message || err));
+    showToast((processingMode === 'system' ? localizeUiText('转换出错: ') : localizeUiText('压缩出错: ')) + (err.message || err));
   } finally {
     try { unlisten(); } catch (e) {}
     if (executionSession === session) endExecutionSession();
@@ -1309,7 +1314,7 @@ async function compressOneFile(filePath) {
   await startCompressionForPaths(true, [filePath]);
   var after = queueItems.get(filePath);
   if (after && after.state === 'done') {
-    showToast('已重新压缩: ' + basename(filePath));
+    showToast(localizeUiText('已重新压缩: ') + basename(filePath));
   }
 }
 
@@ -1317,12 +1322,12 @@ async function saveResult(filePath) {
   const item = queueItems.get(filePath);
   const result = item && item.result;
   if (!result || !result.outputPath) {
-    showToast('无法保存：找不到压缩文件');
+    showToast(localizeUiText('无法保存：找不到压缩文件'));
     return;
   }
   const savedPath = await invoke('save_file', { sourcePath: result.outputPath });
   if (savedPath) {
-    showToast('已保存到: ' + basename(savedPath));
+    showToast(localizeUiText('已保存到: ') + basename(savedPath));
   }
 }
 
@@ -1335,7 +1340,7 @@ function openInFinder(filePath) {
 }
 
 // 压缩后又用别的 App 改过图：恢复会覆盖那个新版本，必须先问。
-var RESTORE_CONFLICT_TEXT = '这个文件在压缩后又被修改过。\n恢复原图会覆盖当前版本。';
+var RESTORE_CONFLICT_TEXT = localizeUiText('这个文件在压缩后又被修改过。\n恢复原图会覆盖当前版本。');
 
 /// 恢复成功后的统一收尾：主队列、历史页、对比窗口都只走这里。
 /// skipRefresh 供批量恢复使用，避免每个文件重绘一次结果列表。
@@ -1353,7 +1358,7 @@ async function restoreOriginal(filePath, force) {
   try {
     outcome = await invoke('restore_original', { filePath: filePath, force: !!force });
   } catch (error) {
-    showToast('恢复失败: ' + (error.message || error));
+    showToast(localizeUiText('恢复失败: ') + (error.message || error));
     return;
   }
   if (outcome.conflict) {
@@ -1362,7 +1367,7 @@ async function restoreOriginal(filePath, force) {
     return;
   }
   if (!outcome.success) {
-    showToast(outcome.error || '恢复失败');
+    showToast(outcome.error || localizeUiText('恢复失败'));
     return;
   }
   // 「这条记录到底是什么模式」以后端说的为准：缓存里的 result 可能已经不是这一批的了。
@@ -1370,8 +1375,8 @@ async function restoreOriginal(filePath, force) {
   var mode = outcome.outputMode
     || (cachedItem && cachedItem.result ? cachedItem.result.outputMode : null);
   showToast(mode === 'replace'
-    ? '已恢复原图: ' + basename(filePath)
-    : '已删除这次压缩结果: ' + basename(filePath));
+    ? localizeUiText('已恢复原图: ') + basename(filePath)
+    : localizeUiText('已删除这次压缩结果: ') + basename(filePath));
   afterRestore(outcome.filePath || filePath);
 }
 
@@ -1387,12 +1392,12 @@ function markQueueRowRestored(filePath) {
 async function restoreAllOriginals() {
   var stash = queueResults();
   if (stash.length === 0) return;
-  if (!confirm('确定要恢复全部已压缩成功的原图吗？')) return;
+  if (!confirm(localizeUiText('确定要恢复全部已压缩成功的原图吗？'))) return;
   var outcome;
   try {
     outcome = await invoke('restore_all', { results: stash.slice() });
   } catch (error) {
-    showToast('恢复失败: ' + (error.message || error));
+    showToast(localizeUiText('恢复失败: ') + (error.message || error));
     return;
   }
   showToast(outcome.message);
@@ -1409,7 +1414,7 @@ async function exportAll() {
   if (stash.length === 0) return;
   const suffix = getResultOutputSuffix(stash[0]);
   const count = await invoke('export_all', { results: stash, outputSuffix: suffix });
-  showToast('已导出 ' + count + ' 个文件到原目录（' + suffix + ' 后缀）');
+  showToast(localizeUiText('已导出 ') + count + localizeUiText(' 个文件到原目录（') + suffix + localizeUiText(' 后缀）'));
 }
 
 function clearResults() {
@@ -1511,13 +1516,13 @@ function applyCompressionStateEvent(payload) {
 
 function pauseButtonText(paused) {
   return paused
-    ? '<svg class="symbol-icon symbol-icon-small"><use href="#icon-play"/></svg> 继续'
-    : '<svg class="symbol-icon symbol-icon-small"><use href="#icon-pause"/></svg> 暂停';
+    ? localizeUiText('<svg class="symbol-icon symbol-icon-small"><use href="#icon-play"/></svg> 继续')
+    : localizeUiText('<svg class="symbol-icon symbol-icon-small"><use href="#icon-pause"/></svg> 暂停');
 }
 
 function stopButtonText(stopping) {
   return '<svg class="symbol-icon symbol-icon-small"><use href="#icon-stop"/></svg> '
-    + (stopping ? '正在停止…' : '停止');
+    + (stopping ? localizeUiText('正在停止…') : localizeUiText('停止'));
 }
 
 /// 队列行的图标 + 文案，一处说了算 —— 不许再散落 `innerHTML = '<span class="spinner">'`。
@@ -1530,18 +1535,18 @@ function taskStatusMarkup(status) {
       // 会话已经暂停 / 正在停止，但它真的还在跑：照实写「收尾中…」并留着 spinner。
       // 把一张确实在压缩的图假装成停下来，比让它多转一会儿圈更糟。
       if (compressionState === COMPRESSION_PAUSED || compressionState === COMPRESSION_STOPPING) {
-        return { icon: '<span class="progress-file-spinner"></span>', text: '收尾中…' };
+        return { icon: '<span class="progress-file-spinner"></span>', text: localizeUiText('收尾中…') };
       }
       return { icon: '<span class="progress-file-spinner"></span>', text: processingActionText('progress') };
     case 'paused':
       // 暂停不用"停住的转圈"：一个静止的圆环看着像卡死，暂停图标才是它的意思。
-      return { icon: iconMarkup('pause', true), text: '已暂停' };
+      return { icon: iconMarkup('pause', true), text: localizeUiText('已暂停') };
     case 'removed':
-      return { icon: iconMarkup('minus', true), text: '已移除' };
+      return { icon: iconMarkup('minus', true), text: localizeUiText('已移除') };
     case 'restored':
-      return { icon: iconMarkup('restore', true), text: '已恢复' };
+      return { icon: iconMarkup('restore', true), text: localizeUiText('已恢复') };
     default:
-      return { icon: iconMarkup('queue', true), text: '等待中' };
+      return { icon: iconMarkup('queue', true), text: localizeUiText('等待中') };
   }
 }
 
@@ -1579,10 +1584,10 @@ function repaintWaitingRows() {
 /// "动画还在转"本身就是用户判断"到底暂停了没有"的依据。
 function progressButtonMarkup() {
   if (compressionState === COMPRESSION_PAUSED) {
-    return iconMarkup('pause', true) + ' 暂停中…';
+    return iconMarkup('pause', true) + localizeUiText(' 暂停中…');
   }
   if (compressionState === COMPRESSION_STOPPING) {
-    return '<span class="progress-file-spinner"></span> 正在停止…';
+    return localizeUiText('<span class="progress-file-spinner"></span> 正在停止…');
   }
   return '<span class="progress-file-spinner"></span> ' + processingActionText('progress');
 }
@@ -1593,7 +1598,7 @@ function renderPauseControls() {
   var text = document.getElementById('pauseBtnText');
   if (text) text.innerHTML = pauseButtonText(compressionPaused);
   if (btn) {
-    btn.title = compressionPaused ? '继续压缩剩余文件' : '暂停：不再启动新文件';
+    btn.title = compressionPaused ? localizeUiText('继续压缩剩余文件') : localizeUiText('暂停：不再启动新文件');
     btn.disabled = stopping;
   }
   var stopBtn = document.getElementById('stopCompressBtn');
@@ -1601,7 +1606,7 @@ function renderPauseControls() {
   if (stopText) stopText.innerHTML = stopButtonText(stopping);
   if (stopBtn) {
     stopBtn.disabled = !isCompressing || stopping;
-    stopBtn.title = '停止：正在处理的文件会先完成，其余文件保留在队列中';
+    stopBtn.title = localizeUiText('停止：正在处理的文件会先完成，其余文件保留在队列中');
   }
   repaintWaitingRows();
   updateQueueSummary();
@@ -1639,7 +1644,7 @@ function renderStartButton() {
     return;
   }
   if (p.total > 0 && p.failed > 0) {
-    btnText.innerHTML = iconMarkup('warning', true) + ' 处理完成 · ' + p.failed + ' 个失败';
+    btnText.innerHTML = iconMarkup('warning', true) + localizeUiText(' 处理完成 · ') + p.failed + localizeUiText(' 个失败');
     return;
   }
   if (p.total > 0) {
@@ -1668,7 +1673,7 @@ async function toggleCompressionPause() {
   } catch (error) {
     console.error('Pause toggle failed:', error);
     setCompressionState(previous);
-    showToast(next === COMPRESSION_PAUSED ? '暂停失败，请重试' : '继续失败，请重试');
+    showToast(next === COMPRESSION_PAUSED ? localizeUiText('暂停失败，请重试') : localizeUiText('继续失败，请重试'));
   }
 }
 
@@ -1682,14 +1687,14 @@ async function stopCompression() {
   var previous = compressionState;
   pendingAutoCompress = false;
   setCompressionState(COMPRESSION_STOPPING);
-  showToast('正在停止：正在处理的文件会先完成，其余文件保留在队列中');
+  showToast(localizeUiText('正在停止：正在处理的文件会先完成，其余文件保留在队列中'));
   try {
     // 闸门在后端焊死，不需要把路径一条条传过去。
     await invoke('stop_compression');
   } catch (error) {
     console.error('Stop failed:', error);
     setCompressionState(previous);
-    showToast('停止失败，请重试');
+    showToast(localizeUiText('停止失败，请重试'));
   }
 }
 
@@ -1707,8 +1712,8 @@ function historyTime(millis) {
   var today = new Date();
   var yesterday = new Date(today.getTime() - 86400000);
   var clock = pad2(date.getHours()) + ':' + pad2(date.getMinutes());
-  if (date.toDateString() === today.toDateString()) return '今天 ' + clock;
-  if (date.toDateString() === yesterday.toDateString()) return '昨天 ' + clock;
+  if (date.toDateString() === today.toDateString()) return localizeUiText('今天 ') + clock;
+  if (date.toDateString() === yesterday.toDateString()) return localizeUiText('昨天 ') + clock;
   return date.getFullYear() + '-' + pad2(date.getMonth() + 1) + '-' + pad2(date.getDate()) + ' ' + clock;
 }
 
@@ -1726,15 +1731,15 @@ function canRestoreHistory(entry) {
 
 function historyStatusText(entry) {
   if (entry.status === 'restored') {
-    return '已恢复' + (entry.restoredAt ? ' · ' + historyTime(entry.restoredAt) : '');
+    return localizeUiText('已恢复') + (entry.restoredAt ? ' · ' + historyTime(entry.restoredAt) : '');
   }
   if (entry.status === 'recoveryAvailable') {
-    return entry.backupExists ? '检测到可恢复的原图备份' : '原图备份已清理';
+    return entry.backupExists ? localizeUiText('检测到可恢复的原图备份') : localizeUiText('原图备份已清理');
   }
-  if (entry.outputMode !== 'replace') return '原图未覆盖';
-  if (!entry.sourceExists) return '原文件位置不存在';
-  if (!entry.backupExists) return '原图备份已清理';
-  return '已压缩';
+  if (entry.outputMode !== 'replace') return localizeUiText('原图未覆盖');
+  if (!entry.sourceExists) return localizeUiText('原文件位置不存在');
+  if (!entry.backupExists) return localizeUiText('原图备份已清理');
+  return localizeUiText('已压缩');
 }
 
 /// 历史行的按钮，与队列「压缩完成」那一行同一套动作 —— 判据必须和 Swift 的
@@ -1747,19 +1752,19 @@ function historyRowActionDefs(entry) {
   var originalAvailable = isReplace ? !!entry.backupExists : !!entry.sourceExists;
   var defs = [];
   if (entry.outputExists) {
-    defs.push({ action: 'save', title: '另存为', icon: 'save' });
+    defs.push({ action: 'save', title: localizeUiText('另存为'), icon: 'save' });
   }
   // 两边都真实存在才比得出差别 —— 备份没了还挂一个「对比」，比的是那张压缩图和它自己。
   if (entry.outputExists && originalAvailable) {
-    defs.push({ action: 'compare', title: '对比查看', icon: 'compare' });
+    defs.push({ action: 'compare', title: localizeUiText('对比查看'), icon: 'compare' });
   }
   if (canRestoreHistory(entry)) {
-    defs.push({ action: 'restore', title: '恢复原图', icon: 'restore' });
+    defs.push({ action: 'restore', title: localizeUiText('恢复原图'), icon: 'restore' });
   } else if (entry.status === 'compressed' && !isReplace && entry.outputExists) {
-    defs.push({ action: 'deleteOutput', title: '删除这次压缩结果', icon: 'trash' });
+    defs.push({ action: 'deleteOutput', title: localizeUiText('删除这次压缩结果'), icon: 'trash' });
   }
-  defs.push({ action: 'finder', title: '在访达中显示', icon: 'finder' });
-  defs.push({ action: 'log', title: '复制日志', icon: 'copy' });
+  defs.push({ action: 'finder', title: localizeUiText('在访达中显示'), icon: 'finder' });
+  defs.push({ action: 'log', title: localizeUiText('复制日志'), icon: 'copy' });
   return defs;
 }
 
@@ -1786,32 +1791,32 @@ function historyCompareResult(entry) {
 
 function openCompareFromHistory(entry) {
   if (!entry.outputExists) {
-    showToast('压缩结果已不存在');
+    showToast(localizeUiText('压缩结果已不存在'));
     refreshHistory();
     return;
   }
   invoke('open_compare_window', {
     payload: { results: [historyCompareResult(entry)], index: 0 },
   }).catch(function(err) {
-    showToast('打开对比窗口失败: ' + (err.message || err));
+    showToast(localizeUiText('打开对比窗口失败: ') + (err.message || err));
   });
 }
 
 async function saveHistoryOutput(entry) {
   if (!entry.outputExists || !entry.outputPath) {
-    showToast('压缩结果已不存在');
+    showToast(localizeUiText('压缩结果已不存在'));
     refreshHistory();
     return;
   }
   const savedPath = await invoke('save_file', { sourcePath: entry.outputPath });
-  if (savedPath) showToast('已保存到: ' + basename(savedPath));
+  if (savedPath) showToast(localizeUiText('已保存到: ') + basename(savedPath));
 }
 
 /// 后缀 / 目录模式的对等「反悔」= 删掉这次生成的压缩结果。
 /// 删的是用户目录里的真实文件，所以必须二次确认；原图从头到尾没动过。
 async function deleteHistoryOutput(entry) {
-  if (!confirm('删除这次压缩结果？\n将删除 ' + entry.outputPath
-    + '，并移除这条历史记录。原图未被覆盖，不受影响。')) return;
+  if (!confirm(localizeUiText('删除这次压缩结果？\n将删除 ') + entry.outputPath
+    + localizeUiText('，并移除这条历史记录。原图未被覆盖，不受影响。'))) return;
   // 后缀 / 目录模式没有"原图被改过"这回事，force 在这儿没有意义，照默认走同一个服务。
   await restoreFromHistory(entry);
 }
@@ -1819,30 +1824,30 @@ async function deleteHistoryOutput(entry) {
 /// 历史行的复制日志：记录里没有本批次的压缩参数快照，只报历史上记下来的那些事实。
 function copyHistoryLog(entry) {
   var lines = [];
-  lines.push('版本: ' + BUILD_VARIANT);
-  lines.push('=== OctoShrink 压缩历史 ===');
+  lines.push(localizeUiText('版本: ') + BUILD_VARIANT);
+  lines.push(localizeUiText('=== OctoShrink 压缩历史 ==='));
   lines.push('');
-  lines.push('文件: ' + entry.sourcePath);
-  lines.push('时间: ' + historyTime(entry.createdAt));
-  lines.push('状态: ' + historyStatusText(entry));
+  lines.push(localizeUiText('文件: ') + entry.sourcePath);
+  lines.push(localizeUiText('时间: ') + historyTime(entry.createdAt));
+  lines.push(localizeUiText('状态: ') + historyStatusText(entry));
   lines.push('');
-  lines.push('--- 压缩结果 ---');
-  lines.push('输出: ' + (entry.outputPath || entry.sourcePath));
-  lines.push('输出方式: ' + entry.outputMode);
+  lines.push(localizeUiText('--- 压缩结果 ---'));
+  lines.push(localizeUiText('输出: ') + (entry.outputPath || entry.sourcePath));
+  lines.push(localizeUiText('输出方式: ') + entry.outputMode);
   if (entry.status === 'recoveryAvailable') {
-    lines.push('明细: 已丢失（这条记录是按原图备份重建出来的）');
+    lines.push(localizeUiText('明细: 已丢失（这条记录是按原图备份重建出来的）'));
   } else {
-    lines.push('原始大小: ' + formatBytes(entry.originalSize) + ' (' + entry.originalSize + ' bytes)');
-    lines.push('压缩后大小: ' + formatBytes(entry.compressedSize) + ' (' + entry.compressedSize + ' bytes)');
-    lines.push('压缩率: ' + (entry.savings >= 0 ? '-' : '+') + Math.abs(entry.savings).toFixed(1) + '%');
-    lines.push('输出格式: ' + (entry.outType || '(未知)'));
-    lines.push('算法: ' + (entry.algorithm || '(未知)'));
+    lines.push(localizeUiText('原始大小: ') + formatBytes(entry.originalSize) + ' (' + entry.originalSize + ' bytes)');
+    lines.push(localizeUiText('压缩后大小: ') + formatBytes(entry.compressedSize) + ' (' + entry.compressedSize + ' bytes)');
+    lines.push(localizeUiText('压缩率: ') + (entry.savings >= 0 ? '-' : '+') + Math.abs(entry.savings).toFixed(1) + '%');
+    lines.push(localizeUiText('输出格式: ') + (entry.outType || localizeUiText('(未知)')));
+    lines.push(localizeUiText('算法: ') + (entry.algorithm || localizeUiText('(未知)')));
   }
   lines.push('');
-  lines.push('--- 原图备份 ---');
-  lines.push(entry.backupPath || '(无)');
+  lines.push(localizeUiText('--- 原图备份 ---'));
+  lines.push(entry.backupPath || localizeUiText('(无)'));
   copyTextToClipboard(lines.join('\n'));
-  showToast('压缩日志已复制到剪贴板');
+  showToast(localizeUiText('压缩日志已复制到剪贴板'));
 }
 
 function historyRow(entry) {
@@ -1875,7 +1880,7 @@ function historyRow(entry) {
   sizes.textContent = formatBytes(entry.originalSize) + ' → ' + formatBytes(entry.compressedSize);
   var saving = document.createElement('span');
   // 重建条目没有这次压缩的明细，报一个算出来的 0.0% 节省率是假数字。
-  saving.textContent = isRecovery ? '明细已丢失' : '节省 ' + Math.abs(entry.savings).toFixed(1) + '%';
+  saving.textContent = isRecovery ? localizeUiText('明细已丢失') : localizeUiText('节省 ') + Math.abs(entry.savings).toFixed(1) + '%';
   metrics.appendChild(sizes);
   metrics.appendChild(saving);
 
@@ -1884,7 +1889,7 @@ function historyRow(entry) {
   var created = document.createElement('span');
   created.textContent = historyTime(entry.createdAt);
   var algo = document.createElement('span');
-  algo.textContent = isRecovery ? '按备份重建' : (entry.algorithm || entry.outType || '');
+  algo.textContent = isRecovery ? localizeUiText('按备份重建') : (entry.algorithm || entry.outType || '');
   when.appendChild(created);
   when.appendChild(algo);
 
@@ -1929,12 +1934,12 @@ function renderHistory() {
   var empty = document.getElementById('historyEmpty');
   if (empty) empty.hidden = historyEntries.length > 0;
   var meta = document.getElementById('historyMeta');
-  if (meta) meta.textContent = historyEntries.length + ' 条';
+  if (meta) meta.textContent = historyEntries.length + localizeUiText(' 条');
   // 后端在批次/事务进行中会拒绝清空，这里提前收成不可点，别让用户撞上报错。
   var clearBtn = document.getElementById('historyClearBtn');
   if (clearBtn) {
     clearBtn.disabled = isCompressing;
-    clearBtn.title = isCompressing ? '压缩进行中，这一批结束后才能清空历史' : '清空历史记录';
+    clearBtn.title = isCompressing ? localizeUiText('压缩进行中，这一批结束后才能清空历史') : localizeUiText('清空历史记录');
   }
 }
 
@@ -1944,7 +1949,7 @@ async function refreshHistory() {
   } catch (error) {
     console.error('History load failed:', error);
     historyEntries = [];
-    showToast('读取历史记录失败');
+    showToast(localizeUiText('读取历史记录失败'));
   }
   renderHistory();
 }
@@ -1958,7 +1963,7 @@ async function restoreFromHistory(entry, force) {
   try {
     outcome = await invoke('restore_history_entry', { historyId: entry.id, force: !!force });
   } catch (error) {
-    showToast('恢复失败: ' + (error.message || error));
+    showToast(localizeUiText('恢复失败: ') + (error.message || error));
     return;
   }
   if (outcome.conflict) {
@@ -1967,14 +1972,14 @@ async function restoreFromHistory(entry, force) {
     return;
   }
   if (!outcome.success) {
-    showToast(outcome.error || '恢复失败');
+    showToast(outcome.error || localizeUiText('恢复失败'));
     return;
   }
   // 非 replace 模式的原图从没被盖过，后端做的是"删掉这次的压缩产物" ——
   // 报「已恢复原图」等于把一件没发生过的事说给用户听。
   showToast(entry.outputMode === 'replace'
-    ? '已恢复原图: ' + basename(entry.fileName)
-    : '已删除这次压缩结果: ' + basename(entry.fileName));
+    ? localizeUiText('已恢复原图: ') + basename(entry.fileName)
+    : localizeUiText('已删除这次压缩结果: ') + basename(entry.fileName));
   afterRestore(outcome.filePath || entry.sourcePath);
 }
 
@@ -1982,22 +1987,22 @@ async function clearHistory() {
   if (historyEntries.length === 0) return;
   // 按钮通常已被收成不可点；这里兜住"渲染时机没赶上"的那一次点击。
   if (isCompressing) {
-    showToast('压缩进行中，这一批结束后才能清空历史');
+    showToast(localizeUiText('压缩进行中，这一批结束后才能清空历史'));
     return;
   }
   // 清空就是手动到期：备份立刻删掉、不必等保留期。要数清楚这一次带走几份，
   // 也要说清楚"不会删除你的任何图片文件"——那是事实，不是安抚。
   var pendingBackups = historyEntries.filter(function(e) { return e.backupExists; }).length;
-  var question = '确定要清空 ' + historyEntries.length + ' 条历史记录吗？\n';
+  var question = localizeUiText('确定要清空 ') + historyEntries.length + localizeUiText(' 条历史记录吗？\n');
   question += pendingBackups > 0
-    ? '同时立即删除 OctoShrink 保存的 ' + pendingBackups + ' 份原图备份，不必等保留期到期。不会删除你的任何图片文件。'
-    : 'OctoShrink 目前没有保存原图备份，这次只清记录。不会删除你的任何图片文件。';
+    ? localizeUiText('同时立即删除 OctoShrink 保存的 ') + pendingBackups + localizeUiText(' 份原图备份，不必等保留期到期。不会删除你的任何图片文件。')
+    : localizeUiText('OctoShrink 目前没有保存原图备份，这次只清记录。不会删除你的任何图片文件。');
   if (!confirm(question)) return;
   try {
     var removed = await invoke('clear_history');
-    showToast('已清空 ' + removed + ' 条历史记录');
+    showToast(localizeUiText('已清空 ') + removed + localizeUiText(' 条历史记录'));
   } catch (error) {
-    showToast('清空失败: ' + (error.message || error));
+    showToast(localizeUiText('清空失败: ') + (error.message || error));
     return;
   }
   await refreshHistory();
@@ -2022,10 +2027,10 @@ async function saveRetentionDays(days) {
     var settings = await invoke('set_original_retention_days', { days: days });
     retentionDays = settings.originalRetentionDays;
     showToast(retentionDays === 0
-      ? '原图备份改为不保留，关闭应用时清理记录和备份'
-      : '原图备份保留 ' + retentionDays + ' 天，关闭应用时清理过期项');
+      ? localizeUiText('原图备份改为不保留，关闭应用时清理记录和备份')
+      : localizeUiText('原图备份保留 ') + retentionDays + localizeUiText(' 天，关闭应用时清理过期项'));
   } catch (error) {
-    showToast('设置失败: ' + (error.message || error));
+    showToast(localizeUiText('设置失败: ') + (error.message || error));
   }
   // 失败也要回到 retentionDays 那份真值，不能把选错的档位停在半路上。
   applyRetentionSetting();
@@ -2040,8 +2045,8 @@ function applyRetentionSetting() {
   var copy = document.getElementById('retentionCopy');
   if (copy) {
     copy.textContent = retentionDays === 0
-      ? '本次运行的压缩记录和原图备份都会在关闭应用时清理；期间可以随时恢复原图。'
-      : '过期的历史记录和原图备份将在关闭应用时自动清理。';
+      ? localizeUiText('本次运行的压缩记录和原图备份都会在关闭应用时清理；期间可以随时恢复原图。')
+      : localizeUiText('过期的历史记录和原图备份将在关闭应用时自动清理。');
   }
 }
 
@@ -2063,7 +2068,7 @@ function cpuArchitectureLabel(architecture) {
 }
 
 function cpuDeviceText(status) {
-  if (!status) return '检测中…';
+  if (!status) return localizeUiText('检测中…');
   return [status.modelName, cpuArchitectureLabel(status.architecture)]
     .filter(function(part) { return !!part; }).join(' · ');
 }
@@ -2073,14 +2078,14 @@ function cpuCoreText(status) {
   if (!status) return '';
   var ceiling = Math.max(1, status.availableParallelism || 1);
   if (status.appleSilicon && status.performanceCpus && status.efficiencyCpus) {
-    return (status.physicalCpus || ceiling) + ' 核 CPU（'
-      + status.performanceCpus + ' 性能核 + ' + status.efficiencyCpus + ' 能效核）';
+    return (status.physicalCpus || ceiling) + localizeUiText(' 核 CPU（')
+      + status.performanceCpus + localizeUiText(' 性能核 + ') + status.efficiencyCpus + localizeUiText(' 能效核）');
   }
   if (status.physicalCpus && status.logicalCpus > status.physicalCpus) {
-    return status.physicalCpus + ' 个物理核心 · ' + status.logicalCpus + ' 个逻辑处理器';
+    return status.physicalCpus + localizeUiText(' 个物理核心 · ') + status.logicalCpus + localizeUiText(' 个逻辑处理器');
   }
-  if (status.logicalCpus) return status.logicalCpus + ' 个逻辑处理器';
-  return '最多 ' + ceiling + ' 份并行计算';
+  if (status.logicalCpus) return status.logicalCpus + localizeUiText(' 个逻辑处理器');
+  return localizeUiText('最多 ') + ceiling + localizeUiText(' 份并行计算');
 }
 
 function cpuSliderLabel() {
@@ -2088,8 +2093,8 @@ function cpuSliderLabel() {
   if (!cpuStatus) return '';
   var configured = cpuStatus.configuredLimit;
   var limit = Math.min(Math.max(1, cpuStatus.effectiveLimit || 1), ceiling);
-  if (configured === null || configured === undefined) return '自动（' + limit + '）';
-  return limit + ' / ' + ceiling + (limit >= ceiling ? '（全部）' : '');
+  if (configured === null || configured === undefined) return localizeUiText('自动（') + limit + '）';
+  return limit + ' / ' + ceiling + (limit >= ceiling ? localizeUiText('（全部）') : '');
 }
 
 function renderCpuSetting(status) {
@@ -2134,10 +2139,10 @@ async function saveCpuThreadLimit(limit) {
     renderCpuSetting(await invoke('set_cpu_thread_limit', { limit: limit }));
     updateQueueSummary();
     showToast(limit == null
-      ? 'CPU 上限改为自动（' + cpuStatus.effectiveLimit + '）'
-      : 'CPU 上限改为 ' + cpuStatus.effectiveLimit + ' / ' + cpuCeiling());
+      ? localizeUiText('CPU 上限改为自动（') + cpuStatus.effectiveLimit + '）'
+      : localizeUiText('CPU 上限改为 ') + cpuStatus.effectiveLimit + ' / ' + cpuCeiling());
   } catch (error) {
-    showToast('设置失败: ' + (error.message || error));
+    showToast(localizeUiText('设置失败: ') + (error.message || error));
     // 失败就回到后端那份真值，不能把预览值留在滑杆上骗用户。
     await loadCpuSetting();
   }
@@ -2176,14 +2181,14 @@ function comparableResults() {
 function openCompare(result) {
   const okResults = comparableResults();
   if (!okResults.length) {
-    showToast('没有可对比的结果');
+    showToast(localizeUiText('没有可对比的结果'));
     return;
   }
   let index = okResults.findIndex(function(r) { return r.file === result.file; });
   if (index < 0) index = 0;
   invoke('open_compare_window', { payload: { results: okResults, index: index } })
     .catch(function(err) {
-      showToast('打开对比窗口失败: ' + (err.message || err));
+      showToast(localizeUiText('打开对比窗口失败: ') + (err.message || err));
     });
 }
 
@@ -2219,7 +2224,7 @@ listen('compare-restored', function(event) {
   const filePath = event.payload && event.payload.filePath;
   if (!filePath) return;
   afterRestore(filePath);
-  showToast('已恢复原图: ' + basename(filePath));
+  showToast(localizeUiText('已恢复原图: ') + basename(filePath));
 });
 
 document.addEventListener('keydown', (e) => {
@@ -2288,24 +2293,24 @@ async function manualCheckUpdate() {
   if (!btn || btn.dataset.downloading === '1') return;
   var statusEl = getUpdateStatusEl();
   btn.disabled = true;
-  btn.textContent = '检查中';
+  btn.textContent = localizeUiText('检查中');
   if (statusEl) { statusEl.textContent = ''; statusEl.classList.remove('has-update'); }
   try {
     const update = await invoke('check_for_update');
     if (update) {
-      btn.textContent = '立即更新';
+      btn.textContent = localizeUiText('立即更新');
       btn.disabled = false;
-      if (statusEl) { statusEl.textContent = 'v' + update.version + ' 可用'; statusEl.classList.add('has-update'); }
+      if (statusEl) { statusEl.textContent = 'v' + update.version + localizeUiText(' 可用'); statusEl.classList.add('has-update'); }
       btn.onclick = function() { startUpdateDownload(btn, statusEl, update.version); };
     } else {
-      btn.textContent = '检查更新';
+      btn.textContent = localizeUiText('检查更新');
       btn.disabled = false;
-      if (statusEl) statusEl.textContent = '已是最新版本';
+      if (statusEl) statusEl.textContent = localizeUiText('已是最新版本');
     }
   } catch (error) {
-    btn.textContent = '检查更新';
+    btn.textContent = localizeUiText('检查更新');
     btn.disabled = false;
-    if (statusEl) statusEl.textContent = '检查失败';
+    if (statusEl) statusEl.textContent = localizeUiText('检查失败');
   }
 }
 
@@ -2319,7 +2324,7 @@ function startUpdateDownload(btn, statusEl, version) {
   if (row) row.style.display = '';
   if (fill) fill.style.width = '0%';
   if (tbBar) tbBar.style.width = '0%';
-  if (text) text.textContent = '下载中 0%';
+  if (text) text.textContent = localizeUiText('下载中 0%');
   if (statusEl) statusEl.textContent = '';
   btn.disabled = true;
 
@@ -2328,12 +2333,12 @@ function startUpdateDownload(btn, statusEl, version) {
     var pct = event.payload || 0;
     if (tbBar) tbBar.style.width = pct + '%';
     if (fill) fill.style.width = pct + '%';
-    if (text) text.textContent = '下载中 ' + pct + '%';
+    if (text) text.textContent = localizeUiText('下载中 ') + pct + '%';
   }).then(function(fn) { unlistenFn = fn; });
 
   invoke('install_update')
     .then(function() {
-      if (text) text.textContent = '安装中…';
+      if (text) text.textContent = localizeUiText('安装中…');
       if (fill) fill.style.width = '100%';
       if (tbBar) tbBar.style.width = '100%';
     })
@@ -2343,9 +2348,9 @@ function startUpdateDownload(btn, statusEl, version) {
       btn.dataset.downloading = '';
       endUpdateDownload();
       btn.disabled = false;
-      btn.textContent = '立即更新';
+      btn.textContent = localizeUiText('立即更新');
       var cancelled = String(err).indexOf('取消') >= 0;
-      if (statusEl) statusEl.textContent = cancelled ? 'v' + version + ' 可用' : '更新失败';
+      if (statusEl) statusEl.textContent = cancelled ? 'v' + version + localizeUiText(' 可用') : localizeUiText('更新失败');
     });
 }
 
@@ -2368,8 +2373,8 @@ function cancelUpdateDownload() {
   if (btn && btn.dataset.downloading === '1') {
     btn.dataset.downloading = '';
     btn.disabled = false;
-    btn.textContent = '立即更新';
-    if (statusEl) statusEl.textContent = '已取消';
+    btn.textContent = localizeUiText('立即更新');
+    if (statusEl) statusEl.textContent = localizeUiText('已取消');
   }
 }
 
@@ -2382,12 +2387,12 @@ async function checkDirectUpdate() {
     var btn = document.getElementById('updateCheckBtn');
     if (btn) {
       var statusEl = getUpdateStatusEl();
-      btn.textContent = '立即更新';
-      if (statusEl) { statusEl.textContent = 'v' + update.version + ' 可用'; statusEl.classList.add('has-update'); }
+      btn.textContent = localizeUiText('立即更新');
+      if (statusEl) { statusEl.textContent = 'v' + update.version + localizeUiText(' 可用'); statusEl.classList.add('has-update'); }
       btn.onclick = function() { startUpdateDownload(btn, statusEl, update.version); };
     }
   } catch (error) {
-    console.warn('在线更新检查失败:', error);
+    console.warn(localizeUiText('在线更新检查失败:'), error);
   }
 }
 
@@ -2398,20 +2403,20 @@ function updateSettingsSummary() {
   var sm = document.getElementById('smartMode');
   var om = document.querySelector('input[name="outputMode"]:checked');
   var parts = [];
-  if (ac && ac.checked) parts.push('自动');
+  if (ac && ac.checked) parts.push(localizeUiText('自动'));
   if (processingMode === 'system') {
     var systemFormatSelect = document.getElementById('systemOutputFormat');
     var systemSizeSelect = document.getElementById('systemImageSize');
-    parts.push('系统');
+    parts.push(localizeUiText('系统'));
     if (systemFormatSelect) parts.push(systemFormatSelect.options[systemFormatSelect.selectedIndex].text);
     if (systemSizeSelect) parts.push(systemSizeSelect.options[systemSizeSelect.selectedIndex].text.split('（')[0]);
   } else {
     if (q) parts.push('Q' + q.value);
-    if (of) parts.push(of.value === 'original' ? '\u539f\u683c\u5f0f' : of.value.toUpperCase());
-    if (sm) parts.push(sm.checked ? '\u667a\u80fd' : '\u6807\u51c6');
+    if (of) parts.push(of.value === 'original' ? localizeUiText('\u539f\u683c\u5f0f') : of.value.toUpperCase());
+    if (sm) parts.push(sm.checked ? localizeUiText('\u667a\u80fd') : localizeUiText('\u6807\u51c6'));
   }
   if (om) {
-    parts.push(om.value === 'replace' ? '\u8986\u76d6' : (om.value === 'suffix' ? '\u540e\u7f00' : '\u76ee\u5f55'));
+    parts.push(om.value === 'replace' ? localizeUiText('\u8986\u76d6') : (om.value === 'suffix' ? localizeUiText('\u540e\u7f00') : localizeUiText('\u76ee\u5f55')));
     if (om.value === 'suffix') parts.push(getOutputSuffix());
   }
   var el = document.getElementById('settingsSummary');
