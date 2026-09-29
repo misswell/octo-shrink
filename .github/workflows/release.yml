@@ -407,7 +407,7 @@ jobs:
           DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${ARCHIVE}"
           jq -n \
             --arg version "$VERSION" \
-            --arg notes "OctoShrink ${VERSION}: 修复 Swift 原生版未默认启用 Smart Mode 导致 PNG 压缩结果偏大的问题；统一压缩设置默认值，并增加 Direct / App Store / Swift 三线压缩参数回归检查。" \
+            --arg notes "OctoShrink ${VERSION}: README now defaults to English and includes a complete Simplified Chinese edition; the app UI supports both languages and follows the system locale by default." \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg signature "$SIGNATURE" \
             --arg url "$DOWNLOAD_URL" \
@@ -426,7 +426,7 @@ jobs:
             免费开源的本机图片压缩工具，图片不会上传到服务器。
 
             ### 本版
-            新增简体中文和 English 全界面支持，默认跟随系统语言；也可在设置中手动选择自动、简体中文或 English。主窗口与图片对比窗口共用语言设置。
+            README 现以 English 为默认语言，并附完整简体中文版。应用界面支持简体中文和 English，默认跟随系统语言，也可在设置中手动选择语言；主窗口与图片对比窗口共用语言设置。
 
             ### 下载
 
