@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-Hans">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>章小压 · OctoShrink</title>
+  <title>OctoShrink</title>
   <script>
     // 在外链 CSS / JS 加载前同步确定首帧主题，避免 WebView 默认白色画布闪烁。
     (() => {
@@ -21,6 +21,7 @@
       document.documentElement.style.backgroundColor = resolved === 'dark' ? '#1c1c1e' : '#ececed';
     })();
   </script>
+  <script src="i18n.js"></script>
   <style>
     html, body { background: #ececed; }
     html[data-theme="dark"], html[data-theme="dark"] body { background: #1c1c1e; }
@@ -70,7 +71,7 @@
  <div class="titlebar">
    <div class="titlebar-traffic-spacer"></div>
    <div class="titlebar-drag" data-tauri-drag-region>
-     <img src="octo-icon-light.png" data-light-src="octo-icon-light.png" data-dark-src="octo-icon-dark.png" class="titlebar-icon-img" alt="章小压">
+     <img src="octo-icon-light.png" data-light-src="octo-icon-light.png" data-dark-src="octo-icon-dark.png" class="titlebar-icon-img" alt="OctoShrink">
      <span class="titlebar-text">OctoShrink</span>
    </div>
     <div class="titlebar-progress" id="titlebarProgress" style="width:0%"></div>
@@ -104,16 +105,16 @@
         <div class="dropzone-icon">
           <span class="dropzone-icon-disc"><svg class="symbol-icon symbol-icon-hero"><use href="#icon-add-images"/></svg></span>
         </div>
-        <h2>拖拽图片或文件夹到此处</h2>
-        <p>支持 PNG、JPG、GIF、WebP、BMP 格式 · 自动批量压缩</p>
+        <h2 data-i18n-zh="拖拽图片或文件夹到此处">Drop images or folders here</h2>
+        <p data-i18n-zh="支持 PNG、JPG、GIF、WebP、BMP 格式 · 自动批量压缩">Supports PNG, JPG, GIF, WebP, and BMP · Automatic batch compression</p>
         <div class="dropzone-buttons">
           <button class="btn btn-primary" onclick="event.stopPropagation(); selectFiles()">
             <svg class="symbol-icon"><use href="#icon-add-images"/></svg>
-            选择文件
+            <span data-i18n-zh="选择文件">Choose Files</span>
           </button>
           <button class="btn btn-secondary" onclick="event.stopPropagation(); selectFolder()">
             <svg class="symbol-icon"><use href="#icon-folder-add"/></svg>
-            选择文件夹
+            <span data-i18n-zh="选择文件夹">Choose Folder</span>
           </button>
         </div>
       </div>
