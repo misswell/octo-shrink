@@ -285,7 +285,8 @@ jobs:
             libssl-dev \
             libgtk-3-dev \
             libayatana-appindicator3-dev \
-            file
+            file \
+            squashfs-tools
 
       - name: Download CLI tools
         run: |
@@ -335,6 +336,24 @@ jobs:
           cargo install tauri-cli --version "^2.0" --locked
           cargo tauri build
 
+      - name: Repair AppImage launcher permissions
+        run: |
+          set -euo pipefail
+          APPIMAGE_PATH="$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
+          test -n "$APPIMAGE_PATH"
+          python3 scripts/repair_appimage_permissions.py "$APPIMAGE_PATH"
+
+          EXTRACT_DIR="$(mktemp -d)"
+          trap 'rm -rf "$EXTRACT_DIR"' EXIT
+          (
+            cd "$EXTRACT_DIR"
+            APPIMAGE_EXTRACT_AND_RUN=1 "$GITHUB_WORKSPACE/$APPIMAGE_PATH" --appimage-extract
+          )
+          test -x "$EXTRACT_DIR/squashfs-root/AppRun"
+          if [ -e "$EXTRACT_DIR/squashfs-root/AppRun.wrapped" ]; then
+            test -x "$EXTRACT_DIR/squashfs-root/AppRun.wrapped"
+          fi
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -376,7 +395,7 @@ jobs:
           DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${ARCHIVE}"
           jq -n \
             --arg version "$VERSION" \
-            --arg notes "OctoShrink ${VERSION}: 修复 App Store 版恢复原图时可能卡死的问题（重新授权弹窗导致）；对比弹窗打不开的问题也已修复；对比查看更顺手，移除多余滑动条；顶栏图标更新为亮色新设计。" \
+            --arg notes "OctoShrink ${VERSION}: 修复 Linux AppImage 在 Firejail 环境中无法启动的问题；AppImage 继续以 Ubuntu 22.04（glibc 2.35）为构建基线，满足 Tauri WebKitGTK 4.1 依赖。" \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg signature "$SIGNATURE" \
             --arg url "$DOWNLOAD_URL" \
@@ -395,7 +414,7 @@ jobs:
             免费开源的本机图片压缩工具，图片不会上传到服务器。
 
             ### 本版
-            统一 Direct、App Store 与 Swift 原生版的压缩生命周期协议。清空或重新导入文件后，旧任务的迟到事件不再覆盖新队列项；停止后继续只处理待压缩文件，失败项仍需手动重试。
+            修复 Linux AppImage 的启动权限问题：重新打包 SquashFS 时明确保留并校正 AppRun 与 AppRun.wrapped 的执行权限。
 
             ### 下载
 

@@ -648,6 +648,7 @@ asc profiles inspect --path src-tauri/OctoShrink_AppStore.provisionprofile   # �
 - **更新 UI 只有一个落点：设置页的「更新」面板**（`frontend/index.html` 里 `#settingsView` 内，标题栏气泡不再放更新入口，只留窗口级 `#titlebarProgress` 进度条）。按产物线分叉的是显隐而不是行为：`initUpdatePanel()` 用 `BUILD_VARIANT` 决定「在线更新」那一行显示给谁 —— Direct 显示检查更新/Release 页面/下载进度，App Store 整行隐藏并改说一句实话。**不许给 App Store 版留一个按下去只会失败的检查更新按钮**（那条线上 `check_for_update` 是空壳）。回归：`tests/update-panel.cjs`（结构 + 两版显隐 + 下载取消后进度归零）。
 - GitHub Release 必须同时提供 macOS arm64、x86_64 与 Universal 2；Universal 内的主程序、CLI 工具和非系统 dylib 都必须包含双架构，不能只合并主程序。
 - Windows 与 Linux 产物继续由 `.github/workflows/release.yml` 并行构建。
+- **Linux AppImage 构建基线固定为 `ubuntu-22.04`**：Tauri v2 使用 WebKitGTK 4.1，当前产物检测到最低 `GLIBC_2.35`。每次 `cargo tauri build` 后、上传前，必须运行 `python3 scripts/repair_appimage_permissions.py <AppImage>` 并验证可提取的 `AppRun`（以及存在时的 `AppRun.wrapped`）带执行权限；该重打包步骤规避 linuxdeploy 生成的 SquashFS 在 Firejail 中启动失败。不要改用更新的 Ubuntu runner，否则会继续抬高 glibc 下限。
 
 ### 14. 发布流程全凭据速查（本机与 GitHub Actions 均已配置，无需向用户索要）
 
