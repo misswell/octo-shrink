@@ -407,7 +407,7 @@ jobs:
           DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${ARCHIVE}"
           jq -n \
             --arg version "$VERSION" \
-            --arg notes "OctoShrink ${VERSION}: fixed the Swift native build quietly skipping JPEG compression on every photo since v2.5.31 — large JPEGs now shrink to the same level as the Direct build. Also fixed a potential hang when encoding very large images." \
+            --arg notes "OctoShrink ${VERSION}: the Swift native build now matches the Direct build end to end — the compare window uses the same zoom, pan and split-line interactions, and every button icon uses the same hand-drawn glyphs across all three builds." \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg signature "$SIGNATURE" \
             --arg url "$DOWNLOAD_URL" \
