@@ -104,26 +104,22 @@ function applyTheme(theme) {
   }
   updateTitlebarIcon(resolvedTheme);
 
-  // 更新图标显示
-  const icons = document.querySelectorAll('.theme-icon');
-  icons.forEach(ic => ic.style.display = 'none');
-  const activeIcon = document.querySelector('.theme-icon-' + theme);
-  if (activeIcon) activeIcon.style.display = '';
-
-  // 更新按钮提示
-  const btn = document.getElementById('themeToggleBtn');
-  if (btn) {
-    const labels = { auto: localizeUiText('自动（跟随系统）'), light: localizeUiText('亮色模式'), dark: localizeUiText('暗黑模式') };
-    btn.title = localizeUiText('当前: ') + labels[theme] + localizeUiText(' · 点击切换');
-  }
+  // 设置页「外观」里的三段选择器跟着走（主题入口在设置里，标题栏不再放按钮）
+  [['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']].forEach(function(pair) {
+    var btn = document.getElementById('themeChoice' + pair[1]);
+    if (!btn) return;
+    var active = pair[0] === theme;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
 }
 
-function cycleTheme() {
-  const idx = THEMES.indexOf(currentTheme);
-  const next = THEMES[(idx + 1) % THEMES.length];
-  applyTheme(next);
-  const labels = { auto: localizeUiText('自动'), light: localizeUiText('亮色'), dark: localizeUiText('暗黑') };
-  showToast(localizeUiText('主题: ') + labels[next]);
+/// 主题切换入口：设置页「外观」小节。即时生效并记住；auto 跟随系统。
+function setThemePreference(value) {
+  var theme = THEMES.includes(value) ? value : 'auto';
+  applyTheme(theme);
+  var labels = { auto: localizeUiText('自动'), light: localizeUiText('亮色'), dark: localizeUiText('暗黑') };
+  showToast(localizeUiText('主题: ') + labels[theme]);
 }
 
 // 监听系统主题变化（auto 模式下实时响应）
@@ -2254,19 +2250,6 @@ function showToast(message) {
   }, 2500);
 }
 
-function toggleTitlebarInfo() {
-  var info = document.getElementById('titlebarInfo');
-  if (!info) return;
-  var open = info.style.display !== 'none';
-  if (open) {
-    info.style.display = 'none';
-    return;
-  }
-  info.style.display = 'inline-flex';
-  var ver = document.getElementById('titlebarInfoVersion');
-  if (ver) ver.textContent = 'v' + (window.appVersion || '2.0.0') + ' ' + BUILD_VARIANT;
-}
-
 /// 更新面板在设置页里，但启动时的静默检查可能先于用户进设置页就发现了新版本，
 /// 所以元素一律先按产物线摆好，谁先来谁写。
 /// App Store 版不加载 updater 插件 —— 那一行直接不出现，改说一句实话，
@@ -2275,6 +2258,9 @@ function initUpdatePanel() {
   var version = document.getElementById('updateVersion');
   // 版本号是异步取的：没取到之前宁可留 HTML 里的「—」，别显示半截「 Direct」。
   if (version && window.appVersion) version.textContent = 'v' + window.appVersion + ' ' + BUILD_VARIANT;
+  // 「关于」小节里的版本行（从标题栏气泡搬进设置页）
+  var aboutVersion = document.getElementById('aboutVersion');
+  if (aboutVersion && window.appVersion) aboutVersion.textContent = 'v' + window.appVersion + ' ' + BUILD_VARIANT;
   var isDirect = BUILD_VARIANT === 'Direct';
   var checkRow = document.getElementById('updateCheckRow');
   var directNote = document.getElementById('updateDirectNote');

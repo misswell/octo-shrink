@@ -150,22 +150,6 @@ struct TitleBarView: View {
                 .buttonStyle(TitleBarButtonStyle(active: appState.page == .settings))
                 .help("设置")
 
-                Button {
-                    appState.showAbout.toggle()
-                } label: {
-                    OctoIcon(name: OctoIconName.info, size: 16)
-                }
-                .buttonStyle(TitleBarButtonStyle())
-                .help("关于")
-
-                Button {
-                    appState.cycleTheme()
-                } label: {
-                    OctoIcon(name: appState.theme.iconName, size: 16)
-                }
-                .buttonStyle(TitleBarButtonStyle())
-                .help("当前: \(appState.theme.label) · 点击切换")
-
                 Text("v\(appState.appVersion)")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary.opacity(0.6))
@@ -174,33 +158,10 @@ struct TitleBarView: View {
         }
         .frame(height: AppMetrics.titleBarHeight)
         .background(Color(nsColor: .windowBackgroundColor))
-        .popover(isPresented: $appState.showAbout, arrowEdge: .bottom) {
-            AboutView()
-        }
     }
 }
 
 // MARK: - About View
-
-struct AboutView: View {
-    @EnvironmentObject var appState: AppState
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("v\(appState.appVersion) Swift")
-                .font(.system(size: 12, design: .monospaced))
-            HairlineDivider()
-            Button("还原默认设置") {
-                appState.resetSettings()
-                appState.showAbout = false
-            }
-            .buttonStyle(.borderless)
-            .font(.system(size: 12))
-        }
-        .padding(12)
-        .frame(width: 200)
-    }
-}
 
 // MARK: - Drop Zone（.dropzone：虚线卡片，48pt 图标圆盘，18px 内边距）
 

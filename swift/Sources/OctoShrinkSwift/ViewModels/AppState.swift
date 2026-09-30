@@ -105,15 +105,12 @@ final class AppState: ObservableObject {
     @Published var sortAscending = true
     @Published var onlyShowFailed = false
 
-    // 主题
+    // 主题（入口在设置页「外观」小节）
     @Published var theme: AppTheme = .auto
 
     // Toast
     @Published var toastMessage: String?
     @Published var toastVisible = false
-
-    // 关于
-    @Published var showAbout = false
 
     // 版本
     @Published var appVersion: String = ""
@@ -470,8 +467,10 @@ final class AppState: ObservableObject {
         }
     }
 
-    func cycleTheme() {
-        theme = theme.next()
+    /// 主题设置入口在设置页「外观」小节（标题栏不再放切换按钮）。
+    func setTheme(_ next: AppTheme) {
+        guard next != theme else { return }
+        theme = next
         saveTheme()
         applyThemeAppearance()
         showToast("主题: \(theme.shortLabel)")

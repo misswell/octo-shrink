@@ -12,6 +12,46 @@ struct AppSettingsPageView: View {
         VStack(spacing: 0) {
             ViewHeaderView(title: "设置", icon: OctoIconName.settings)
 
+            // MARK: 外观（主题入口从标题栏搬到这里）
+
+            HStack(spacing: 5) {
+                Text("外观")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+            }
+            .padding(.horizontal, AppMetrics.sectionHPadding)
+            .padding(.vertical, 10)
+            HairlineDivider()
+
+            VStack(spacing: 0) {
+                SettingsRow(label: "主题", showSeparator: false) {
+                    Picker("", selection: Binding(
+                        get: { appState.theme },
+                        set: { appState.setTheme($0) }
+                    )) {
+                        ForEach(AppTheme.allCases, id: \.self) { option in
+                            Text(option.shortLabel).tag(option)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 220)
+                }
+            }
+            .padding(.horizontal, AppMetrics.sectionHPadding)
+
+            // 「自动」是真跟随：AppKit 在系统外观切换时实时响应（appearance = nil）。
+            Text("「自动」跟随系统外观，系统切换深浅色时实时生效。")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, AppMetrics.sectionHPadding)
+                .padding(.top, 8)
+                .padding(.bottom, 12)
+
+            HairlineDivider()
+
             // .view-section-header：卡片内的小节标题
             HStack(spacing: 5) {
                 Text("历史记录与原图")
@@ -129,6 +169,36 @@ struct AppSettingsPageView: View {
                 .padding(.horizontal, AppMetrics.sectionHPadding)
                 .padding(.top, 8)
                 .padding(.bottom, 12)
+
+            HairlineDivider()
+
+            // MARK: 关于（版本 + 还原默认设置，从标题栏气泡搬进设置页）
+
+            HStack(spacing: 5) {
+                Text("关于")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+            }
+            .padding(.horizontal, AppMetrics.sectionHPadding)
+            .padding(.vertical, 10)
+            HairlineDivider()
+
+            VStack(spacing: 0) {
+                SettingsRow(label: "当前版本", showSeparator: true) {
+                    Text("v\(appState.appVersion) Swift")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+
+                SettingsRow(label: "还原默认设置", showSeparator: false) {
+                    Button("还原默认设置") {
+                        appState.resetSettings()
+                    }
+                    .controlSize(.small)
+                }
+            }
+            .padding(.horizontal, AppMetrics.sectionHPadding)
+            .padding(.bottom, 12)
         }
         .cardStyle()
         .clipShape(RoundedRectangle(cornerRadius: AppMetrics.cardRadius, style: .continuous))

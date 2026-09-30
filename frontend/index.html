@@ -76,23 +76,11 @@
    </div>
     <div class="titlebar-progress" id="titlebarProgress" style="width:0%"></div>
   <div class="titlebar-actions">
-     <span class="titlebar-info" id="titlebarInfo" style="display:none;">
-       <span class="titlebar-info-version" id="titlebarInfoVersion"></span>
-      <button class="titlebar-info-btn" onclick="resetSettings()">还原默认设置</button>
-     </span>
      <button class="tb-btn" id="historyViewBtn" onclick="showView('history')" title="历史记录">
        <svg class="symbol-icon"><use href="#icon-history"/></svg>
      </button>
      <button class="tb-btn" id="settingsViewBtn" onclick="showView('settings')" title="设置">
        <svg class="symbol-icon"><use href="#icon-settings"/></svg>
-     </button>
-     <button class="tb-btn" id="themeToggleBtn" onclick="cycleTheme()" title="切换主题">
-       <svg class="symbol-icon theme-icon theme-icon-auto"><use href="#icon-theme-auto"/></svg>
-       <svg class="symbol-icon theme-icon theme-icon-light" style="display:none"><use href="#icon-sun"/></svg>
-       <svg class="symbol-icon theme-icon theme-icon-dark" style="display:none"><use href="#icon-moon"/></svg>
-     </button>
-     <button class="tb-btn" onclick="toggleTitlebarInfo()" title="关于">
-       <svg class="symbol-icon"><use href="#icon-info"/></svg>
      </button>
    </div>
  </div>
@@ -463,6 +451,30 @@
     </div>
     <div class="settings-panel">
       <div class="settings-header view-section-header">
+        <h3>外观</h3>
+      </div>
+      <div class="settings-body">
+        <div class="settings-row">
+          <label>主题</label>
+          <div class="theme-choice" role="group" aria-label="主题">
+            <button type="button" class="theme-choice-btn" id="themeChoiceAuto"
+              onclick="setThemePreference('auto')" title="自动（跟随系统）" aria-pressed="true">
+              <svg class="symbol-icon"><use href="#icon-theme-auto"/></svg>
+            </button>
+            <button type="button" class="theme-choice-btn" id="themeChoiceLight"
+              onclick="setThemePreference('light')" title="亮色模式" aria-pressed="false">
+              <svg class="symbol-icon"><use href="#icon-sun"/></svg>
+            </button>
+            <button type="button" class="theme-choice-btn" id="themeChoiceDark"
+              onclick="setThemePreference('dark')" title="暗黑模式" aria-pressed="false">
+              <svg class="symbol-icon"><use href="#icon-moon"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="settings-panel">
+      <div class="settings-header view-section-header">
         <h3>历史记录与原图</h3>
       </div>
       <div class="settings-body">
@@ -552,6 +564,25 @@
         <p class="settings-copy" id="updateAppStoreNote" style="display:none;">
           本版本由 Mac App Store 分发，更新由 App Store 统一管理，应用内不再检查版本。
         </p>
+      </div>
+    </div>
+    <div class="settings-panel">
+      <div class="settings-header view-section-header">
+        <h3>关于</h3>
+      </div>
+      <div class="settings-body">
+        <div class="settings-row">
+          <label>当前版本</label>
+          <div class="update-col">
+            <span class="update-version" id="aboutVersion">—</span>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label>还原默认设置</label>
+          <div class="update-col">
+            <button class="btn btn-small" type="button" onclick="resetSettings()">还原默认设置</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>

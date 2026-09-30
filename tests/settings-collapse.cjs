@@ -36,10 +36,10 @@ assert.doesNotMatch(source, /settingsPanel'\)\.classList\.remove\('collapsed'\)/
   '不许有任何代码路径自动展开设置面板');
 assert.equal((html.match(/id="settingsPanel"/g) || []).length, 1, '面板只有一个');
 
-// 设置页里的静态卡片（语言 / 历史记录与原图 / 性能 / 更新），
+// 设置页里的静态卡片（语言 / 外观 / 历史记录与原图 / 性能 / 更新 / 关于），
 // 它们没有折叠这回事，别被顺手加上 collapsed。
 const otherPanels = (html.match(/<div class="settings-panel"/g) || []).length;
-assert.equal(otherPanels, 4, '设置页各卡片保持原样（不带 collapsed）');
+assert.equal(otherPanels, 6, '设置页各卡片保持原样（不带 collapsed）');
 
 // ── ③ 折叠时那一行真有摘要 ───────────────────────────────────────────
 assert.ok(css.includes('.settings-panel.collapsed .settings-body { display: none; }'),

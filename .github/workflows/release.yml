@@ -407,7 +407,7 @@ jobs:
           DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${ARCHIVE}"
           jq -n \
             --arg version "$VERSION" \
-            --arg notes "OctoShrink ${VERSION}: fixed the update panel starting a second download when the page reloaded mid-download (restoring default settings during an update) — progress no longer bounces between two downloads, and canceling now stops the transfer immediately. The Swift native build's auto theme now follows the system appearance live." \
+            --arg notes "OctoShrink ${VERSION}: the theme picker and the about section (version, restore defaults) moved from the title bar into Settings, in all three builds." \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg signature "$SIGNATURE" \
             --arg url "$DOWNLOAD_URL" \

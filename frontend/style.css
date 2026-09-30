@@ -236,26 +236,29 @@ body {
   gap: 6px;
 }
 .compress-progress-btn.done .compress-btn-text { color: #34c759; }
-.titlebar-info {
+/* 主题选择：设置页「外观」小节的三段图标按钮（24 网格 glyph，与标题栏同源）。 */
+.theme-choice {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--input-bg);
+}
+.theme-choice-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  -webkit-app-region: no-drag;
-}
-.titlebar-info-version { font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
-.titlebar-info-btn {
-  padding: 2px 8px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
+  justify-content: center;
+  width: 32px;
+  height: 24px;
+  border: none;
+  border-radius: 4px;
   background: transparent;
-  color: var(--text);
-  font-size: 11px;
+  color: var(--text-secondary);
   cursor: pointer;
-  transition: background .12s;
-  white-space: nowrap;
+  transition: background .12s, color .12s;
 }
-.titlebar-info-btn:hover { background: var(--bg-hover); }
-.titlebar-info-btn:disabled { opacity: .5; cursor: default; }
+.theme-choice-btn:hover { background: var(--bg-hover); color: var(--text); }
+.theme-choice-btn.active { background: var(--accent); color: #fff; }
 .tb-btn:focus-visible,
 .btn:focus-visible,
 .queue-action-btn:focus-visible,

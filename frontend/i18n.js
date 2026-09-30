@@ -4,6 +4,7 @@
   const PREFERENCE_KEY = 'octoshrink-language';
   const ENGLISH = Object.freeze({
     '还原默认设置': 'Restore defaults', '历史记录': 'History', '设置': 'Settings', '切换主题': 'Switch theme', '关于': 'About',
+    '外观': 'Appearance', '主题': 'Theme',
     '文件队列': 'File queue', '0 个文件': '0 files', ' 个文件': ' files', '清空列表': 'Clear list', '清除全部': 'Clear all',
     '原始大小': 'Original size', '压缩后大小': 'Compressed size', '压缩后': 'Compressed', '已节省': 'Saved', '压缩率': 'Compression ratio',
     '只显示失败': 'Show failures only', '排序': 'Sort by', '导入顺序': 'Import order', '名称': 'Name', '压缩比': 'Compression ratio', '状态': 'Status',
