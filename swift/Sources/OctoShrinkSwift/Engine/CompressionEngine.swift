@@ -192,20 +192,26 @@ enum CompressionEngine {
 
         let width = image.width
         let height = image.height
+        // ⚠️ 24bpp（bytesPerRow = width*3 + kCGImageAlphaNone）的 CGContext 在 macOS 上
+        // 初始化直接返回 nil——位图上下文只支持 32bpp 组合。这里必须用 32bpp 画完
+        // 再在输出时剥掉 alpha 字节，否则 cjpeg 分支永远走不到，所有 JPEG 都被
+        // 静默跳过（v2.5.31 起从没工作过，parity 静态测试钉不住这种运行期错误）。
         guard let context = CGContext(
             data: nil, width: width, height: height,
-            bitsPerComponent: 8, bytesPerRow: width * 3,
+            bitsPerComponent: 8, bytesPerRow: width * 4,
             space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.none.rawValue
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return nil }
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
 
         guard let rawData = context.data else { return nil }
-        var ppm = Data()
+        let pixels = rawData.bindMemory(to: UInt8.self, capacity: width * height * 4)
+        var ppm = Data(capacity: 15 + width * height * 3)
         ppm.append("P6\n\(width) \(height)\n255\n".data(using: .ascii)!)
-        // CGContext RGBA -> need RGB; use context directly if RGB
-        let rgbData = Data(bytes: rawData, count: width * height * 3)
-        ppm.append(rgbData)
+        // RGBA -> RGB：剥掉每个像素的第 4 个字节
+        for offset in 0..<(width * height * 4) where offset % 4 != 3 {
+            ppm.append(pixels[offset])
+        }
         return ppm
     }
 

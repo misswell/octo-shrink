@@ -9,6 +9,9 @@
 // 「还没开始」的任务、CPU 上限真的限住同时跑的任务数。
 
 import Foundation
+import ImageIO
+import CoreGraphics
+import UniformTypeIdentifiers
 
 var failures = 0
 
@@ -1271,6 +1274,98 @@ do {
     check(contentSource.contains("appState.settingsExpanded.toggle()"),
           "只有点标题那一下才切换（ContentView 的 SettingsPanelView 里）")
 }
+
+print("[31] JPEG 编码管道真跑（mozjpeg 的 PPM + stdin 链路）")
+let jpegPipelineCheck: () -> Void = {
+    // 生成一张 1600×1600 渐变 JPEG：足够大，cjpeg 产物必然超过 64KB 管道缓冲，
+    // 顺带钉住「stdin 必须并发写」——同步先写完再读 stdout 会永久互锁。
+    let side = 1600
+    // noneSkipLast：第 4 字节是填充位——直接写裸像素时不写 alpha 也不会像
+    // premultipliedLast 那样把 RGB 预乘成 0（那会编出一张纯色图，死锁覆盖就没了）。
+    guard let ctx = CGContext(
+        data: nil, width: side, height: side, bitsPerComponent: 8,
+        bytesPerRow: side * 4, space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+    ), let raw = ctx.data else {
+        check(false, "渐变测试图生成失败（环境问题，不是被测代码）")
+        return
+    }
+    let px = raw.bindMemory(to: UInt8.self, capacity: side * side * 4)
+    // 逐像素 LCG 噪声：纯渐变（哪怕叠乘法式抖动）ImageIO q95 都能压到 40KB 以下，
+    // 死锁回归要求 cjpeg 产物真的超过 64KB 管道缓冲——只有真随机噪声压不动。
+    var seed: UInt32 = 20260930
+    func nextRand() -> UInt8 {
+        seed = seed &* 1664525 &+ 1013904223
+        return UInt8(truncatingIfNeeded: seed >> 24)
+    }
+    for y in 0..<side {
+        for x in 0..<side {
+            let o = (y * side + x) * 4
+            px[o] = nextRand()
+            px[o + 1] = nextRand()
+            px[o + 2] = nextRand()
+        }
+    }
+    guard let cgImage = ctx.makeImage() else {
+        check(false, "噪声图 makeImage 失败")
+        return
+    }
+    let jpgURL = URL(fileURLWithPath: freshRoot("jpeg-pipeline")).appendingPathComponent("grad.jpg")
+    let jpgData = NSMutableData()
+    guard let dest = CGImageDestinationCreateWithData(
+        jpgData, UTType.jpeg.identifier as CFString, 1, nil
+    ) else {
+        check(false, "ImageDestination 创建失败")
+        return
+    }
+    CGImageDestinationAddImage(dest, cgImage, [kCGImageDestinationLossyCompressionQuality: 0.95] as CFDictionary)
+    guard CGImageDestinationFinalize(dest), (jpgData as Data).count > 64 * 1024 else {
+        check(false, "测试 JPEG 落盘失败或太小，死锁回归覆盖不到")
+        return
+    }
+    try? (jpgData as Data).write(to: jpgURL)
+
+    // 1) convertToPPM 必须出活：24bpp（width*3 + kCGImageAlphaNone）的 CGContext
+    //    在 macOS 上恒返回 nil，v2.5.31~2.5.46 全线 JPEG 因此静默跳过 mozjpeg。
+    guard let ppm = CompressionEngine.convertToPPM(file: jpgURL.path) else {
+        check(false, "convertToPPM 返回 nil（JPEG 编码管道断了，mozjpeg 永远走不到）")
+        return
+    }
+    let header = "P6\n\(side) \(side)\n255\n".data(using: .ascii)!
+    check(ppm.count == header.count + side * side * 3, "PPM 尺寸 = 头 + width*height*3")
+    check(ppm.prefix(header.count) == header, "PPM 头部 P6 + 尺寸正确")
+
+    // 2) cjpeg stdin 全链路 + 30s 超时：同步写 stdin 的死锁在这里是失败而不是挂死
+    let sem = DispatchSemaphore(value: 0)
+    var cjpegOut: Data? = nil
+    DispatchQueue.global().async {
+        cjpegOut = CLIRunner.run(
+            tool: "cjpeg",
+            args: ["-quality", "75", "-optimize", "-progressive"],
+            stdinData: ppm
+        )
+        sem.signal()
+    }
+    check(sem.wait(timeout: .now() + 30) == .success, "cjpeg 管道不死锁（stdin 并发写，产物超 64KB 缓冲）")
+    if let out = cjpegOut {
+        check(out.prefix(2) == Data([0xFF, 0xD8]), "cjpeg 产物是合法 JPEG（FFD8 魔数）")
+        check(out.count < (jpgData as Data).count, "cjpeg 产物比 ImageIO 的 q95 原图小")
+    } else {
+        check(false, "cjpeg 经 stdin 没有产出（退出码非 0 或 stdout 为空）")
+    }
+
+    // 3) compressJPG 在 cjpeg 在场时必须选 mozjpeg 且产物更小
+    if CLIRunner.toolURL(for: "cjpeg") != nil {
+        var opts = CompressOptions()
+        opts.quality = 75
+        let r = CompressionEngine.compressJPG(file: jpgURL.path, options: opts)
+        check(r.algorithm == "mozjpeg" && r.compressed.count < (jpgData as Data).count,
+              "compressJPG 选 mozjpeg 且压得比原图小")
+    } else {
+        print("  ok   （本机没有 cjpeg，跳过算法选择断言）")
+    }
+}
+jpegPipelineCheck()
 
 print(failures == 0
       ? "\n✓ Swift 历史 / 备份 / 暂停 / 停止 / 队列进度 / 设置默认折叠 / CPU 上限自检全部通过"

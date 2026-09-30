@@ -112,10 +112,16 @@ enum CLIRunner {
             process.standardInput = inPipe
             do {
                 try process.run()
-                inPipe.fileHandleForWriting.write(stdinData)
-                try? inPipe.fileHandleForWriting.close()
             } catch {
                 return nil
+            }
+            // stdin 必须在后台线程写、且与读 stdout 并发：PPM 动辄上百 MB，而
+            // 子进程的 stdout 写满 64KB 管道缓冲就会反压停下——同步"先写完再读"
+            // 就是永久互锁。writeAll 负责处理管道的半写；EPIPE（子进程提前退出）
+            // 忽略即可，下面会按退出码判定失败。
+            DispatchQueue.global().async {
+                try? inPipe.fileHandleForWriting.write(contentsOf: stdinData)
+                try? inPipe.fileHandleForWriting.close()
             }
         } else {
             do {
