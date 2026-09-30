@@ -407,7 +407,7 @@ jobs:
           DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${ARCHIVE}"
           jq -n \
             --arg version "$VERSION" \
-            --arg notes "OctoShrink ${VERSION}: the theme picker and the about section (version, restore defaults) moved from the title bar into Settings, in all three builds." \
+            --arg notes "OctoShrink ${VERSION}: fixes App Store compression failing after selecting individual files by requesting and retaining output-folder write permission. Direct and Swift compression behavior is preserved." \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg signature "$SIGNATURE" \
             --arg url "$DOWNLOAD_URL" \
@@ -426,7 +426,7 @@ jobs:
             免费开源的本机图片压缩工具，图片不会上传到服务器。
 
             ### 本版
-            README 现以 English 为默认语言，并附完整简体中文版。应用界面支持简体中文和 English，默认跟随系统语言，也可在设置中手动选择语言；主窗口与图片对比窗口共用语言设置。
+            修复 App Store 沙盒版选择单个文件后无法写入压缩结果的问题：启动压缩前验证输出文件夹写权限，必要时请求授权，并保持授权直到输出事务完成。Direct 和 Swift 的压缩行为保持一致。
 
             ### 下载
 

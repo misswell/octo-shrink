@@ -1126,6 +1126,7 @@ pub async fn compress_files(
     file_paths: Vec<String>,
     options: CompressOptions,
 ) -> Result<CompressionSessionResult, String> {
+    let _access = prepare_compression_access(&app, state.inner(), &file_paths, &options)?;
     Ok(compress_batch(&app, state.inner(), session_id, queue_revision, file_paths, options, false).await)
 }
 
@@ -1138,7 +1139,49 @@ pub async fn compress_smart(
     file_paths: Vec<String>,
     options: CompressOptions,
 ) -> Result<CompressionSessionResult, String> {
+    let _access = prepare_compression_access(&app, state.inner(), &file_paths, &options)?;
     Ok(compress_batch(&app, state.inner(), session_id, queue_revision, file_paths, options, true).await)
+}
+
+/// Keep directory scopes alive through encoding, staging, history commit and
+/// rollback. Single-file grants do not cover atomic sibling writes in a sandbox.
+fn prepare_compression_access(
+    _app: &AppHandle,
+    _state: &AppState,
+    _file_paths: &[String],
+    _options: &CompressOptions,
+) -> Result<Vec<crate::sandbox_access::AccessGuard>, String> {
+    #[allow(unused_mut)]
+    let mut guards = Vec::new();
+    #[cfg(all(target_os = "macos", feature = "inproc-backends"))]
+    {
+        let files = collect_image_files(_file_paths);
+        let mut directories = std::collections::BTreeSet::new();
+        if _options.output_mode == "folder" {
+            let directory = _options.output_dir.as_ref().ok_or("请先选择输出目录")?;
+            directories.insert(PathBuf::from(directory));
+        } else {
+            for file in &files {
+                if let Some(parent) = Path::new(file).parent() {
+                    directories.insert(parent.to_path_buf());
+                }
+            }
+        }
+        for directory in directories {
+            let mut reauth = || request_folder_access(_app, _state, &directory);
+            let guard = crate::sandbox_access::acquire_writable_directory(
+                _state.access.as_ref(), &directory, &mut reauth,
+            ).ok_or_else(|| format!("请授权输出文件夹后重试：{}", directory.display()))?;
+            guards.push(guard);
+        }
+        for file in files {
+            let path = Path::new(&file);
+            let mut reauth = || request_folder_access(_app, _state, path);
+            guards.push(_state.access.acquire(path, &mut reauth)
+                .ok_or_else(|| format!("无法访问图片，请重新选择：{file}"))?);
+        }
+    }
+    Ok(guards)
 }
 
 #[tauri::command]
@@ -1553,12 +1596,16 @@ fn request_folder_access(app: &AppHandle, state: &AppState, target: &Path) -> bo
     let Some(picked) = app
         .dialog()
         .file()
+        .set_title(format!("请选择文件夹以允许读写：{}", target.display()))
+        .set_directory(target.parent().unwrap_or(target))
         .blocking_pick_folder()
         .and_then(|fp| fp.into_path().ok())
     else {
         return false;
     };
-    let parent_ok = target == picked.as_path() || target.starts_with(&picked);
+    let target = target.canonicalize().unwrap_or_else(|_| target.to_path_buf());
+    let picked = picked.canonicalize().unwrap_or(picked);
+    let parent_ok = target.starts_with(&picked);
     state.access.remember(&picked);
     parent_ok
 }

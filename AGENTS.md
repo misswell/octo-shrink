@@ -172,7 +172,7 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 | 拖放（drag-drop） | Tauri drop payload 直给路径 | 同上 + bookmark 化 | 沙盒需 security-scoped URL |
 | walk_dir 递归 | fs::read_dir 任意路径；稳定排序并按规范路径去重，前端批次使用已展开文件快照 | 同上 + 仅在已书签根内递归 | 沙盒只认授权范围；队列不能因重复目录或处理期间新增文件而改变 |
 | 队列批次文件清单 | 导入完成后展开并去重，开始处理时只提交该批次快照；目录根通过 `sourceRoots` 保留相对输出路径 | 同上，书签授权范围内执行 | 避免处理中追加、异步扫描乱序和清空后旧事件回流 |
-| write_output_file | ①`ensure_backup`（写不成就不碰用户文件）②写 `history/transactions/<id>.json` 记账 ③同目录 `.octoshrink-write-<millis>.tmp` ④flush + fsync ⑤rename 覆盖目标 ⑥`history.add`（失败=回滚：备份写回源文件、删生成结果、销账）⑦ 删账。系统跨格式覆盖时改扩展名并避让同名目标；后缀模式使用自定义 `outputSuffix`（默认 `_compressed`） | 系统转换开始前强制经文件夹选择器授权，随后写入已授权目录；后缀模式使用同一自定义 `outputSuffix` | 沙盒不能依赖单文件授权写入旁路新文件；两版需保持输出命名一致。**落盘任一步失败都必须把 `CompressResult.success` 翻成 false**，UI 绝不许显示「压缩完成」 |
+| write_output_file | ①`ensure_backup`（写不成就不碰用户文件）②写 `history/transactions/<id>.json` 记账 ③同目录 `.octoshrink-write-<millis>.tmp` ④flush + fsync ⑤rename 覆盖目标 ⑥`history.add`（失败=回滚：备份写回源文件、删生成结果、销账）⑦ 删账。系统跨格式覆盖时改扩展名并避让同名目标；后缀模式使用自定义 `outputSuffix`（默认 `_compressed`） | 所有批量压缩入口先经 `prepare_compression_access` 验证输出目录可创建临时文件，不足时弹目录授权；目录与输入文件 `AccessGuard` 持有到事务结束。覆盖/后缀授权源文件父目录，目录模式授权输出根，输出模式不变；系统转换仍先选择输出文件夹 | 单文件授权不能创建同目录临时文件，即使覆盖也需要目录权限。2.5.46 签名沙盒包已复现 `Operation not permitted`，同文件经目录授权后成功；2.5.56 补齐普通压缩入口。Swift 当前无沙盒，沿用原行为。**落盘任一步失败都必须把 `CompressResult.success` 翻成 false**，UI 绝不许显示「压缩完成」 |
 | restore_original / restore_history_entry / restore_all | 三条命令共用同一个恢复服务 `HistoryStore::restore`：备份 → `.octoshrink-restore-<nanos>.tmp` → fsync → rename 覆盖源文件 → **历史状态落盘成功之后**才删本次生成的压缩输出与备份目录；命中冲突（大小或 mtime 变化 >2 s，仅 replace 模式）时返回 `conflict=true`，前端确认后带 `force=true` 重试。`RestoreOutcome` 额外回报 `output_mode`，前端据此决定说「已恢复原图」还是「已删除这次压缩结果」。⚠️ 这三个命令**必须是 async**：沙盒下书签失效时 `request_folder_access` 会在恢复中途调 `blocking_pick_folder()`，阻塞式弹窗不能在主线程上调（同步命令就在主线程执行 → 弹窗永远出不来、整个应用卡死，v2.5.45 实测并已修）；async 命令带 `State<'_, _>` 引用参数必须返回 `Result`，恢复的所有失败都装在 `RestoreOutcome` 里所以永远 `Ok` | 同上，源图/输出/备份路径均经 bookmark 授权；路径一律由 historyId 从存储读取，前端不拼路径 | 沙盒；两版恢复语义一致，**不允许复制三套恢复逻辑**。顺序反了会出现"历史说已恢复、备份已删、原图没写回" |
 | 历史页每一行的按钮 | `historyRowActionDefs(entry)`（前端）↔ `historyRowActions(_:)`（Swift 服务层）按 `sourceExists` / `backupExists` / `outputExists` 三个**读取时现算**的派生字段决定：另存为 → 对比 → 反悔（恢复原图 或 删除这次压缩结果，二选一）→ 访达 → 复制日志 | 同上，同一份前端代码、同一套判据 | 见「历史页每一行的按钮 = 这条记录此刻真能做到的事」。后缀模式永不给「恢复原图」，replace 永不给「删除这次压缩结果」；按钮不成立就不画 |
 | 历史记录与原图备份 | `HistoryStore` 落 `<appdata>/history/history.json` + `<appdata>/history/backups/<key>/`（App Support，跨启动长期保留）；备份 key = **FNV-1a 64 位**（`stable_hash`，跨 rustc 版本稳定），老 `DefaultHasher` key 仍被识别用于续用已有备份与书签 | 同上（沙盒容器内的 App Support）| 备份绝不放 temp_dir/Caches，否则系统清理会丢掉原图；Swift 线用独立根 `~/Library/Application Support/com.misswell.octoshrink.swift`。**标准库从不承诺 `DefaultHasher` 的跨版本稳定性**，一次升级就能让所有备份看起来"无人引用" |
@@ -523,6 +523,7 @@ xcrun productbuild --component \
 
 - 用户选文件/拖入文件时，系统弹窗授权（security-scoped bookmarks）
 - 授权后路径写入 BookmarkStore，后续可续访
+- 2.5.56 起显式选择路径会刷新该路径的旧书签，防止单文件授权时推导出的父目录书签长期阻止真正目录授权；书签能 resolve / startAccessing 并不证明可以创建同目录临时文件，必须实际验证写权限。
 - 提供「清理旧授权」功能，避免书签过期导致访问失败
 - `files.user-selected.read-write` + `files.bookmarks.app-scope` entitlements 必须开启
 

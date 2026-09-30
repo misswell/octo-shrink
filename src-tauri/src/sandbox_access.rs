@@ -48,6 +48,40 @@ pub trait FileAccess: Send + Sync {
     }
 }
 
+/// A file bookmark may resolve successfully without granting permission to create
+/// siblings. Verify the actual operation required by atomic output transactions.
+pub fn acquire_writable_directory(
+    access: &dyn FileAccess,
+    directory: &Path,
+    reauth: &mut dyn FnMut() -> bool,
+) -> Option<AccessGuard> {
+    acquire_writable_directory_with_probe(access, directory, reauth, &mut || {
+        tempfile::Builder::new()
+            .prefix(".octoshrink-access-")
+            .tempfile_in(directory)
+            .is_ok()
+    })
+}
+
+fn acquire_writable_directory_with_probe(
+    access: &dyn FileAccess,
+    directory: &Path,
+    reauth: &mut dyn FnMut() -> bool,
+    writable: &mut dyn FnMut() -> bool,
+) -> Option<AccessGuard> {
+    for attempt in 0..2 {
+        let guard = access.acquire(directory, &mut || false);
+        if guard.is_some() && writable() {
+            return guard;
+        }
+        drop(guard);
+        if attempt == 1 || !reauth() {
+            return None;
+        }
+    }
+    None
+}
+
 /// 两条产物线共用同一入口：沙盒版用书签，其余一律直通。
 pub fn build_access(bookmark_dir: PathBuf) -> Arc<dyn FileAccess> {
     #[cfg(all(target_os = "macos", feature = "inproc-backends"))]
@@ -172,9 +206,8 @@ impl FileAccess for BookmarkAccess {
             return;
         };
         let slot = self.slot(&resolved);
-        if slot.exists() {
-            return;
-        }
+        // Explicitly selecting a directory must replace an older bookmark that
+        // was inferred from a file grant and cannot create sibling files.
         self.write_bookmark(&resolved, &slot);
         // 目录授权能覆盖里面的文件，恢复时父目录这一条最常命中。
         if let Some(parent) = resolved.parent() {
@@ -249,6 +282,48 @@ fn write_slot(data: &objc2_foundation::NSData, slot: &std::path::Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct ResolvedBookmark;
+    impl FileAccess for ResolvedBookmark {
+        fn acquire(&self, _: &Path, _: &mut dyn FnMut() -> bool) -> Option<AccessGuard> {
+            Some(AccessGuard::unrestricted())
+        }
+        fn remember(&self, _: &Path) {}
+    }
+
+    #[test]
+    fn resolved_file_bookmark_still_requires_directory_write_authorization() {
+        let mut prompts = 0;
+        let mut probes = 0;
+        let guard = acquire_writable_directory_with_probe(
+            &ResolvedBookmark, Path::new("/selected-file-parent"),
+            &mut || { prompts += 1; true },
+            &mut || { probes += 1; probes == 2 },
+        );
+        assert!(guard.is_some());
+        assert_eq!(prompts, 1);
+        assert_eq!(probes, 2);
+    }
+
+    #[test]
+    fn cancelled_directory_authorization_never_allows_output() {
+        let mut probes = 0;
+        assert!(acquire_writable_directory_with_probe(
+            &ResolvedBookmark, Path::new("/selected-file-parent"),
+            &mut || false, &mut || { probes += 1; false },
+        ).is_none());
+        assert_eq!(probes, 1);
+    }
+
+    #[test]
+    fn writable_directory_needs_no_prompt_and_leaves_no_probe_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let guard = acquire_writable_directory(
+            &ResolvedBookmark, directory.path(), &mut || panic!("already writable"),
+        );
+        assert!(guard.is_some());
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
 
     #[test]
     fn ancestor_walk_goes_from_the_file_up_to_the_root() {
