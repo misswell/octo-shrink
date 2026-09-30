@@ -25,6 +25,21 @@ if [ -n "$copy_offenders" ]; then
   fail "Swift 源码出现「使用 N 个性能核」这类承诺绑定核心的措辞"
 fi
 
+# ─── 图标一致性：Swift 图标库必须覆盖前端两个 sprite 的全部 glyph ────────────
+# OctoIconLibrary.swift 由 scripts/gen_swift_icons.py 从 index.html + compare.html
+# 生成；前端新增/改名图标而忘了重新生成时，这里直接失败。
+log "检查 Swift 图标库覆盖前端 sprite 全部 glyph"
+ICON_SWIFT="$SRC_DIR/Views/OctoIconLibrary.swift"
+for page in index compare; do
+  while IFS= read -r glyph; do
+    [ -n "$glyph" ] || continue
+    if ! grep -q "\"$glyph\":" "$ICON_SWIFT"; then
+      fail "Swift 图标库缺少 $glyph（来自 frontend/$page.html），请重新运行 scripts/gen_swift_icons.py"
+    fi
+  done < <(grep -o '<symbol id="[^"]*"' "$PROJECT_DIR/frontend/$page.html" | sed 's/<symbol id="//; s/"$//')
+done
+log "图标一致性通过"
+
 log "编译 Swift 历史自检"
 xcrun swiftc \
   -O \
@@ -32,6 +47,7 @@ xcrun swiftc \
   -o "$OUT_BIN" \
   "$SRC_DIR/Models/CompressOptions.swift" \
   "$SRC_DIR/Models/CompressResult.swift" \
+  "$SRC_DIR/Models/OctoIconName.swift" \
   "$SRC_DIR/Services/HistoryStore.swift" \
   "$SRC_DIR/Services/OutputTransactionStore.swift" \
   "$SRC_DIR/Services/SystemInfo.swift" \

@@ -174,12 +174,13 @@ struct SmallButtonStyle: ButtonStyle {
 struct ViewHeaderView<Trailing: View>: View {
     @EnvironmentObject var appState: AppState
     let title: String
-    let systemImage: String
+    /// OctoIcon glyph 名字（与前端 sprite 同一套 id），不是 SF Symbol。
+    let icon: String
     let trailing: Trailing
 
-    init(title: String, systemImage: String, @ViewBuilder trailing: () -> Trailing) {
+    init(title: String, icon: String, @ViewBuilder trailing: () -> Trailing) {
         self.title = title
-        self.systemImage = systemImage
+        self.icon = icon
         self.trailing = trailing()
     }
 
@@ -188,14 +189,19 @@ struct ViewHeaderView<Trailing: View>: View {
             Button {
                 appState.showPage(.main)
             } label: {
-                Label("返回", systemImage: "chevron.left").labelIconToTextSpacing(3)
+                Label {
+                    Text("返回")
+                } icon: {
+                    OctoIcon(name: OctoIconName.chevronLeft, size: 15)
+                }
+                .labelIconToTextSpacing(3)
             }
             .buttonStyle(GhostButtonStyle())
             .keyboardShortcut(.cancelAction)
             .help("返回主页面（Esc）")
 
             HStack(spacing: 5) {
-                Image(systemName: systemImage).font(.system(size: 13))
+                OctoIcon(name: icon, size: 15)
                 Text(title).font(.system(size: 13, weight: .semibold))
             }
             .foregroundColor(.primary)
@@ -209,8 +215,8 @@ struct ViewHeaderView<Trailing: View>: View {
 }
 
 extension ViewHeaderView where Trailing == EmptyView {
-    init(title: String, systemImage: String) {
-        self.init(title: title, systemImage: systemImage, trailing: { EmptyView() })
+    init(title: String, icon: String) {
+        self.init(title: title, icon: icon, trailing: { EmptyView() })
     }
 }
 

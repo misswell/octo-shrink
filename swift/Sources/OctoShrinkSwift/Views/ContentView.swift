@@ -137,7 +137,7 @@ struct TitleBarView: View {
                 Button {
                     appState.showPage(appState.page == .history ? .main : .history)
                 } label: {
-                    Image(systemName: "clock.arrow.circlepath")
+                    OctoIcon(name: OctoIconName.history, size: 16)
                 }
                 .buttonStyle(TitleBarButtonStyle(active: appState.page == .history))
                 .help("历史记录")
@@ -145,7 +145,7 @@ struct TitleBarView: View {
                 Button {
                     appState.showPage(appState.page == .settings ? .main : .settings)
                 } label: {
-                    Image(systemName: "slider.horizontal.3")
+                    OctoIcon(name: OctoIconName.settings, size: 16)
                 }
                 .buttonStyle(TitleBarButtonStyle(active: appState.page == .settings))
                 .help("设置")
@@ -153,7 +153,7 @@ struct TitleBarView: View {
                 Button {
                     appState.showAbout.toggle()
                 } label: {
-                    Image(systemName: "info.circle")
+                    OctoIcon(name: OctoIconName.info, size: 16)
                 }
                 .buttonStyle(TitleBarButtonStyle())
                 .help("关于")
@@ -161,7 +161,7 @@ struct TitleBarView: View {
                 Button {
                     appState.cycleTheme()
                 } label: {
-                    Image(systemName: appState.theme.iconName)
+                    OctoIcon(name: appState.theme.iconName, size: 16)
                 }
                 .buttonStyle(TitleBarButtonStyle())
                 .help("当前: \(appState.theme.label) · 点击切换")
@@ -215,9 +215,7 @@ struct DropZoneView: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(Color.accentColor.opacity(0.10))
                     .frame(width: 48, height: 48)
-                Image(systemName: "photo.on.rectangle.angled")
-                    .font(.system(size: 24, weight: .medium))
-                    .foregroundColor(.accentColor)
+                OctoIcon(name: OctoIconName.addImages, size: 32, color: .accentColor)
             }
             .padding(.bottom, 8)
             .offset(y: isDragOver ? -1 : 0)
@@ -235,16 +233,24 @@ struct DropZoneView: View {
                 Button {
                     appState.addFilesPanel()
                 } label: {
-                    Label("选择文件", systemImage: "photo.badge.plus")
-                        .labelIconToTextSpacing(4)
+                    Label {
+                        Text("选择文件")
+                    } icon: {
+                        OctoIcon(name: OctoIconName.addImages, size: 16)
+                    }
+                    .labelIconToTextSpacing(4)
                 }
                 .buttonStyle(PrimaryButtonStyle())
 
                 Button {
                     appState.addFolder()
                 } label: {
-                    Label("选择文件夹", systemImage: "folder.badge.plus")
-                        .labelIconToTextSpacing(4)
+                    Label {
+                        Text("选择文件夹")
+                    } icon: {
+                        OctoIcon(name: OctoIconName.folderAdd, size: 16)
+                    }
+                    .labelIconToTextSpacing(4)
                 }
                 .buttonStyle(SecondaryButtonStyle())
             }
@@ -299,9 +305,7 @@ struct QueuePanelView: View {
     // .queue-header：padding 10×14
     private var header: some View {
         HStack(spacing: 6) {
-            Image(systemName: "list.bullet.rectangle")
-                .font(.system(size: 13))
-                .foregroundColor(.accentColor)
+            OctoIcon(name: OctoIconName.queue, size: 15, color: .accentColor)
             Text("文件队列")
                 .font(.system(size: 13, weight: .semibold))
             Spacer()
@@ -312,8 +316,12 @@ struct QueuePanelView: View {
             Button {
                 appState.clearQueue()
             } label: {
-                Label("清除全部", systemImage: "trash")
-                    .labelIconToTextSpacing(3)
+                Label {
+                    Text("清除全部")
+                } icon: {
+                    OctoIcon(name: OctoIconName.trash, size: 15)
+                }
+                .labelIconToTextSpacing(3)
             }
             .buttonStyle(GhostButtonStyle())
             .help("清空列表")
@@ -369,8 +377,10 @@ struct QueuePanelView: View {
                 appState.sortAscending.toggle()
             } label: {
                 HStack(spacing: 3) {
-                    Image(systemName: appState.sortAscending ? "arrow.up" : "arrow.down")
-                        .font(.system(size: 9, weight: .semibold))
+                    OctoIcon(
+                        name: appState.sortAscending ? OctoIconName.sortAsc : OctoIconName.sortDesc,
+                        size: 13
+                    )
                     Text(appState.sortAscending ? "升序" : "降序")
                         .font(.system(size: 11))
                 }
@@ -410,8 +420,12 @@ struct QueuePanelView: View {
             Button {
                 appState.addFilesPanel()
             } label: {
-                Label("追加文件", systemImage: "photo.badge.plus")
-                    .labelIconToTextSpacing(4)
+                Label {
+                    Text("追加文件")
+                } icon: {
+                    OctoIcon(name: OctoIconName.addImages, size: 16)
+                }
+                .labelIconToTextSpacing(4)
             }
             .buttonStyle(SecondaryButtonStyle())
 
@@ -419,8 +433,12 @@ struct QueuePanelView: View {
                 Button {
                     appState.restoreAll()
                 } label: {
-                    Label("恢复全部原图", systemImage: "arrow.uturn.backward")
-                        .labelIconToTextSpacing(4)
+                    Label {
+                        Text("恢复全部原图")
+                    } icon: {
+                        OctoIcon(name: OctoIconName.restore, size: 16)
+                    }
+                    .labelIconToTextSpacing(4)
                 }
                 .buttonStyle(SecondaryButtonStyle())
             }
@@ -435,9 +453,15 @@ struct QueuePanelView: View {
                 Button {
                     appState.togglePause()
                 } label: {
-                    Label(appState.compressionPaused ? "继续" : "暂停",
-                          systemImage: appState.compressionPaused ? "play.fill" : "pause.fill")
-                        .labelIconToTextSpacing(4)
+                    Label {
+                        Text(appState.compressionPaused ? "继续" : "暂停")
+                    } icon: {
+                        OctoIcon(
+                            name: appState.compressionPaused ? OctoIconName.play : OctoIconName.pause,
+                            size: 16
+                        )
+                    }
+                    .labelIconToTextSpacing(4)
                 }
                 .buttonStyle(SecondaryButtonStyle())
                 .disabled(appState.compressionStopping)
@@ -448,9 +472,12 @@ struct QueuePanelView: View {
                 Button {
                     appState.stopBatch()
                 } label: {
-                    Label(appState.compressionStopping ? "正在停止…" : "停止",
-                          systemImage: "stop.fill")
-                        .labelIconToTextSpacing(4)
+                    Label {
+                        Text(appState.compressionStopping ? "正在停止…" : "停止")
+                    } icon: {
+                        OctoIcon(name: OctoIconName.stop, size: 16)
+                    }
+                    .labelIconToTextSpacing(4)
                 }
                 .buttonStyle(SecondaryButtonStyle())
                 .disabled(appState.compressionStopping)
@@ -500,9 +527,7 @@ struct FileRowView: View {
                     .foregroundColor(statusColor)
                     .lineLimit(1)
                 if let err = item.result?.error, !err.isEmpty {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 8))
-                        .foregroundColor(.yellow)
+                    OctoIcon(name: OctoIconName.warning, size: 10, color: .yellow)
                         .help(err)
                 }
             }
@@ -515,8 +540,7 @@ struct FileRowView: View {
                 Button {
                     appState.removeItem(path: item.path)
                 } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 11))
+                    OctoIcon(name: OctoIconName.close, size: 13)
                 }
                 .buttonStyle(RowActionButtonStyle())
                 .help("移除")
@@ -542,29 +566,23 @@ struct FileRowView: View {
             switch item.status {
             case .pending:
                 // 暂停时换成暂停图标：转圈动画还在转，用户就以为没暂停。
-                Image(systemName: appState.compressionPaused ? "pause.fill" : "photo")
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
+                OctoIcon(
+                    name: appState.compressionPaused ? OctoIconName.pause : OctoIconName.compress,
+                    size: 13,
+                    color: .secondary
+                )
             case .running:
                 ProgressView()
                     .scaleEffect(0.5)
                     .frame(width: 24, height: 24)
             case .done:
-                Image(systemName: "checkmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundColor(.green)
+                OctoIcon(name: OctoIconName.check, size: 13, color: .green)
             case .failed:
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundColor(.red)
+                OctoIcon(name: OctoIconName.close, size: 13, color: .red)
             case .removed:
-                Image(systemName: "minus")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundColor(.secondary)
+                OctoIcon(name: OctoIconName.minus, size: 13, color: .secondary)
             case .restored:
-                Image(systemName: "arrow.uturn.backward")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(.secondary)
+                OctoIcon(name: OctoIconName.restore, size: 12, color: .secondary)
             }
         }
     }
@@ -583,7 +601,7 @@ struct FileRowView: View {
             HStack(spacing: 2) {
                 if let r = item.result, r.success {
                     Button { appState.saveResult(path: item.path) } label: {
-                        Image(systemName: "square.and.arrow.down")
+                        OctoIcon(name: OctoIconName.save, size: 14)
                     }
                     .buttonStyle(RowActionButtonStyle())
                     .help("另存为")
@@ -596,13 +614,13 @@ struct FileRowView: View {
                             allResults: appState.comparableResults
                         )
                     } label: {
-                        Image(systemName: "rectangle.split.2x1")
+                        OctoIcon(name: OctoIconName.compare, size: 14)
                     }
                     .buttonStyle(RowActionButtonStyle())
                     .help("对比查看")
 
                     Button { appState.restoreFile(path: item.path) } label: {
-                        Image(systemName: "arrow.uturn.backward")
+                        OctoIcon(name: OctoIconName.restore, size: 14)
                     }
                     .buttonStyle(RowActionButtonStyle())
                     .help("恢复原图")
@@ -610,13 +628,13 @@ struct FileRowView: View {
                     Button {
                         appState.openInFinder(path: r.outputPath ?? item.path)
                     } label: {
-                        Image(systemName: "folder")
+                        OctoIcon(name: OctoIconName.finder, size: 14)
                     }
                     .buttonStyle(RowActionButtonStyle())
                     .help("在访达中显示")
                 }
                 Button { appState.copyLog(path: item.path) } label: {
-                    Image(systemName: "doc.on.doc")
+                    OctoIcon(name: OctoIconName.copy, size: 14)
                 }
                 .buttonStyle(RowActionButtonStyle())
                 .help("复制日志")
@@ -624,20 +642,20 @@ struct FileRowView: View {
         case .failed:
             HStack(spacing: 2) {
                 Button { appState.retryFile(path: item.path) } label: {
-                    Image(systemName: "arrow.clockwise")
+                    OctoIcon(name: OctoIconName.recompress, size: 14)
                 }
                 .buttonStyle(RowActionButtonStyle())
                 .help("重试")
 
                 Button { appState.copyLog(path: item.path) } label: {
-                    Image(systemName: "doc.on.doc")
+                    OctoIcon(name: OctoIconName.copy, size: 14)
                 }
                 .buttonStyle(RowActionButtonStyle())
                 .help("复制日志")
             }
         case .restored:
             Button { appState.retryFile(path: item.path) } label: {
-                Image(systemName: "arrow.clockwise")
+                OctoIcon(name: OctoIconName.recompress, size: 14)
             }
             .buttonStyle(RowActionButtonStyle())
             .help("重新压缩")
@@ -707,12 +725,12 @@ struct CompressButton: View {
         if appState.isCompressing {
             // 暂停时换成静态的暂停图标：转圈动画还在转，用户就以为没暂停。
             return appState.compressionPhase == .paused
-                ? "pause.fill"
-                : "arrow.triangle.2.circlepath"
+                ? OctoIconName.pause
+                : OctoIconName.recompress
         }
-        if isDone { return "checkmark" }
-        if appState.pendingCount > 0 && appState.processedCount > 0 { return "play.fill" }
-        return "arrow.down.circle.fill"
+        if isDone { return OctoIconName.check }
+        if appState.pendingCount > 0 && appState.processedCount > 0 { return OctoIconName.play }
+        return OctoIconName.compress
     }
 
     var body: some View {
@@ -730,8 +748,7 @@ struct CompressButton: View {
                         .animation(.easeOut(duration: 0.3), value: appState.compressProgress)
                 }
                 HStack(spacing: 6) {
-                    Image(systemName: buttonIcon)
-                        .font(.system(size: 12))
+                    OctoIcon(name: buttonIcon, size: 15)
                     Text(buttonText)
                 }
                 .font(.system(size: 13, weight: .semibold))
@@ -781,9 +798,7 @@ struct SettingsPanelView: View {
                 withAnimation(.easeInOut(duration: 0.2)) { appState.settingsExpanded.toggle() }
             } label: {
                 HStack(spacing: 5) {
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.system(size: 12))
-                        .foregroundColor(.accentColor)
+                    OctoIcon(name: OctoIconName.sliders, size: 15, color: .accentColor)
                     Text("压缩设置")
                         .font(.system(size: 13, weight: .semibold))
                     if !appState.settingsExpanded {
@@ -794,10 +809,12 @@ struct SettingsPanelView: View {
                             .padding(.leading, 1)
                     }
                     Spacer()
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(Color(nsColor: .tertiaryLabelColor))
-                        .rotationEffect(.degrees(appState.settingsExpanded ? 180 : 0))
+                    OctoIcon(
+                        name: OctoIconName.chevronDown,
+                        size: 13,
+                        color: Color(nsColor: .tertiaryLabelColor)
+                    )
+                    .rotationEffect(.degrees(appState.settingsExpanded ? 180 : 0))
                 }
                 .contentShape(Rectangle())
             }
@@ -843,8 +860,7 @@ struct SettingsPanelView: View {
             Button {
                 showSystemInfo = true
             } label: {
-                Image(systemName: "info.circle")
-                    .font(.system(size: 12))
+                OctoIcon(name: OctoIconName.info, size: 14)
             }
             .buttonStyle(RowActionButtonStyle())
             .help("系统转换说明")
@@ -1039,18 +1055,14 @@ struct SystemInfoModal: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 6) {
-                    Image(systemName: "info.circle")
-                        .font(.system(size: 13))
-                        .foregroundColor(.accentColor)
+                    OctoIcon(name: OctoIconName.info, size: 15, color: .accentColor)
                     Text("系统转换说明")
                         .font(.system(size: 14, weight: .semibold))
                     Spacer()
                     Button {
                         isPresented = false
                     } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 14))
-                            .foregroundColor(.secondary.opacity(0.4))
+                        OctoIcon(name: OctoIconName.error, size: 16, color: .secondary.opacity(0.4))
                     }
                     .buttonStyle(.plain)
                 }

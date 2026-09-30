@@ -1003,14 +1003,15 @@ enum HistoryRowAction: Hashable {
         }
     }
 
-    var symbol: String {
+    /// OctoIcon glyph 名字（与前端 index.html sprite 同一套 id），不是 SF Symbol。
+    var icon: String {
         switch self {
-        case .saveAs: return "square.and.arrow.down"
-        case .compare: return "rectangle.split.2x1"
-        case .restore: return "arrow.uturn.backward"
-        case .deleteOutput: return "trash"
-        case .finder: return "folder"
-        case .copyLog: return "doc.on.doc"
+        case .saveAs: return OctoIconName.save
+        case .compare: return OctoIconName.compare
+        case .restore: return OctoIconName.restore
+        case .deleteOutput: return OctoIconName.trash
+        case .finder: return OctoIconName.finder
+        case .copyLog: return OctoIconName.copy
         }
     }
 }

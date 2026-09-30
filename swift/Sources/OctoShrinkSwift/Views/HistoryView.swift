@@ -58,7 +58,7 @@ struct HistoryPageView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ViewHeaderView(title: "历史记录", systemImage: "clock.arrow.circlepath") {
+            ViewHeaderView(title: "历史记录", icon: OctoIconName.history) {
                 Text("\(appState.historyEntries.count) 条")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
@@ -66,7 +66,12 @@ struct HistoryPageView: View {
                 Button {
                     appState.clearHistory()
                 } label: {
-                    Label("清空历史", systemImage: "trash").labelIconToTextSpacing(3)
+                    Label {
+                        Text("清空历史")
+                    } icon: {
+                        OctoIcon(name: OctoIconName.trash, size: 15)
+                    }
+                    .labelIconToTextSpacing(3)
                 }
                 .buttonStyle(GhostButtonStyle())
                 // 清空 = 连原图备份一起删。压缩进行中禁用；真正的判据在后端
@@ -108,9 +113,7 @@ struct HistoryRowView: View {
         HStack(spacing: 8) {
             ZStack {
                 Circle().fill(Color(nsColor: .separatorColor).opacity(0.35))
-                Image(systemName: rowIcon)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(rowIconColor)
+                OctoIcon(name: rowIcon, size: 12, color: rowIconColor)
             }
             .frame(width: 24, height: 24)
 
@@ -155,7 +158,7 @@ struct HistoryRowView: View {
                 // 判据在服务层（historyRowActions），视图只负责摆 —— 前端 app.js 是同一份顺序。
                 ForEach(historyRowActions(entry), id: \.self) { action in
                     Button { perform(action) } label: {
-                        Image(systemName: action.symbol)
+                        OctoIcon(name: action.icon, size: 14)
                     }
                     .buttonStyle(RowActionButtonStyle())
                     .help(action.title)
@@ -182,8 +185,8 @@ struct HistoryRowView: View {
 
     /// 重建条目用警告图标而不是对勾：它不是一次成功的压缩，是一次数据抢救。
     private var rowIcon: String {
-        if isRecovery { return "exclamationmark.triangle" }
-        return entry.status == .restored ? "arrow.uturn.backward" : "checkmark"
+        if isRecovery { return OctoIconName.warning }
+        return entry.status == .restored ? OctoIconName.restore : OctoIconName.check
     }
 
     private var rowIconColor: Color {

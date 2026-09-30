@@ -31,11 +31,12 @@ enum AppTheme: String, CaseIterable {
         case .dark: return "暗黑"
         }
     }
+    /// OctoIcon glyph 名字（与前端 icon-theme-auto / icon-sun / icon-moon 同 id）。
     var iconName: String {
         switch self {
-        case .auto: return "circle.lefthalf.filled"
-        case .light: return "sun.max"
-        case .dark: return "moon"
+        case .auto: return OctoIconName.themeAuto
+        case .light: return OctoIconName.sun
+        case .dark: return OctoIconName.moon
         }
     }
     func resolved() -> Bool { // true = dark

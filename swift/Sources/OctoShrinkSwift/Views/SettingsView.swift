@@ -10,7 +10,7 @@ struct AppSettingsPageView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ViewHeaderView(title: "设置", systemImage: "gearshape")
+            ViewHeaderView(title: "设置", icon: OctoIconName.settings)
 
             // .view-section-header：卡片内的小节标题
             HStack(spacing: 5) {

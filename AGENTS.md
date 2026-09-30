@@ -435,7 +435,8 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - tests/compression-parity.cjs（`npm run test:frontend`、`build_all.sh`、Release workflow）— 核对三线默认压缩质量/Smart Mode/输出模式、Smart PNG 候选、App Store 进程内编码参数，以及 Swift 与 Direct 共用 CLI 编码器的参数和 Swift bundle 编码器清单；编码路径变化时同步扩展此契约
 - tests/compare-slider.cjs（`npm run test:frontend`）— 对比窗口：底部那根悬浮滑条不许回来（含它的 CSS/JS 引用）、分割数学照常（裁剪百分比 / 手柄位置 / 越界与非法值）、连续拖动合并到一帧、拖拽入口与「平移时不抢手势」的守卫都在
 - tests/update-panel.cjs（`npm run test:frontend`）— 更新面板：控件必须只在设置页容器内、标题栏不许留死样式，Direct 与 App Store 的显隐，下载进度在取消/失败后归零
-- scripts/test_swift_history.sh — Swift 线历史·备份·覆盖事务·恢复·取消与暂停·停止·队列进度·CPU 上限·历史行按钮自检（真跑文件系统，31 组；第 [31] 组真跑 JPEG 编码管道——`convertToPPM` 的 24bpp CGContext 在 macOS 恒为 nil、v2.5.31~2.5.46 全线 JPEG 因此静默跳过 mozjpeg，就是它逮住的；parity 静态参数测试钉不住这种运行期错误）
+- scripts/test_swift_history.sh — Swift 线历史·备份·覆盖事务·恢复·取消与暂停·停止·队列进度·CPU 上限·历史行按钮自检（真跑文件系统，31 组；第 [31] 组真跑 JPEG 编码管道——`convertToPPM` 的 24bpp CGContext 在 macOS 恒为 nil、v2.5.31~2.5.46 全线 JPEG 因此静默跳过 mozjpeg，就是它逮住的；parity 静态参数测试钉不住这种运行期错误）。脚本头部还检查**图标一致性**：`swift/.../Views/OctoIconLibrary.swift` 必须覆盖 frontend/index.html + compare.html 两个 sprite 的全部 `<symbol>`）
+- scripts/gen_swift_icons.py — Swift 图标库生成器：从两个 HTML sprite 解析 glyph（path/circle/rect，SVG 弧线按 F.6.5 参数化转三次贝塞尔）生成 `Views/OctoIconLibrary.swift`（24 网格 / 1.8 描边 / 圆头圆角，与前端 `.symbol-icon` 同规格）。**前端改图标后必须重跑它**（`python3 scripts/gen_swift_icons.py`）；Swift 线的所有按钮图标一律走 `OctoIcon(name:)`（名称常量在 `Models/OctoIconName.swift`），❌ 不许手画近似 glyph、❌ 不许用 SF Symbol —— 这是三线图标保持一致的手段
 
 ## App Store 提交完整流程与注意事项
 
