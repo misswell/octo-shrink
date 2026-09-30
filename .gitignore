@@ -34,3 +34,4 @@ marketing/
 
 # App Store provisioning profile（本机生成，会过期；靠 asc profiles create 重建，见 AGENTS.md §6.5）
 src-tauri/*.provisionprofile
+.mimosa

@@ -60,6 +60,7 @@ function makeEnv(variant) {
       if (command === 'install_update') {
         if (env.installMode === 'fail') throw new Error('更新失败');
         if (env.installMode === 'cancelled') throw new Error('用户取消下载');
+        if (env.installMode === 'busy') throw new Error('更新已在进行中');
         return null;
       }
       return null;
@@ -68,6 +69,9 @@ function makeEnv(variant) {
   });
   const slice = (from, to) => source.slice(source.indexOf(from), source.indexOf(to));
   vm.runInContext(slice('/// 更新面板在设置页里', 'function updateSettingsSummary('), context);
+  // 真实应用在启动的 Init IIFE 里注册全局进度监听（那段不在切片里，这里照做）：
+  // 进度 UI 由这一份全局监听驱动，startUpdateDownload 自己不再订阅。
+  context.listen('update-progress', event => context.applyUpdateProgress(event.payload || 0));
   env.ctx = context;
   const last = name => [...calls].reverse().find(call => call[0] === name);
   env.last = last;
@@ -160,5 +164,42 @@ const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve()
   assert.equal(direct.els.updateDownloadRow.style.display, 'none');
   assert.equal(direct.els.updateCheckBtn.disabled, false);
 
-  console.log('PASS: 更新面板只在设置页、App Store 版整行消失、下载进度用完收干净');
+  // ── 页面重载后的"接管"：「还原默认设置」走 location.reload，后端下载还在跑 ──
+  const rejoin = makeEnv('Direct');
+  rejoin.ctx.initUpdatePanel();
+  rejoin.els.updateDownloadRow.style.display = 'none'; // 重载后进度 UI 是丢的
+  rejoin.progress({ payload: 30 });                    // 仍在跑的下载的下一条进度
+  assert.equal(rejoin.els.updateDownloadRow.style.display, '', '重载后进度事件要把进度条接管回来');
+  assert.equal(rejoin.els.updateCheckBtn.dataset.downloading, '1', '按钮进入下载中状态');
+  assert.equal(rejoin.els.updateProgressFill.style.width, '30%');
+  assert.equal(rejoin.els.titlebarProgress.style.width, '30%');
+
+  // 接管状态下再点「立即更新」：后端单飞守卫拒绝（进行中），前端保持下载形态，
+  // 绝不重置进度、绝不开第二个下载。
+  rejoin.installMode = 'busy';
+  rejoin.els.updateCheckBtn.disabled = false;
+  rejoin.ctx.startUpdateDownload(rejoin.els.updateCheckBtn, rejoin.els.updateStatus, '9.9.9');
+  await flush();
+  assert.equal(rejoin.els.updateDownloadRow.style.display, '', '"进行中"时进度行不许被收起');
+  assert.equal(rejoin.els.updateCheckBtn.disabled, true, '按钮保持禁用（下载仍在跑）');
+  rejoin.progress({ payload: 61 });
+  assert.equal(rejoin.els.updateProgressFill.style.width, '61%', '进度条继续由仍在跑的任务驱动');
+
+  // 收摊后的迟到进度：不许把刚收起的进度条弹回来。
+  const late = makeEnv('Direct');
+  late.ctx.initUpdatePanel();
+  late.ctx.endUpdateDownload();
+  late.progress({ payload: 55 });
+  assert.equal(late.els.updateDownloadRow.style.display, 'none', '收摊后的迟到进度不许弹回进度条');
+  assert.equal(late.els.titlebarProgress.style.width, '0%');
+
+  // ── 源码契约：进度监听全局唯一 + 后端单飞守卫生效 ──
+  assert.equal(source.split("listen('update-progress'").length - 1, 1,
+    'update-progress 只许一个全局监听（面板函数里不许再订阅）');
+  const rust = fs.readFileSync('src-tauri/src/lib.rs', 'utf8');
+  assert.ok(rust.includes('更新已在进行中'), '后端必须有单飞守卫（拒绝并发第二个下载）');
+  assert.ok(rust.includes('static UPDATE_TASK'), '下载任务要能被取消中止');
+  assert.ok(rust.includes('handle.abort()'), 'cancel_update 要真的 abort 下载任务');
+
+  console.log('PASS: 更新面板只在设置页、App Store 版整行消失、下载进度用完收干净、重载后接管且无并发下载');
 })().catch(error => { console.error(error); process.exit(1); });

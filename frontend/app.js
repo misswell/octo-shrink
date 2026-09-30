@@ -2314,8 +2314,36 @@ async function manualCheckUpdate() {
   }
 }
 
+/// 更新下载的进度监听是**全局唯一**的一份：下载任务跑在后端，页面重载
+/// （「还原默认设置」走 location.reload）不会中断它——重载后第一条进度
+/// 事件就把进度条"接管"回来；后端有单飞守卫，并发下载不存在，所以进度条
+/// 永远只有一条数据源。取消 / 失败收摊之后置 true，避免迟到的进度事件
+/// 把刚收起的进度条又弹回来。
+var updateRejoinSuppressed = false;
+
+function applyUpdateProgress(pct) {
+  var row = document.getElementById('updateDownloadRow');
+  var text = document.getElementById('updateProgressText');
+  var fill = document.getElementById('updateProgressFill');
+  var tbBar = document.getElementById('titlebarProgress');
+  var btn = document.getElementById('updateCheckBtn');
+  if (row && pct > 0 && row.style.display === 'none' && !updateRejoinSuppressed) {
+    // 页面重载后进度 UI 丢了，但后端还在下载：进度事件一到就恢复"下载中"形态
+    row.style.display = '';
+    if (btn && btn.dataset.downloading !== '1') {
+      btn.dataset.downloading = '1';
+      btn.disabled = true;
+    }
+  }
+  if (row && row.style.display === 'none') return; // 已收起的进度条不再被写入
+  if (tbBar) tbBar.style.width = pct + '%';
+  if (fill) fill.style.width = pct + '%';
+  if (text) text.textContent = localizeUiText('下载中 ') + pct + '%';
+}
+
 function startUpdateDownload(btn, statusEl, version) {
   btn.dataset.downloading = '1';
+  updateRejoinSuppressed = false;
   var row = document.getElementById('updateDownloadRow');
   var text = document.getElementById('updateProgressText');
   var fill = document.getElementById('updateProgressFill');
@@ -2328,14 +2356,6 @@ function startUpdateDownload(btn, statusEl, version) {
   if (statusEl) statusEl.textContent = '';
   btn.disabled = true;
 
-  var unlistenFn = null;
-  listen('update-progress', function(event) {
-    var pct = event.payload || 0;
-    if (tbBar) tbBar.style.width = pct + '%';
-    if (fill) fill.style.width = pct + '%';
-    if (text) text.textContent = localizeUiText('下载中 ') + pct + '%';
-  }).then(function(fn) { unlistenFn = fn; });
-
   invoke('install_update')
     .then(function() {
       if (text) text.textContent = localizeUiText('安装中…');
@@ -2343,7 +2363,13 @@ function startUpdateDownload(btn, statusEl, version) {
       if (tbBar) tbBar.style.width = '100%';
     })
     .catch(function(err) {
-      if (unlistenFn) unlistenFn();
+      if (String(err).indexOf('进行中') >= 0) {
+        // 后端单飞守卫拒绝并发下载：已有一个下载在跑（进度 UI 曾被页面重载
+        // 丢掉）。保持"下载中"形态即可——仍在播报的进度事件会立刻把进度条
+        // 接管回来，装完之后应用自行重启。
+        if (text) text.textContent = localizeUiText('下载中') + '…';
+        return;
+      }
       if (btn.dataset.downloading !== '1') return;
       btn.dataset.downloading = '';
       endUpdateDownload();
@@ -2356,7 +2382,9 @@ function startUpdateDownload(btn, statusEl, version) {
 
 /// 下载停下来了（取消、失败都算）：面板那一行收起来，窗口进度条归零。
 /// 成功安装时不调用它 —— 那一刻界面正等着被替换掉。
+/// 同时打开"抑制接管"：迟到的进度事件不许把刚收起的进度条弹回来。
 function endUpdateDownload() {
+  updateRejoinSuppressed = true;
   var row = document.getElementById('updateDownloadRow');
   var fill = document.getElementById('updateProgressFill');
   var tbBar = document.getElementById('titlebarProgress');
@@ -2485,6 +2513,11 @@ function loadCompressSettings() {
   // 前端点按钮时只是先乐观地画一遍（失败会回滚）。
   listen('compression-state-change', function(event) {
     applyCompressionStateEvent(event.payload);
+  }).catch(function() {});
+  // 更新进度全局唯一监听：重载后靠它把仍在跑的下载"接管"回界面
+  // （详见 applyUpdateProgress 的说明）。
+  listen('update-progress', function(event) {
+    applyUpdateProgress(event.payload || 0);
   }).catch(function() {});
   loadCompressSettings();
   // 队列摘要里的「CPU 4/10」需要在进入设置页之前就拿到，所以启动即检测一次。

@@ -457,23 +457,30 @@ final class AppState: ObservableObject {
 
     // MARK: - Theme
 
+    /// 把主题落到 AppKit 外观上。**auto 必须是 nil**：nil 表示"跟随系统"，
+    /// AppKit 会自动实时响应系统外观切换；若按当前系统解析成具体的
+    /// aqua / darkAqua 再赋给 NSApp.appearance，就等于把自动固化成一张
+    /// 启动时的快照 —— 系统换主题后应用不跟随（Tauri 线的 matchMedia
+    /// 是实时跟随的，三线不一致）。
+    private func applyThemeAppearance() {
+        switch theme {
+        case .auto: NSApp.appearance = nil
+        case .light: NSApp.appearance = NSAppearance(named: .aqua)
+        case .dark: NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
+    }
+
     func cycleTheme() {
         theme = theme.next()
         saveTheme()
-        let ns: NSAppearance
-        if theme.resolved() { ns = NSAppearance(named: .darkAqua)! }
-        else { ns = NSAppearance(named: .aqua)! }
-        NSApp.appearance = ns
+        applyThemeAppearance()
         showToast("主题: \(theme.shortLabel)")
     }
 
     private func loadTheme() {
         let raw = UserDefaults.standard.string(forKey: "octoshrink-theme") ?? "auto"
         theme = AppTheme(rawValue: raw) ?? .auto
-        let ns: NSAppearance
-        if theme.resolved() { ns = NSAppearance(named: .darkAqua)! }
-        else { ns = NSAppearance(named: .aqua)! }
-        NSApp.appearance = ns
+        applyThemeAppearance()
     }
 
     private func saveTheme() {

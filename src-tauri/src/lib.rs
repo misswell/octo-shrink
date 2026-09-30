@@ -139,6 +139,19 @@ async fn check_update_with_proxy_fallback(
 
 static UPDATE_CANCELLED: AtomicBool = AtomicBool::new(false);
 static UPDATE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// 正在跑的更新下载任务（单飞 + 可中止）。
+///
+/// 页面重载（例如「还原默认设置」走 location.reload）**不会**中断后端的
+/// 下载任务——重载后再点「立即更新」必须被这里的单飞守卫挡住，否则两个
+/// 下载并发、两串 update-progress 事件交替写同一根进度条（进度来回跳）。
+/// 取消时直接 abort：传输立刻停，重试不必等旧下载默默跑完。
+#[cfg(all(
+    target_os = "macos",
+    feature = "cli-backends",
+    not(feature = "inproc-backends")
+))]
+static UPDATE_TASK: std::sync::Mutex<Option<tauri::async_runtime::JoinHandle<()>>> =
+    std::sync::Mutex::new(None);
 
 fn supported_theme(theme: &str) -> Option<&'static str> {
     match theme.trim() {
@@ -296,6 +309,7 @@ async fn check_for_update(_app: tauri::AppHandle) -> Result<Option<DirectUpdateI
 async fn download_and_install_update(
     update: tauri_plugin_updater::Update,
     app: &tauri::AppHandle,
+    my_gen: u64,
     total: std::sync::Arc<AtomicU64>,
     downloaded: std::sync::Arc<AtomicU64>,
 ) -> Result<(), String> {
@@ -303,7 +317,9 @@ async fn download_and_install_update(
     update
         .download_and_install(
             move |chunk_len: usize, total_size: Option<u64>| {
-                if UPDATE_CANCELLED.load(Ordering::SeqCst) {
+                // 被取消 / 已被新任务顶替（generation 变了）就停止播报，
+                // 绝不让旧任务的进度和当前任务的进度交替写同一根进度条。
+                if update_was_cancelled(my_gen) {
                     return;
                 }
                 if let Some(t) = total_size {
@@ -353,10 +369,44 @@ fn reset_update_progress(app: &tauri::AppHandle, total: &AtomicU64, downloaded: 
 ))]
 #[tauri::command]
 async fn install_update(app: tauri::AppHandle) -> Result<bool, String> {
+    // 单飞：同一时刻只允许一个下载安装任务。页面重载（「还原默认设置」走
+    // location.reload）不会中断后端下载，重载后再点「立即更新」必须被这里
+    // 拒绝——前端会顺着仍在播报的 update-progress 事件把进度条接管回来，
+    // 而不是并发第二个下载（那会让两串进度交替写同一根进度条，来回跳）。
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    {
+        let mut slot = UPDATE_TASK.lock().unwrap();
+        if slot.is_some() {
+            return Err("更新已在进行中".into());
+        }
+        let app_for_task = app.clone();
+        let handle = tauri::async_runtime::spawn(async move {
+            let result = run_update_worker(&app_for_task).await;
+            let _ = tx.send(result);
+            // 任务自然结束（成功 / 失败 / 无更新）时清掉自己；被 cancel_update
+            // abort 时槽位已被那边取走，这里不会执行。
+            *UPDATE_TASK.lock().unwrap() = None;
+        });
+        *slot = Some(handle);
+    } // guard 出作用域：锁绝不带过下面的 await
+
+    let result = rx.await.map_err(|_| "已取消".to_string())?;
+    match result {
+        Ok(true) => app.restart(),
+        other => other,
+    }
+}
+
+#[cfg(all(
+    target_os = "macos",
+    feature = "cli-backends",
+    not(feature = "inproc-backends")
+))]
+async fn run_update_worker(app: &tauri::AppHandle) -> Result<bool, String> {
     UPDATE_CANCELLED.store(false, Ordering::SeqCst);
     let my_gen = UPDATE_GENERATION.fetch_add(1, Ordering::SeqCst);
 
-    let Some(checked_update) = check_update_with_proxy_fallback(&app).await? else {
+    let Some(checked_update) = check_update_with_proxy_fallback(app).await? else {
         return Ok(false);
     };
     if update_was_cancelled(my_gen) {
@@ -368,13 +418,13 @@ async fn install_update(app: tauri::AppHandle) -> Result<bool, String> {
     let downloaded = std::sync::Arc::new(AtomicU64::new(0));
 
     let first_result =
-        download_and_install_update(update, &app, total.clone(), downloaded.clone()).await;
+        download_and_install_update(update, app, my_gen, total.clone(), downloaded.clone()).await;
     let result = match first_result {
         Ok(()) => Ok(()),
         Err(proxy_error) if via_proxy && !update_was_cancelled(my_gen) => {
             log::warn!("本地代理更新下载失败，回退直连: {proxy_error}");
-            reset_update_progress(&app, &total, &downloaded);
-            let direct_update = match check_update_on_route(&app, false).await {
+            reset_update_progress(app, &total, &downloaded);
+            let direct_update = match check_update_on_route(app, false).await {
                 Ok(Some(update)) => update,
                 Ok(None) => return Err("直连未找到可下载的更新".into()),
                 Err(error) => return Err(format!("直连更新检查失败: {error}")),
@@ -382,7 +432,7 @@ async fn install_update(app: tauri::AppHandle) -> Result<bool, String> {
             if update_was_cancelled(my_gen) {
                 return Err("已取消".into());
             }
-            download_and_install_update(direct_update, &app, total, downloaded)
+            download_and_install_update(direct_update, app, my_gen, total, downloaded)
                 .await
                 .map_err(|direct_error| format!("代理下载失败，直连下载也失败: {direct_error}"))
         }
@@ -394,7 +444,7 @@ async fn install_update(app: tauri::AppHandle) -> Result<bool, String> {
     }
 
     result?;
-    app.restart();
+    Ok(true)
 }
 
 #[cfg(not(all(
@@ -415,6 +465,14 @@ async fn install_update(_app: tauri::AppHandle) -> Result<bool, String> {
 #[tauri::command]
 async fn cancel_update() -> Result<(), String> {
     UPDATE_CANCELLED.store(true, Ordering::SeqCst);
+    // generation 加一：让旧任务在「下载完 → 安装前」的检查点也认账
+    UPDATE_GENERATION.fetch_add(1, Ordering::SeqCst);
+    // 直接中止下载任务：更新插件的下载不接受回调中断，abort 是让传输立刻
+    // 停下的唯一方式——否则"取消"只是标记，旧下载会默默跑完，期间用户重试
+    // 还会被单飞守卫挡住。
+    if let Some(handle) = UPDATE_TASK.lock().unwrap().take() {
+        handle.abort();
+    }
     Ok(())
 }
 

@@ -407,7 +407,7 @@ jobs:
           DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${ARCHIVE}"
           jq -n \
             --arg version "$VERSION" \
-            --arg notes "OctoShrink ${VERSION}: the Swift native build now matches the Direct build end to end — the compare window uses the same zoom, pan and split-line interactions, and every button icon uses the same hand-drawn glyphs across all three builds." \
+            --arg notes "OctoShrink ${VERSION}: fixed the update panel starting a second download when the page reloaded mid-download (restoring default settings during an update) — progress no longer bounces between two downloads, and canceling now stops the transfer immediately. The Swift native build's auto theme now follows the system appearance live." \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg signature "$SIGNATURE" \
             --arg url "$DOWNLOAD_URL" \

@@ -1367,6 +1367,23 @@ let jpegPipelineCheck: () -> Void = {
 }
 jpegPipelineCheck()
 
+print("[32] 主题「自动」必须真跟随系统（appearance = nil，不是快照）")
+do {
+    let appStateSource = try String(
+        contentsOfFile: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/OctoShrinkSwift/ViewModels/AppState.swift").path,
+        encoding: .utf8)
+    check(appStateSource.contains("case .auto: NSApp.appearance = nil"),
+          "auto 必须解成 nil（AppKit 才会实时跟随系统外观切换）")
+    check(!appStateSource.contains("NSApp.appearance = ns"),
+          "不许把 auto 固化成 aqua/darkAqua 快照——系统换主题后就不跟随了")
+    check(appStateSource.contains("applyThemeAppearance"),
+          "load/cycle 都要走同一个 applyThemeAppearance")
+}
+
 print(failures == 0
       ? "\n✓ Swift 历史 / 备份 / 暂停 / 停止 / 队列进度 / 设置默认折叠 / CPU 上限自检全部通过"
       : "\n✗ Swift 自检失败 \(failures) 项")
