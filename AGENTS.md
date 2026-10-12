@@ -131,7 +131,7 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 
 ## 当前状态（编辑此节以保持最新）
 
-- ✅ Direct 产物线已就绪：v2.2.0 已签名公证发布，notarize.sh 工作
+- ✅ Direct 产物线已就绪：**v2.5.57 已发布**（GitHub Release `410792817`，10 个资产：3 个 macOS DMG + Universal 更新包 + Win/Linux；`releases/latest/download/latest.json` 实测 version/notes/URL 全对、更新包 200）。本机 `notarize.sh` 需要 Developer ID 身份，当前是否可用见 §14
 - ✅ App Store 产物线已构建并上传：v2.2.9 PKG 已上传 App Store Connect（Apple ID: 6792604654，Delivery UUID 6d414d74-5d30-449f-a666-ac11f6ea4814）
 - ✅ 白屏与 IPC 问题已最终修复（v2.2.9）：固定端口段 41845-41847 + HTTP 服务器 + 完整 ACL（allow-* + remote.urls 精确带端口 origin），详见第 3 节「白屏与 IPC 反复 bug 终极解法」
 - ✅ 沙盒文件访问已修复：security-scoped bookmarks + 弹窗授权 + 清理旧授权功能
