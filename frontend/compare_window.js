@@ -7,6 +7,12 @@ const { invoke } = window.__TAURI__.core;
 const { listen, emit } = window.__TAURI__.event;
 const { getCurrentWindow } = window.__TAURI__.window;
 
+// Subscribe while this native window exists, including opening from history.
+emit('compare-ready').catch(function() {});
+getCurrentWindow().onCloseRequested(function() {
+  emit('compare-closed').catch(function() {});
+});
+
 function localizeUiText(value) {
   if (typeof window === 'undefined' || !window.OctoShrinkI18n) return value;
   return window.OctoShrinkI18n.translateText(value);

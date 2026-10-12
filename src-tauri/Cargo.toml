@@ -58,3 +58,8 @@ codegen-units = 1
 lto = true
 opt-level = "s"
 strip = true
+
+# Keep host proc-macro symbols loadable by rustc (Cargo/Rust 1.90 on macOS).
+# The shipped app still uses the stripped release profile above.
+[profile.release.build-override]
+strip = false

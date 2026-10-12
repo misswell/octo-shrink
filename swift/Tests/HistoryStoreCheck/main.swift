@@ -12,6 +12,9 @@ import Foundation
 import ImageIO
 import CoreGraphics
 import UniformTypeIdentifiers
+import Darwin.Mach
+import Darwin
+import AppKit
 
 var failures = 0
 
@@ -85,6 +88,47 @@ final class PeakMeter: @unchecked Sendable {
         defer { lock.unlock() }
         return doneValue
     }
+}
+
+final class WorklistMeter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var consumed = 0
+    private var paths = Set<String>()
+
+    func record(_ path: String) {
+        lock.lock()
+        consumed += 1
+        paths.insert(path)
+        lock.unlock()
+    }
+
+    var counts: (consumed: Int, unique: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (consumed, paths.count)
+    }
+}
+
+func currentPhysicalFootprint() -> UInt64? {
+    var info = task_vm_info_data_t()
+    var count = mach_msg_type_number_t(
+        MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size
+    )
+    let result = withUnsafeMutablePointer(to: &info) { infoPointer in
+        infoPointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { pointer in
+            task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), pointer, &count)
+        }
+    }
+    guard result == KERN_SUCCESS else { return nil }
+    return UInt64(info.phys_footprint)
+}
+
+func currentMallocLiveBytes() -> UInt64? {
+    var statistics = malloc_statistics_t()
+    // A nil zone asks libmalloc to aggregate every zone, including allocations
+    // routed outside the process's default zone.
+    malloc_zone_statistics(nil, &statistics)
+    return UInt64(statistics.size_in_use)
 }
 
 typealias TaskGroup = DispatchGroup
@@ -1324,6 +1368,11 @@ let jpegPipelineCheck: () -> Void = {
         return
     }
     try? (jpgData as Data).write(to: jpgURL)
+    let jpegAttributes = try? FileManager.default.attributesOfItem(atPath: jpgURL.path)
+    let encodedSize = (jpegAttributes?[.size] as? NSNumber)?.uint64Value ?? 0
+    check(ImageMemoryBudget.estimate(fileAtPath: jpgURL.path)
+          == ImageMemoryBudget.estimate(encodedSize: encodedSize, width: UInt64(side), height: UInt64(side)),
+          "ImageIO 只读 JPEG 头部尺寸并按宽高估算工作内存")
 
     // 1) convertToPPM 必须出活：24bpp（width*3 + kCGImageAlphaNone）的 CGContext
     //    在 macOS 上恒返回 nil，v2.5.31~2.5.46 全线 JPEG 因此静默跳过 mozjpeg。
@@ -1384,7 +1433,374 @@ do {
           "load/cycle 都要走同一个 applyThemeAppearance")
 }
 
+print("[33] 十万项队列由固定 worker 拉取，工作项恰好消费一次")
+do {
+    let appStateSource = try String(
+        contentsOfFile: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/OctoShrinkSwift/ViewModels/AppState.swift").path,
+        encoding: .utf8)
+    check(appStateSource.contains("let worklist = CompressionWorklist(targets)"),
+          "AppState 用共享拉取队列分发目标")
+    check(appStateSource.contains("let workerCount = min(max(1, cpuInfo.budgetCeiling), targets.count)"),
+          "并发闭包数受硬件并行上限约束")
+    check(appStateSource.contains("itemIndexByID[target.id]"),
+          "批次状态和结果通过 id 索引 O(1) 回写")
+    if let importStart = appStateSource.range(of: "func addFiles(paths: [String])"),
+       let importEnd = appStateSource.range(of: "func addFilesPanel()", range: importStart.lowerBound..<appStateSource.endIndex) {
+        check(!appStateSource[importStart.lowerBound..<importEnd.lowerBound].contains("firstIndex"),
+              "批量导入不用逐路径扫描队列")
+    } else {
+        check(false, "可定位批量导入实现以守住线性处理")
+    }
+    check(!appStateSource.contains("for (path, itemID) in targets"),
+          "不再为每个文件创建一个阻塞闭包")
+
+    let total = 100_000
+    let targets = (0..<total).map { index in
+        CompressionWorkItem(id: UUID(), path: "/large-queue/\(index).jpg")
+    }
+    let worklist = CompressionWorklist(targets)
+    let meter = WorklistMeter()
+    DispatchQueue.concurrentPerform(iterations: 4) { _ in
+        while let target = worklist.takeNext() {
+            meter.record(target.path)
+        }
+    }
+    let counts = meter.counts
+    check(worklist.count == total, "十万项清单规模完整")
+    check(counts.consumed == total && counts.unique == total,
+          "四个 worker 并发拉取时十万项全部且只消费一次")
+    check(worklist.takeNext() == nil, "消费完毕后不再返回重复任务")
+}
+
+print("[34] 图片工作内存估算与调度预算")
+func memoryBudgetCheck() {
+    let mib = ImageMemoryBudget.mebibyte
+    check(ImageMemoryBudget.limit(totalPhysicalMemory: nil) == 512 * mib,
+          "未知物理内存使用 512 MiB 默认预算")
+    check(ImageMemoryBudget.limit(totalPhysicalMemory: 0) == 512 * mib,
+          "系统未报告物理内存时使用默认预算")
+    check(ImageMemoryBudget.limit(totalPhysicalMemory: 4 * 1_073_741_824) == 1_073_741_824,
+          "已知物理内存取四分之一")
+    check(ImageMemoryBudget.limit(totalPhysicalMemory: 1) == 256 * mib,
+          "预算下限为 256 MiB")
+
+    check(ImageMemoryBudget.estimate(encodedSize: 100, width: 100, height: 50)
+          == 80_000 + 200 + 64 * mib,
+          "识别尺寸使用像素×16、文件×2和 64 MiB 余量")
+    check(ImageMemoryBudget.estimate(encodedSize: 100, width: nil, height: 50)
+          == 400 + 256 * mib,
+          "无尺寸信息时使用文件×4和 256 MiB 余量")
+    check(ImageMemoryBudget.estimate(encodedSize: UInt64.max, width: nil, height: nil) == .max,
+          "fallback 算术溢出时饱和到 UInt64.max")
+    check(ImageMemoryBudget.estimate(encodedSize: 0, width: .max, height: 2) == .max,
+          "像素估算算术溢出时饱和到 UInt64.max")
+
+    let scheduler = CompressionScheduler(maxParallelism: 2, memoryLimitBytes: 100)
+    scheduler.beginBatch()
+    guard case .acquired(let first) = scheduler.acquireOutcome(memoryCost: 70, cancelled: { false }) else {
+        check(false, "首个预算名额应立即取得")
+        return
+    }
+    check(scheduler.reservedMemory == 70, "Permit 取得时记账图片工作内存")
+    let waiter = FlagBox()
+    let waiterGroup = DispatchGroup()
+    waiterGroup.enter()
+    DispatchQueue.global().async {
+        if case .acquired(let permit) = scheduler.acquireOutcome(memoryCost: 40, cancelled: { false }) {
+            waiter.mark("acquired")
+            permit.release()
+        }
+        waiterGroup.leave()
+    }
+    Thread.sleep(forTimeInterval: 0.1)
+    check(!waiter.has("acquired"), "CPU 尚有名额但工作内存预算不足时等待")
+    first.release()
+    first.release()
+    _ = waiterGroup.wait(timeout: .now() + 2)
+    check(waiter.has("acquired"), "释放 Permit 后唤醒内存等待者")
+    check(scheduler.activeJobs == 0 && scheduler.reservedMemory == 0,
+          "Permit 重复释放安全且 CPU/内存记账同时归零")
+    scheduler.endBatch()
+
+    let exclusiveScheduler = CompressionScheduler(maxParallelism: 2, memoryLimitBytes: 100)
+    exclusiveScheduler.beginBatch()
+    guard case .acquired(let oversized) = exclusiveScheduler.acquireOutcome(memoryCost: 150, cancelled: { false }) else {
+        check(false, "超预算图片在空闲时必须允许独占运行")
+        return
+    }
+    check(exclusiveScheduler.reservedMemory == 150, "超预算独占任务仍记入真实估算值")
+    let small = FlagBox()
+    let smallGroup = DispatchGroup()
+    smallGroup.enter()
+    DispatchQueue.global().async {
+        if case .acquired(let permit) = exclusiveScheduler.acquireOutcome(memoryCost: 1, cancelled: { false }) {
+            small.mark("acquired")
+            permit.release()
+        }
+        smallGroup.leave()
+    }
+    Thread.sleep(forTimeInterval: 0.1)
+    check(!small.has("acquired"), "超预算图片运行时其他图片保持独占等待")
+    oversized.release()
+    _ = smallGroup.wait(timeout: .now() + 2)
+    check(small.has("acquired"), "超预算任务释放后普通任务可继续")
+    check(exclusiveScheduler.reservedMemory == 0, "超预算 Permit 释放内存记账")
+    exclusiveScheduler.endBatch()
+
+    let stoppedScheduler = CompressionScheduler(maxParallelism: 1, memoryLimitBytes: 100)
+    stoppedScheduler.beginBatch()
+    stoppedScheduler.pause()
+    if case .cancelled = stoppedScheduler.acquireOutcome(memoryCost: 20, cancelled: { true }) {
+        check(stoppedScheduler.reservedMemory == 0, "暂停时取消在等待前退出且不保留内存")
+    } else {
+        check(false, "取消必须优先于暂停与内存等待")
+    }
+    let stopped = FlagBox()
+    let stoppedGroup = DispatchGroup()
+    stoppedGroup.enter()
+    DispatchQueue.global().async {
+        if case .stopped = stoppedScheduler.acquireOutcome(memoryCost: 20, cancelled: { false }) {
+            stopped.mark("stopped")
+        }
+        stoppedGroup.leave()
+    }
+    Thread.sleep(forTimeInterval: 0.1)
+    stoppedScheduler.stop()
+    _ = stoppedGroup.wait(timeout: .now() + 2)
+    check(stopped.has("stopped"), "暂停中停止仍能越过内存闸门并退出")
+    check(stoppedScheduler.reservedMemory == 0, "取消和停止结局都不泄漏预留内存")
+    stoppedScheduler.endBatch()
+}
+memoryBudgetCheck()
+
+print("[35] 受控多批图片编码的 phys_footprint 回落观察（1536×1536 JPEG）")
+func encodingMemoryLifecycleCheck() {
+    let path = freshRoot("memory-lifecycle") + "/sample.jpg"
+    let created = autoreleasepool { () -> Bool in
+        let side = 1536
+        guard let context = CGContext(
+            data: nil, width: side, height: side, bitsPerComponent: 8,
+            bytesPerRow: side * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ), let rawPixels = context.data else { return false }
+        let pixels = rawPixels.bindMemory(to: UInt8.self, capacity: side * side * 4)
+        var seed: UInt32 = 0x5eed
+        for offset in stride(from: 0, to: side * side * 4, by: 4) {
+            seed = seed &* 1664525 &+ 1013904223
+            pixels[offset] = UInt8(truncatingIfNeeded: seed >> 24)
+            seed = seed &* 1664525 &+ 1013904223
+            pixels[offset + 1] = UInt8(truncatingIfNeeded: seed >> 24)
+            seed = seed &* 1664525 &+ 1013904223
+            pixels[offset + 2] = UInt8(truncatingIfNeeded: seed >> 24)
+        }
+        guard let image = context.makeImage() else { return false }
+
+        let bytes = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            bytes, UTType.jpeg.identifier as CFString, 1, nil
+        ) else { return false }
+        CGImageDestinationAddImage(
+            destination, image,
+            [kCGImageDestinationLossyCompressionQuality: 0.82] as CFDictionary
+        )
+        guard CGImageDestinationFinalize(destination) else { return false }
+        do {
+            try (bytes as Data).write(to: URL(fileURLWithPath: path))
+            return true
+        } catch {
+            return false
+        }
+    }
+    guard created else {
+        check(false, "受控内存测试图生成成功")
+        return
+    }
+    guard let baseline = currentPhysicalFootprint() else {
+        check(false, "task_vm_info 提供当前 phys_footprint")
+        return
+    }
+
+    var peak = baseline
+    var afterBatches: [UInt64] = []
+    var mallocAfterBatches: [UInt64] = []
+    for batch in 1...5 {
+        var batchSucceeded = true
+        for _ in 0..<20 {
+            let encoded = autoreleasepool { () -> Bool in
+                guard let output = CompressionEngine.compressJPGImageIO(file: path, quality: 76) else {
+                    return false
+                }
+                peak = max(peak, currentPhysicalFootprint() ?? peak)
+                return !output.isEmpty
+            }
+            batchSucceeded = batchSucceeded && encoded
+        }
+        check(batchSucceeded, "第 \(batch)/5 批 20 次 ImageIO 实际编码成功")
+        afterBatches.append(currentPhysicalFootprint() ?? peak)
+        if let liveBytes = currentMallocLiveBytes() {
+            mallocAfterBatches.append(liveBytes)
+        }
+    }
+    let mebibyte = 1_048_576.0
+    let readings = ([baseline, peak] + afterBatches)
+        .map { String(format: "%.1f", Double($0) / mebibyte) }
+        .joined(separator: "/")
+    print("  观测 phys_footprint MiB：baseline / peak / after batches 1…5 = \(readings)")
+    if mallocAfterBatches.count == 5 {
+        let mallocReadings = mallocAfterBatches
+            .map { String(format: "%.1f", Double($0) / mebibyte) }
+            .joined(separator: "/")
+        print("  观测 malloc size_in_use MiB：after batches 1…5 = \(mallocReadings)")
+        let settledMaximum = mallocAfterBatches.suffix(2).max() ?? mallocAfterBatches.last!
+        let settledMinimum = mallocAfterBatches.suffix(2).min() ?? mallocAfterBatches.last!
+        check(settledMaximum - settledMinimum <= 8 * 1_048_576,
+              "后续两批 malloc live bytes 平台化，未继续随图片数近似线性增长")
+    } else {
+        check(false, "malloc_zone_statistics 提供 live bytes 观测")
+    }
+    try? FileManager.default.removeItem(atPath: (path as NSString).deletingLastPathComponent)
+}
+encodingMemoryLifecycleCheck()
+
+print("[36] 关闭对比窗口会释放 SwiftUI 容器与静态窗口引用")
+final class WeakObjectBox<T: AnyObject> {
+    weak var value: T?
+}
+
+func compareWindowLifetimeCheck() {
+    final class PayloadController: NSViewController {}
+
+    let lifetime = CompareWindowLifetime()
+    let weakWindow = WeakObjectBox<NSWindow>()
+    let weakContentController = WeakObjectBox<PayloadController>()
+    autoreleasepool {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
+            styleMask: [.titled, .closable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        let contentController = PayloadController()
+        window.contentViewController = contentController
+        weakWindow.value = window
+        weakContentController.value = contentController
+
+        lifetime.retain(window)
+        window.close() // Same NSWindowDelegate callback as the red close button.
+        check(lifetime.window == nil, "windowWillClose 清掉被强引用的窗口")
+        check(window.contentViewController == nil, "windowWillClose 解绑定 NSHostingController")
+    }
+    check(weakWindow.value == nil, "关闭后窗口没有被生命周期 owner 留住")
+    check(weakContentController.value == nil, "关闭后内容控制器可以释放")
+}
+compareWindowLifetimeCheck()
+
+print("[37] 多格式样本缩小版内存压测（需 OCTOSHRINK_STRESS_DIR，scripts/memory_stress.sh 驱动）")
+func stressBatchCheck() {
+    guard let dir = ProcessInfo.processInfo.environment["OCTOSHRINK_STRESS_DIR"] else {
+        print("  ok   （未设置 OCTOSHRINK_STRESS_DIR，跳过缩小版压测）")
+        return
+    }
+    let directory = URL(fileURLWithPath: dir)
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
+    let files = names
+        .filter { ["png", "jpg", "jpeg", "webp"].contains(($0 as NSString).pathExtension.lowercased()) }
+        .sorted()
+        .map { directory.appendingPathComponent($0).path }
+    guard !files.isEmpty else {
+        check(false, "压测样本目录里没有 png/jpg/webp 样本（\(dir)）")
+        return
+    }
+    guard let baseline = currentPhysicalFootprint() else {
+        check(false, "task_vm_info 提供当前 phys_footprint")
+        return
+    }
+
+    func fileSize(_ path: String) -> Int {
+        ((try? FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?.intValue) ?? 0
+    }
+    let inputBytes = files.reduce(0) { $0 + fileSize($1) }
+
+    var peak = baseline
+    var afterBatches: [UInt64] = []
+    var mallocAfterBatches: [UInt64] = []
+    var outputBytes = 0
+    let started = Date()
+    // 本机 ImageIO 是否支持 WebP **编码**（macOS 27 实测 CGImageDestination 直接返回 nil）。
+    // 不支持时 WebP 样本跳过而不是判失败：Swift 产品线 WebP 走捆绑 cwebp 子进程
+    // （子进程峰值由 scripts/memory_stress.sh Part A 采样），进程内本就没有这条路径。
+    let webpSupported: Bool = {
+        let out = NSMutableData()
+        return CGImageDestinationCreateWithData(
+            out as CFMutableData, UTType.webP.identifier as CFString, 1, nil) != nil
+    }()
+    let webpCount = files.filter { ($0 as NSString).pathExtension.lowercased() == "webp" }.count
+    if !webpSupported {
+        print("  注意：本机 ImageIO 无 WebP 编码器，\(webpCount) 张 WebP 样本跳过（其余进程内编码照测）")
+    }
+    // 只走进程内 ImageIO 编码器（App Store 线口径）：CLI 在场也不调用，
+    // 子进程的内存不会计入本进程 phys_footprint。
+    for batch in 1...3 {
+        var succeeded = 0
+        var skipped = 0
+        for path in files {
+            let ext = (path as NSString).pathExtension.lowercased()
+            if ext == "webp" && !webpSupported {
+                skipped += 1
+                continue
+            }
+            let encoded = autoreleasepool { () -> Int in
+                let data: Data?
+                switch ext {
+                case "png": data = CompressionEngine.compressPNGImageIO(file: path)
+                case "webp": data = CompressionEngine.compressWebPImageIO(file: path, quality: 75)
+                default: data = CompressionEngine.compressJPGImageIO(file: path, quality: 75)
+                }
+                peak = max(peak, currentPhysicalFootprint() ?? peak)
+                return data?.count ?? 0
+            }
+            if encoded > 0 {
+                succeeded += 1
+                outputBytes += encoded
+            }
+        }
+        let expected = files.count - (webpSupported ? 0 : webpCount)
+        check(succeeded == expected && skipped == files.count - expected,
+              "第 \(batch)/3 批 \(expected) 张进程内编码成功（成功 \(succeeded) · 跳过 \(skipped)）")
+        afterBatches.append(currentPhysicalFootprint() ?? peak)
+        if let liveBytes = currentMallocLiveBytes() {
+            mallocAfterBatches.append(liveBytes)
+        }
+    }
+    let elapsed = Date().timeIntervalSince(started)
+
+    let idleBaseline = currentPhysicalFootprint() ?? peak
+    Thread.sleep(forTimeInterval: 30)
+    let idleAfter = currentPhysicalFootprint() ?? idleBaseline
+
+    let mebibyte = 1_048_576.0
+    func mb(_ value: UInt64) -> String { String(format: "%.1f", Double(value) / mebibyte) }
+    print("  样本 \(files.count) 张 · 输入合计 \(String(format: "%.1f", Double(inputBytes) / mebibyte)) MiB · "
+          + "输出合计 \(String(format: "%.1f", Double(outputBytes) / mebibyte)) MiB · 用时 \(String(format: "%.1f", elapsed))s")
+    print("  观测 phys_footprint MiB：baseline / peak = \(mb(baseline)) / \(mb(peak))")
+    print("  批后 phys_footprint MiB：\(afterBatches.map(mb).joined(separator: "/"))")
+    print("  批后 malloc size_in_use MiB：\(mallocAfterBatches.map(mb).joined(separator: "/"))")
+    print("  空闲观察 30 s：\(mb(idleBaseline)) → \(mb(idleAfter)) MiB")
+    if mallocAfterBatches.count == 3 {
+        let settledMaximum = mallocAfterBatches.suffix(2).max() ?? mallocAfterBatches.last!
+        let settledMinimum = mallocAfterBatches.suffix(2).min() ?? mallocAfterBatches.last!
+        check(settledMaximum - settledMinimum <= 32 * 1_048_576,
+              "后两批 malloc live bytes 平台化，未继续随图片数近似线性增长")
+    } else {
+        check(false, "malloc_zone_statistics 提供 live bytes 观测")
+    }
+}
+stressBatchCheck()
+
 print(failures == 0
-      ? "\n✓ Swift 历史 / 备份 / 暂停 / 停止 / 队列进度 / 设置默认折叠 / CPU 上限自检全部通过"
+      ? "\n✓ Swift 历史 / 备份 / 暂停 / 停止 / 大队列 / 内存预算 / 内存回落观察 / 对比窗口生命周期 / 队列进度 / 设置默认折叠 / CPU 上限自检全部通过"
       : "\n✗ Swift 自检失败 \(failures) 项")
 exit(failures == 0 ? 0 : 1)

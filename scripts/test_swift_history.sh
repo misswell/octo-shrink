@@ -51,7 +51,10 @@ xcrun swiftc \
   "$SRC_DIR/Services/HistoryStore.swift" \
   "$SRC_DIR/Services/OutputTransactionStore.swift" \
   "$SRC_DIR/Services/SystemInfo.swift" \
+  "$SRC_DIR/Services/MemoryBudget.swift" \
+  "$SRC_DIR/Services/CompareWindowLifetime.swift" \
   "$SRC_DIR/Services/CompressionScheduler.swift" \
+  "$SRC_DIR/Services/CompressionWorklist.swift" \
   "$SRC_DIR/Engine/CLIRunner.swift" \
   "$SRC_DIR/Engine/CompressionEngine.swift" \
   "$SRC_DIR/Engine/SystemImageConverter.swift" \

@@ -2,6 +2,9 @@ mod app_settings;
 mod commands;
 pub mod engine;
 mod history;
+mod memory_budget;
+#[cfg(all(test, feature = "inproc-backends", target_os = "macos"))]
+mod memory_stress;
 mod output_transaction;
 mod sandbox_access;
 mod system_info;

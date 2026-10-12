@@ -148,9 +148,10 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - ✅ 历史页每一行都有与「压缩完成」那一行对等的按钮（三线一致）：另存为 / 对比查看 / 恢复原图 / 删除这次压缩结果 / 访达 / 复制日志，全部由 `sourceExists`·`backupExists`·`outputExists` 三个读取时现算的派生字段决定，按钮不成立就不画；后缀模式给「删除这次压缩结果」而不是「恢复原图」，清空历史的确认框数得清带走几份原图备份（详见「历史页每一行的按钮」）
 - ✅ 覆盖事务与崩溃安全已接入（**三条线一致**）：`output_transaction.rs::TransactionStore` ↔ Swift `OutputTransactionStore.swift` 在覆盖前记账、`history.add` 落盘后才销账，启动时 `recover()` 补记或自动回滚上次中断的覆盖；`history.json` 严格读取（损坏→隔离 + 按 `backup-meta.json` 重建 `recoveryAvailable` + 本次启动锁死备份 sweep）；`write_output_file` 全链路 `Result`（任一步失败必须把 `CompressResult.success` 翻成 false）；备份 key 从 `DefaultHasher` 迁到 FNV-1a 64（老 key 只读复用/续认，含书签）；`MAX_HISTORY_ENTRIES = 10_000`
 - ✅ CPU 使用上限已接入（三条线一致）：设置页「性能」小节 + `CompressionScheduler`（暂停与并行预算同一套闸门）+两层预算（并发文件数 × 单编码器内部线程），检测见 `system_info.rs` / `SystemInfo.swift`，详见「CPU 使用上限（三条线共用不变量）」
+- ✅ 大队列内存调度与估算内存预算（三条线一致，v2.5.57）：Tauri 队列仅保留视口与缓冲行，元数据读取每批最多 256 个路径，进度刷新合并；Rust 及时收割有界任务，Swift 固定 worker 拉取任务并逐图 `autoreleasepool`。三线以相同公式估算图片工作集，在 CPU 闸门内同时预留内存预算（见「大队列与估算内存预算」）。
 - ✅ Swift 原生线（`swift/`）与两条 Tauri 线功能对齐，历史/备份/覆盖事务/暂停语义一致，但存储根目录独立且少一层 `history/`（`~/Library/Application Support/com.misswell.octoshrink.swift`），三条线互不读写对方的 history.json
 - ✅ 压缩设置有三线回归守卫：默认质量、Smart Mode 与输出模式保持一致；Swift 与 Direct 共用 CLI 编码器时逐项核对参数，App Store 进程内编码器映射同一质量档位。改动这些设置、编码器或 fallback 时必须同步更新 `tests/compression-parity.cjs`，由前端测试、全量构建和 Release 门禁运行
-- 🟡 App Store：**2.5.42 已提交审核**（2026-09-24，submission `ba53f122`，状态 WAITING_FOR_REVIEW，releaseType=AFTER_APPROVAL → 过审即自动上架），线上仍是 2.4.3。上一份草稿 2.5.24 在 ASC 里躺了整整一个月没能提交，根因只是新构建没设 `usesNonExemptEncryption`（`asc validate` 会报 `build.encryption.missing`）—— 不是有人故意压着不发，流程见 §6.5
+- ✅ App Store：**线上 2.5.56**（版本记录 `a952dcd8`，READY_FOR_SALE + phased release；submission `bc46677a` 2026-10-01 提交、review COMPLETE），已追上 Direct。上一份草稿 2.5.24 曾因新构建没设 `usesNonExemptEncryption` 在 ASC 里躺了一个月没法提交（`asc validate` 会报 `build.encryption.missing`）—— 不是有人故意压着不发，流程见 §6.5。本次 v2.5.57 随发版同步构建提审。
 - ⬜ 引擎迁移后续：JXL（未来接入 jpegxl-sys 后可恢复 UI 选项）；GIF 减色优化（未来可用 imagequant 逐帧量化，当前有帧间闪烁风险暂不做）
 
 ### 8. 每次全量编译必须同时构建两条 Tauri 产物线和 Swift 原生版（强制）
@@ -172,13 +173,14 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 | 拖放（drag-drop） | Tauri drop payload 直给路径 | 同上 + bookmark 化 | 沙盒需 security-scoped URL |
 | walk_dir 递归 | fs::read_dir 任意路径；稳定排序并按规范路径去重，前端批次使用已展开文件快照 | 同上 + 仅在已书签根内递归 | 沙盒只认授权范围；队列不能因重复目录或处理期间新增文件而改变 |
 | 队列批次文件清单 | 导入完成后展开并去重，开始处理时只提交该批次快照；目录根通过 `sourceRoots` 保留相对输出路径 | 同上，书签授权范围内执行 | 避免处理中追加、异步扫描乱序和清空后旧事件回流 |
+| 编码工作集估算 | 读文件 metadata 与图片尺寸头部，估算后才进入 CPU/内存共同闸门；不为整队列解码像素 | 同上，利用本轮已有文件/目录授权；权限不足或格式尺寸无法识别时使用保守估算，不增加授权范围 | Swift 用 ImageIO 头部属性；估算公式与调度语义三线相同，编码器的实际内存仍可能不同 |
 | write_output_file | ①`ensure_backup`（写不成就不碰用户文件）②写 `history/transactions/<id>.json` 记账 ③同目录 `.octoshrink-write-<millis>.tmp` ④flush + fsync ⑤rename 覆盖目标 ⑥`history.add`（失败=回滚：备份写回源文件、删生成结果、销账）⑦ 删账。系统跨格式覆盖时改扩展名并避让同名目标；后缀模式使用自定义 `outputSuffix`（默认 `_compressed`） | 所有批量压缩入口先经 `prepare_compression_access` 验证输出目录可创建临时文件，不足时弹目录授权；目录与输入文件 `AccessGuard` 持有到事务结束。覆盖/后缀授权源文件父目录，目录模式授权输出根，输出模式不变；系统转换仍先选择输出文件夹 | 单文件授权不能创建同目录临时文件，即使覆盖也需要目录权限。2.5.46 签名沙盒包已复现 `Operation not permitted`，同文件经目录授权后成功；2.5.56 补齐普通压缩入口。Swift 当前无沙盒，沿用原行为。**落盘任一步失败都必须把 `CompressResult.success` 翻成 false**，UI 绝不许显示「压缩完成」 |
 | restore_original / restore_history_entry / restore_all | 三条命令共用同一个恢复服务 `HistoryStore::restore`：备份 → `.octoshrink-restore-<nanos>.tmp` → fsync → rename 覆盖源文件 → **历史状态落盘成功之后**才删本次生成的压缩输出与备份目录；命中冲突（大小或 mtime 变化 >2 s，仅 replace 模式）时返回 `conflict=true`，前端确认后带 `force=true` 重试。`RestoreOutcome` 额外回报 `output_mode`，前端据此决定说「已恢复原图」还是「已删除这次压缩结果」。⚠️ 这三个命令**必须是 async**：沙盒下书签失效时 `request_folder_access` 会在恢复中途调 `blocking_pick_folder()`，阻塞式弹窗不能在主线程上调（同步命令就在主线程执行 → 弹窗永远出不来、整个应用卡死，v2.5.45 实测并已修）；async 命令带 `State<'_, _>` 引用参数必须返回 `Result`，恢复的所有失败都装在 `RestoreOutcome` 里所以永远 `Ok` | 同上，源图/输出/备份路径均经 bookmark 授权；路径一律由 historyId 从存储读取，前端不拼路径 | 沙盒；两版恢复语义一致，**不允许复制三套恢复逻辑**。顺序反了会出现"历史说已恢复、备份已删、原图没写回" |
 | 历史页每一行的按钮 | `historyRowActionDefs(entry)`（前端）↔ `historyRowActions(_:)`（Swift 服务层）按 `sourceExists` / `backupExists` / `outputExists` 三个**读取时现算**的派生字段决定：另存为 → 对比 → 反悔（恢复原图 或 删除这次压缩结果，二选一）→ 访达 → 复制日志 | 同上，同一份前端代码、同一套判据 | 见「历史页每一行的按钮 = 这条记录此刻真能做到的事」。后缀模式永不给「恢复原图」，replace 永不给「删除这次压缩结果」；按钮不成立就不画 |
 | 历史记录与原图备份 | `HistoryStore` 落 `<appdata>/history/history.json` + `<appdata>/history/backups/<key>/`（App Support，跨启动长期保留）；备份 key = **FNV-1a 64 位**（`stable_hash`，跨 rustc 版本稳定），老 `DefaultHasher` key 仍被识别用于续用已有备份与书签 | 同上（沙盒容器内的 App Support）| 备份绝不放 temp_dir/Caches，否则系统清理会丢掉原图；Swift 线用独立根 `~/Library/Application Support/com.misswell.octoshrink.swift`。**标准库从不承诺 `DefaultHasher` 的跨版本稳定性**，一次升级就能让所有备份看起来"无人引用" |
 | 退出清理（唯一的清理时机） | `RunEvent::Exit` → `commands::apply_retention_on_exit` → `HistoryStore::apply_retention_on_exit(retention_days, run_started_at, previous_run_ended_cleanly)`：按当前档位删过期 `HistoryEntry` 和只被它们引用的备份目录；启动路径（`setup` / `AppState.init`）**只结清中断事务和损坏现场，一个备份都不删** | 同上（`applicationWillTerminate`） | 不留常驻计时器，也不在启动删任何东西：崩溃 / 强杀不走退出钩子，现场那份备份可能是唯一的原图；把时机收在退出，用户中途改档位也在同一刻生效。**绝不删用户的 sourcePath / outputPath / 输出目录里的文件**（历史过期 ≠ 用户文件过期） |
 | history.json 读不出来 | **严格读**：文件不存在=空历史（正常）；存在但解析失败=损坏 → 隔离为 `history.corrupt-<millis>.json`（现场绝不许被 `[]` 覆盖）→ 按 `backups/<key>/backup-meta.json` 重建 `status: "recoveryAvailable"` 条目 → 本次运行**禁止一切备份 sweep**（`cleanup_is_locked()`） | 同上 | 老实现 `unwrap_or_default()` 把半个文件当空历史，退出清理就"合法地"删光所有原图备份。重建出的条目没有压缩明细，但保证**原图仍可一键恢复** |
-| 安全暂停 / 继续 / 停止 | `CompressionScheduler`（`pause_compression` / `resume_compression` / `stop_compression` / `get_compression_state` / `cancel_file` / `cancel_batch` / `clear_cancel_queue`）：闸门只拦「还没开始」的文件，正在跑的 CLI 子进程绝不 kill；`Notify` + 250 ms 超时轮询，等待者用 `acquire` 自带退出条件（**判断顺序：取消 → 停止 → 暂停/名额**），三种结局用 `AcquireOutcome` 分开回给调用方；`compress_files` / `compress_smart` 收 `sessionId` 并逐条进度事件带回（`ProgressStatus`：`queued`/`starting`/`completed`/`failed`/`cancelled`/**`deferred`**）；阶段变化经 `compression-state-change` 事件播报 | 同上（进程内引擎同样只在新任务起点等待）| 两版行为一致；Swift 线为 `CompressionScheduler.acquireOutcome(cancelled:)` / `AppState.stopBatch()`，队列进度走 `QueueProgress` 派生。**取消只 `wake_waiters()`，绝不 `resume()`**；**停止只结束这一轮，剩下的文件仍 `pending`** |
+| 安全暂停 / 继续 / 停止 | `CompressionScheduler`（`pause_compression` / `resume_compression` / `stop_compression` / `get_compression_state` / `cancel_file` / `cancel_batch` / `clear_cancel_queue`）：闸门只拦「还没开始」的文件，正在跑的 CLI 子进程绝不 kill；`Notify` + 250 ms 超时轮询，等待者用 `acquire_with_memory` 自带退出条件（**判断顺序：取消 → 停止 → 暂停/名额**），三种结局用 `AcquireOutcome` 分开回给调用方；`compress_files` / `compress_smart` 收 `sessionId` 并逐条进度事件带回（`ProgressStatus`：`queued`/`starting`/`completed`/`failed`/`cancelled`/**`deferred`**）；阶段变化经 `compression-state-change` 事件播报 | 同上（进程内引擎同样只在新任务起点等待）| 两版行为一致；Swift 线为 `CompressionScheduler.acquireOutcome(memoryCost:cancelled:)` / `AppState.stopBatch()`，队列进度走 `QueueProgress` 派生。**取消只 `wake_waiters()`，绝不 `resume()`**；**停止只结束这一轮，剩下的文件仍 `pending`** |
 | 对比窗口（compare 独立窗口）| WebviewUrl::App 加载内嵌 compare.html，经 convertFileSrc / read_image_dataurl 读图 | WebviewUrl::External 指向本地 HTTP 服务器 `http://localhost:<port>/compare.html`（`frontend_http_port()`），经 read_image_dataurl（bookmark 授权范围内）读图，窗口与主窗口同一模式：始终可见 + 创建时设主题背景色（compare.html 首帧自设同步主题背景，不露白） | 沙盒阻止 tauri://；两版窗口行为一致，URL 按 feature 分叉。⚠️ 不许用 `visible(false)` + on_page_load 延迟 show——`webview.show()` 经 wry 只作用于 WKWebView 视图、NSWindow 仍隐藏，沙盒版对比窗口永远弹不出来（v2.5.44 实测并已修） |
 | open_in_finder | Command::new("open").arg("-R") | tauri-plugin-opener（NSWorkspace）| 沙盒禁 spawn Finder |
 | ~/Library/... 访问 | 任意 | 仅 App Support / Caches / Tmp（sandbox 允许子集）| 沙盒 |
@@ -348,7 +350,7 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - 一批开始/结束时必然清除暂停与停止态（Rust `begin_batch()` / `end_batch()`，Swift `beginBatch()` / `endBatch()`），否则下一批继承上一批的状态。
 - **取消绝不解除暂停**：`cancel_file` / `cancel_batch` / `clear_cancel_queue` 只 `wake_waiters()`（Rust）/ `wakeWaiters()`（Swift）—— 只把等待者叫醒让它们看见"这个文件已被取消"，闸门仍然是关的。老实现调 `resume()`，结果是"暂停中移除一个文件 → 整批悄悄继续跑"，前端还显示「暂停中…」。
 - **「继续」有两种，别再合成一个**：暂停中的「继续」= `resume_compression`（**同一个会话**继续，绝不新建批次、绝不重发 `compress_files`）；已经停止回到 idle 的「继续压缩」= 主按钮 `startCompression`，**新开一轮只提交 `pending`**（`getPendingQueuePaths()` / Swift `items.filter { $0.status == .pending }`）。已 `done` 的绝不重压，`failed` 的要用户显式点「重试」。
-- **闸门里的判断顺序不可改：取消 → 停止 → 暂停/名额**（Rust `CompressionScheduler::acquire` / Swift `acquireOutcome(cancelled:)`）：
+- **闸门里的判断顺序不可改：取消 → 停止 → 暂停/名额**（Rust `CompressionScheduler::acquire_with_memory` / Swift `acquireOutcome(memoryCost:cancelled:)`）：
   - 取消排最前，是"闸门关着却没人开"的正解 —— 等待者自己带退出条件，被取消的文件直接结束并上报 `cancelled`，永不启动，而不是靠取消操作偷偷开门；
   - **停止排在暂停之前**，否则"暂停中按停止"的等待者会一直堵在关着的闸门上，直到用户点「继续」——那正是「停止」的反面。
 - **`AcquireOutcome` 三态必须分开回给调用方**（Rust `enum AcquireOutcome { Acquired(ParallelPermit), Cancelled, Stopped }` ↔ Swift `CompressionScheduler.AcquireOutcome`）：老实现用一个 `Option`/`Permit?` 的 `None` 同时表示"这个文件被取消"和"整批被停止"，调用方只能统一报 `cancelled` —— 那就是"停止后 70 张图全变成已跳过"的根源。拿到 `Stopped` 的 worker **什么都不做**（队列项保持 `pending`），拿到 `Cancelled` 的才写 `removed`。
@@ -409,6 +411,18 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - 承诺边界：这个开关调的是并行度，**不许**承诺"< 40% CPU"或"固定占用 N 个核"。
 
 ## 参考
+
+### 大队列与估算内存预算
+
+- Tauri `fileRows` 只持有可见行与上下各 8 行；行高 40 px、间距 2 px 与 `QUEUE_ROW_PITCH=42` 必须一起调整。离屏状态仍在 `queueItems`，滚入视口时按最新状态绘制，不从 DOM 推断队列状态。
+- 文件尺寸 IPC 每批最多 256 个路径；清空或同路径重导入后，旧扫描/尺寸响应必须核对 `queueRevision` 与队列项身份。全局 `pendingImports` 只保留完成信号，不保留上一次导入返回的路径数组；清空队列同时释放 `currentCompressOptions`。
+- Rust 任务容器随 CPU 上限及时收割，任务只返回不含图片字节的 `CompressResult`；Swift worker 数量最多为本机 CPU 预算上限，逐项领取，并以每图 `autoreleasepool` 收尾。已完成结果元数据保留在队列供操作使用，不能误删结果来省内存。
+- 三线估算同一公式：已知尺寸为 `width × height × 16 + encodedBytes × 2 + 64 MiB`，尺寸未知为 `encodedBytes × 4 + 256 MiB`，整数运算饱和。预算为物理 RAM 的 1/4，最低 256 MiB，无法检测 RAM 时使用 512 MiB。只读头部，不提前解码整批照片。
+- 同一个调度器同时预留 CPU 名额与估算字节；permit 释放时两者都归还。估算超过总预算的单张图允许独占运行，不能永远等待。取消 → 停止 → 暂停/预算的判据顺序仍须保持，运行中的图不抢占。
+- Swift 对比窗口必须由 `CompareWindowLifetime` 接管关闭：红色按钮和代码关闭均解绑 `contentViewController`、释放静态窗口引用；视图消失时清原图/压缩图/结果数组并令迟到的重压请求失效。只清队列不能释放仍被关闭窗口强引用的图片。
+- 该预算是保守的调度估算，**不是 RSS 硬上限**，也不依据实时系统内存压力；特殊编码器/动画图与超大单图仍需实际压测。历史仍使用有 10,000 条上限的 JSON 持久化，未迁移 SQLite。
+- `tests/large-queue.cjs` 守 100,000 项视口、滚动、排序筛选、尺寸分批、旧响应隔离与进度刷新合并；`tests/large-queue-browser.cjs` 是可选 Chromium 实测，测队列 JS heap 与 DOM，不能当作真实图片编码或整个 App 的 RSS。
+- `scripts/memory_stress.sh` 是可选的多格式真实图缩小版压测（手动运行，不进常规门禁）：先生成样本（`scripts/gen_stress_samples.py`：PNG 噪声 + sips JPEG/GIF + 捆绑 cwebp/avifenc），再跑 Direct CLI 子进程 RSS 峰值采样、Rust 进程内 `memory_stress`（`#[ignore]`，`--features appstore --no-default-features --release --lib`，需 `OCTOSHRINK_STRESS_DIR`）与 Swift 自检 [37] 组（同一 env 触发、未设置则跳过）。`STRESS_PART=a|b|c` 可单跑一段；Swift [37] 组在 ImageIO 无 WebP 编码器的机器上显式跳过 WebP 样本并注明。三批曲线看收敛，不代表 10,000 张验收或 Instruments 结论。
 
 - [App Store 提交完整流程与注意事项](#app-store-提交完整流程与注意事项)
 - docs/APPSTORE_MIGRATION_PLAN.md — 5 阶段路线图
@@ -592,9 +606,11 @@ asc review submit --app $APP --version-id <版本ID> --build <构建ID> --confir
 | 窗口无法拖动 | 缺 start-dragging 权限 | capabilities 加 `core:window:allow-start-dragging` |
 | 中间有方形洞 | CSS/布局问题 | 检查前端透明区域 |
 | Transporter 无法安装 | macOS beta | 用 `xcrun altool` 命令行 |
-| release 构建报 `E0463: can't find crate for \`xxx_macro\``，但 `target/release/deps/libxxx_macro-*.dylib` 明明存在 | 上一次构建中途失败留下了半写坏的 proc-macro dylib，cargo 却认为它是新鲜的并复用（`panic` 设置不进 proc-macro 单元的 fingerprint，两条线共用同一个 `target/release` 时更容易踩） | 删掉那一个 crate 的产物和指纹后重编：`rm -rf target/release/deps/*<crate>* target/release/.fingerprint/<crate>*`。⚠️ `cargo clean -p <registry-crate>` 在这里**无效**（该包不在 workspace 里，只会 `Removed 0 files`） |
+| release 构建报 `E0463: can't find crate`，但 proc-macro dylib 存在 | 可能是旧产物损坏，也可能是宏库继承了 release 的 `strip=true`；2026-10-12 的全新 target 已排除缓存损坏 | 先核对版本/目标目录并验证 `[profile.release.build-override] strip=false`（主产物仍剥离）；不要仅凭 dylib 存在就反复删缓存。确证某一宏产物损坏后，仅隔离该 crate 的产物和 fingerprint 再编，保留其他产物。 |
 
 ### 9. 版本号管理
+
+- Release 编译期依赖使用 `[profile.release.build-override] strip = false`，主产物仍 `strip = true`。2026-10-12 在 Rust/Cargo 1.90.0 上，隔离全新 target 与统一 panic=unwind 后仍复现 `equator_macro` / `profiling_procmacros` / `zerofrom_derive` 的 E0463；关闭 strip 的隔离 release check 才通过。proc-macro dylib 的 `.rustc` section 存在不等于编译器能加载其符号，不可把所有 E0463 一律归为半写坏缓存并反复删库。
 
 - App Store 版与 Direct 版版本号保持一致（如都是 2.2.6）
 - 每次上传构建版本号必须递增

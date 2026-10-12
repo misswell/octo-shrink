@@ -435,11 +435,12 @@ function mergeQueueFiles(newFiles) {
 
 function handleFilePaths(filePaths) {
   var incoming = uniqueFilePaths(filePaths);
+  var importRevision = queueRevision;
   if (incoming.length === 0) return Promise.resolve([]);
 
   // Serialize directory expansion and queue commits. This keeps a slow scan
   // from finishing after a later, faster scan and overwriting the queue.
-  pendingImports = pendingImports.then(async function() {
+  var importResult = pendingImports.then(async function() {
     var expanded;
     try {
       expanded = await invoke('expand_image_files', { filePaths: incoming });
@@ -449,6 +450,7 @@ function handleFilePaths(filePaths) {
       return [];
     }
 
+    if (importRevision !== queueRevision) return [];
     expanded = uniqueFilePaths(expanded);
     if (expanded.length === 0) {
       showToast(localizeUiText('文件夹中没有找到可压缩的图片'));
@@ -486,7 +488,9 @@ function handleFilePaths(filePaths) {
     showToast(localizeUiText('添加图片失败，请重试'));
     return [];
   });
-  return pendingImports;
+  // The global sequencing promise must not retain the last batch's path array.
+  pendingImports = importResult.then(function() {});
+  return importResult;
 }
 
 // Global state for compression
@@ -572,7 +576,7 @@ function updateQueueSummary() {
       + cpuLimitText();
   }
   updateBulkActionButtons();
-  applyQueueView();
+  applyQueueView(false);
   renderQueueProgressFill();
   renderStartButton();
 }
@@ -598,7 +602,10 @@ function renderQueueProgressFill() {
 function updateBulkActionButtons() {
   var restoreBtn = document.getElementById('restoreAllBtn');
   if (!restoreBtn) return;
-  var hasRestorable = queueResults().some(function(r) { return r && r.success; });
+  var hasRestorable = files.some(function(file) {
+    var item = queueItems.get(file);
+    return item && item.result && item.result.success;
+  });
   restoreBtn.style.display = hasRestorable ? 'inline-flex' : 'none';
 }
 
@@ -627,7 +634,12 @@ function toggleQueueSortDirection() {
   applyQueueView();
 }
 
-function applyQueueView() {
+// Only these paths have DOM rows. Queue data remains the source of truth.
+var queueViewport = { paths: [], signature: '', files: null, count: -1, frame: null };
+var QUEUE_ROW_PITCH = 42; // 40px row + 2px spacing (style.css)
+var QUEUE_OVERSCAN = 8;
+
+function applyQueueView(force) {
   var list = document.getElementById('fileQueueList');
   if (!list) return;
   var filter = document.getElementById('queueFailedOnly');
@@ -639,10 +651,17 @@ function applyQueueView() {
     direction.innerHTML = iconMarkup(queueSortDescending ? 'sort-desc' : 'sort-asc', true) + (queueSortDescending ? localizeUiText(' 降序') : localizeUiText(' 升序'));
     direction.setAttribute('aria-label', queueSortDescending ? localizeUiText('当前降序，点击切换升序') : localizeUiText('当前升序，点击切换降序'));
   }
-  // 排序键也全部从 queueItems 读：DOM class 只负责画，不参与任何判断。
+  var signature = key + ':' + queueSortDescending + ':' + failedOnly;
+  var liveSort = failedOnly || ['original', 'compressed', 'ratio', 'status'].includes(key);
+  if (force === false && !liveSort && queueViewport.files === files
+      && queueViewport.count === files.length && queueViewport.signature === signature) {
+    renderQueueViewport();
+    return;
+  }
+  // 排序键全部从 queueItems 读，视图排序不改变实际处理顺序。
   var states = ['failed', 'running', 'pending', 'done', 'restored', 'removed'];
-  var entries = files.map(function(file, index) {
-    var row = fileRows[file];
+  var paths;
+  var entries = key === 'import' && !failedOnly ? null : files.map(function(file, index) {
     var item = queueItems.get(file);
     var result = item && item.result;
     var value = index;
@@ -651,9 +670,9 @@ function applyQueueView() {
     if (key === 'compressed') value = result && result.success ? result.compressedSize : null;
     if (key === 'ratio') value = result && result.success ? result.savings : null;
     if (key === 'status') value = states.indexOf(item ? item.state : 'pending');
-    return { file: file, row: row, index: index, value: value };
-  });
-  entries.sort(function(a, b) {
+    return { file: file, index: index, value: value, failed: item && item.state === 'failed' };
+  }).filter(function(entry) { return !failedOnly || entry.failed; });
+  if (entries && key !== 'import') entries.sort(function(a, b) {
     // Unknown sizes and unfinished compression ratios stay last in either direction.
     var aMissing = a.value == null || (typeof a.value === 'number' && !Number.isFinite(a.value));
     var bMissing = b.value == null || (typeof b.value === 'number' && !Number.isFinite(b.value));
@@ -663,62 +682,93 @@ function applyQueueView() {
       : a.value - b.value;
     return (queueSortDescending ? -compared : compared) || a.index - b.index;
   });
-  var visible = 0;
-  Object.keys(fileRows).forEach(function(file) {
-    // 「只看失败」也按 queueItems 判，不按 DOM class：类名只是画出来的结果，
-    // 拿它当判据，一旦某处忘了同步 class，筛出来的东西就是错的。
-    var failedRow = queueState(file) === 'failed';
-    fileRows[file].hidden = !files.includes(file) || (failedOnly && !failedRow);
-  });
-  entries.forEach(function(entry, index) {
-    if (!entry.row) return;
-    if (!entry.row.hidden) visible++;
-    if (list.children[index] !== entry.row) list.insertBefore(entry.row, list.children[index] || null);
-  });
+  if (entries) paths = entries.map(function(entry) { return entry.file; });
+  else paths = files;
+  if (key === 'import' && queueSortDescending) paths = paths.slice().reverse();
+  if (queueViewport.signature !== signature) list.scrollTop = 0;
+  queueViewport.paths = paths;
+  queueViewport.signature = signature;
+  queueViewport.files = files;
+  queueViewport.count = files.length;
   var empty = document.getElementById('queueFilterEmpty');
-  if (empty) empty.hidden = !failedOnly || visible > 0;
+  if (empty) empty.hidden = !failedOnly || paths.length > 0;
+  renderQueueViewport();
+}
+
+function queueVisibleRange(count, scrollTop, height) {
+  var visible = Math.max(1, Math.ceil((height || 260) / QUEUE_ROW_PITCH));
+  var start = Math.min(Math.max(0, count - visible), Math.max(0, Math.floor(scrollTop / QUEUE_ROW_PITCH)));
+  return { start: Math.max(0, start - QUEUE_OVERSCAN), end: Math.min(count, start + visible + QUEUE_OVERSCAN) };
+}
+
+function scheduleQueueViewport() {
+  if (queueViewport.frame !== null) return;
+  queueViewport.frame = requestAnimationFrame(function() {
+    queueViewport.frame = null;
+    renderQueueViewport();
+  });
+}
+
+function renderQueueViewport() {
+  var list = document.getElementById('fileQueueList');
+  if (!list) return;
+  if (!list.queueViewportInstalled) {
+    list.queueViewportInstalled = true;
+    list.addEventListener('scroll', scheduleQueueViewport, { passive: true });
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(scheduleQueueViewport).observe(list);
+  }
+  var paths = queueViewport.paths;
+  var range = queueVisibleRange(paths.length, list.scrollTop || 0, list.clientHeight);
+  var wanted = new Set(paths.slice(range.start, range.end));
+  Object.keys(fileRows).forEach(function(path) {
+    if (!wanted.has(path)) delete fileRows[path];
+  });
+  var fragment = document.createDocumentFragment();
+  function spacer(height) {
+    var node = document.createElement('div');
+    node.className = 'queue-virtual-spacer';
+    node.style.height = height + 'px';
+    node.setAttribute('aria-hidden', 'true');
+    return node;
+  }
+  fragment.appendChild(spacer(range.start * QUEUE_ROW_PITCH));
+  for (var i = range.start; i < range.end; i++) {
+    var path = paths[i];
+    if (!fileRows[path]) {
+      fileRows[path] = createQueueRow(path);
+      paintQueueRow(path);
+    }
+    fragment.appendChild(fileRows[path]);
+  }
+  fragment.appendChild(spacer((paths.length - range.end) * QUEUE_ROW_PITCH));
+  list.replaceChildren(fragment);
 }
 
 async function renderFileQueue() {
-  var list = document.getElementById('fileQueueList');
-  if (!list) return;
-  var wanted = new Set(files);
-
-  Object.keys(fileRows).forEach(function(filePath) {
-    if (!wanted.has(filePath)) {
-      var staleRow = fileRows[filePath];
-      if (staleRow) staleRow.remove();
-      delete fileRows[filePath];
-    }
-  });
-
-  var newFiles = [];
-  for (var i = 0; i < files.length; i++) {
-    if (!fileRows[files[i]]) {
-      var row = createQueueRow(files[i]);
-      fileRows[files[i]] = row;
-      newFiles.push(files[i]);
-    }
-    // appendChild also moves an existing row, preserving the queue order.
-    list.appendChild(fileRows[files[i]]);
-  }
   applyQueueView();
-  // Fetch file sizes for newly added rows only (preserve existing row state)
-  if (newFiles.length > 0) {
+  // Metadata IPC is bounded too; never serialize 100,000 paths in one call.
+  var revision = queueRevision;
+  var newFiles = files.filter(function(path) {
+    var item = queueItems.get(path);
+    return item && item.originalSize === null && !item.sizeRequested;
+  });
+  newFiles.forEach(function(path) { queueItems.get(path).sizeRequested = true; });
+  for (var offset = 0; offset < newFiles.length; offset += 256) {
+    if (revision !== queueRevision) return;
+    var batch = newFiles.slice(offset, offset + 256);
+    var identities = batch.map(function(path) { return queueItems.get(path); });
     try {
-      const sizes = await invoke('get_file_sizes', { filePaths: newFiles });
-      for (var j = 0; j < newFiles.length; j++) {
-        var item = queueItems.get(newFiles[j]);
-        var row = fileRows[newFiles[j]];
-        if (item && sizes[j] !== undefined) item.originalSize = sizes[j];
-        if (row && sizes[j] !== undefined && (!item || item.state === 'pending')) {
-          var sizeEl = row.querySelector('.queue-item-size');
-          if (sizeEl) sizeEl.textContent = formatBytes(sizes[j]);
-        }
+      const sizes = await invoke('get_file_sizes', { filePaths: batch });
+      if (revision !== queueRevision) return;
+      for (var j = 0; j < batch.length; j++) {
+        var item = queueItems.get(batch[j]);
+        if (item !== identities[j]) continue;
+        if (sizes[j] !== undefined) item.originalSize = sizes[j];
+        if (fileRows[batch[j]]) paintQueueRow(batch[j]);
       }
     } catch (e) { /* ignore */ }
-    applyQueueView();
   }
+  applyQueueView(false);
 }
 
 /// 把一个队列项此刻的状态**画**到它那一行上：图标、文案、尺寸、操作按钮。
@@ -1021,6 +1071,7 @@ function clearAllFiles() {
   inputPaths = [];
   queueItems = new Map();
   fileRows = {};
+  currentCompressOptions = null;
   pendingAutoCompress = false;
   var queuePanel = document.getElementById('queuePanel');
   if (queuePanel) queuePanel.style.display = 'none';
@@ -1134,6 +1185,7 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
   currentCompressOptions = batchOptions;
   var session = beginExecutionSession(batchPaths);
   var targetItems = new Map(batchPaths.map(function(filePath) { return [filePath, queueItems.get(filePath)]; }));
+  var targetPaths = new Set(batchPaths);
   var settled = new Set();
 
   var queueStats = document.getElementById('queueStats');
@@ -1158,7 +1210,7 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
     if (!executionSession || data.sessionId !== executionSession.id) return;
     if (runRevision !== queueRevision || data.queueRevision !== runRevision) return;
     var file = data.file;
-    if (session.targetPaths.indexOf(file) < 0) return;
+    if (!targetPaths.has(file)) return;
     var item = queueItems.get(file);
     // 同一路径在这一轮执行时可能被移除又重新导入；新项不能接旧 worker 的结果。
     if (!item || item !== targetItems.get(file)) return;
@@ -1168,8 +1220,7 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
       item.state = 'running';
       settled.delete(file);
       paintQueueRow(file);
-      applyQueueView();
-      updateQueueSummary();
+      scheduleQueueUpdates();
       return;
     }
 
@@ -1184,9 +1235,7 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
       item.result = result;
       item.state = result.success ? 'done' : 'failed';
       paintQueueRow(file);
-      updateStats();
-      updateQueueSummary();
-      emitCompareResultsChanged();
+      scheduleQueueUpdates();
       return;
     }
 
@@ -1202,7 +1251,7 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
         if (row.parentNode) row.parentNode.removeChild(row);
         delete fileRows[file];
       }
-      updateQueueSummary();
+      scheduleQueueUpdates();
       return;
     }
 
@@ -1211,12 +1260,12 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
       // 下一次「继续压缩」自然还会带上它。行上照旧写「等待中」。
       if (item.state === 'running') return;
       paintQueueRow(file);
-      updateQueueSummary();
+      scheduleQueueUpdates();
       return;
     }
 
     // queued：只是告诉大家它排上了，状态仍然是 pending。
-    paintQueueRow(file);
+    // queued only acknowledges the already pending item; no view work needed.
   };
 
   var unlisten = function() {};
@@ -1252,6 +1301,7 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
     console.error('Compression error:', err);
     showToast((processingMode === 'system' ? localizeUiText('转换出错: ') : localizeUiText('压缩出错: ')) + (err.message || err));
   } finally {
+    flushQueueUpdates();
     try { unlisten(); } catch (e) {}
     if (executionSession === session) endExecutionSession();
     // 用户按了停止：这一轮就地结束，绝不被"自动压缩"再拉起来跑下一批。
@@ -1271,13 +1321,31 @@ async function startCompressionForPaths(isIncrement, requestedPaths) {
   }
 }
 
+// Coalesce progress bursts. State/session checks above still run synchronously.
+var queueUpdatesTimer = null;
+function scheduleQueueUpdates() {
+  // Pure state-machine test hosts have no timer API.
+  if (typeof setTimeout !== 'function') { flushQueueUpdates(); return; }
+  if (queueUpdatesTimer !== null) return;
+  queueUpdatesTimer = setTimeout(flushQueueUpdates, 100);
+}
+
+function flushQueueUpdates() {
+  if (queueUpdatesTimer !== null && typeof clearTimeout === 'function') clearTimeout(queueUpdatesTimer);
+  queueUpdatesTimer = null;
+  updateStats();
+  updateQueueSummary();
+  emitCompareResultsChanged();
+}
+
 function updateStats() {
   let totalOriginal = 0;
   let totalCompressed = 0;
 
-  const all = queueResults();
-  for (const r of all) {
-    if (r.success) {
+  for (const file of files) {
+    const item = queueItems.get(file);
+    const r = item && item.result;
+    if (r && r.success) {
       totalOriginal += r.originalSize || 0;
       totalCompressed += r.compressedSize || 0;
     }
@@ -1423,6 +1491,7 @@ function clearResults() {
   inputPaths = [];
   queueItems = new Map();
   fileRows = {};
+  currentCompressOptions = null;
   pendingAutoCompress = false;
   resultsList.innerHTML = '';
   resultsPanel.style.display = 'none';
@@ -1563,7 +1632,7 @@ function waitingRowStatus() {
 }
 
 function repaintWaitingRows() {
-  files.forEach(function(filePath) {
+  Object.keys(fileRows).forEach(function(filePath) {
     if (queueState(filePath) === 'running') {
       // 正在跑的行在暂停 / 停止时写「收尾中…」，那才是它此刻的真面目。
       var runningRow = fileRows[filePath];
@@ -2183,6 +2252,7 @@ function openCompare(result) {
   let index = okResults.findIndex(function(r) { return r.file === result.file; });
   if (index < 0) index = 0;
   invoke('open_compare_window', { payload: { results: okResults, index: index } })
+    .then(function() { compareWindowOpen = true; })
     .catch(function(err) {
       showToast(localizeUiText('打开对比窗口失败: ') + (err.message || err));
     });
@@ -2193,11 +2263,21 @@ function openCompareByFile(filePath) {
   if (item && item.result) openCompare(item.result);
 }
 
-// 结果集变化（恢复/清空/压缩完成等）时推送快照，对比窗口据此刷新或置空
+var compareWindowOpen = false;
+var compareUpdateTimer = null;
+listen('compare-ready', function() { compareWindowOpen = true; });
+listen('compare-closed', function() { compareWindowOpen = false; });
+
+// A closed comparison window needs no queue-sized serialized snapshot.
 function emitCompareResultsChanged() {
-  try {
-    window.__TAURI__.event.emit('compare-results-changed', { results: comparableResults() });
-  } catch (_) {}
+  if (!compareWindowOpen || compareUpdateTimer !== null) return;
+  compareUpdateTimer = setTimeout(function() {
+    compareUpdateTimer = null;
+    if (!compareWindowOpen) return;
+    try {
+      window.__TAURI__.event.emit('compare-results-changed', { results: comparableResults() });
+    } catch (_) {}
+  }, 500);
 }
 
 listen('compare-recompressed', function(event) {

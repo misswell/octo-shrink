@@ -407,7 +407,7 @@ jobs:
           DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${ARCHIVE}"
           jq -n \
             --arg version "$VERSION" \
-            --arg notes "OctoShrink ${VERSION}: fixes App Store compression failing after selecting individual files by requesting and retaining output-folder write permission. Direct and Swift compression behavior is preserved." \
+            --arg notes "OctoShrink ${VERSION}: very large queues are now much lighter — the queue renders only the visible rows, file info loads in small batches, and compression budgets both CPU and estimated image memory, so importing tens of thousands of photos no longer scales UI memory with the queue. The Swift build also releases the compare window and its images as soon as it is closed." \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg signature "$SIGNATURE" \
             --arg url "$DOWNLOAD_URL" \
@@ -426,7 +426,7 @@ jobs:
             免费开源的本机图片压缩工具，图片不会上传到服务器。
 
             ### 本版
-            修复 App Store 沙盒版选择单个文件后无法写入压缩结果的问题：启动压缩前验证输出文件夹写权限，必要时请求授权，并保持授权直到输出事务完成。Direct 和 Swift 的压缩行为保持一致。
+            大队列内存专项：一次导入几万张图片时，内存不再随队列长度增长——队列只绘制可见的行，文件信息分批读取，压缩按 CPU 与图片估算内存共同调度；Swift 版关闭对比窗口后立即释放窗口与图片。Direct / App Store / Swift 三版同步生效。
 
             ### 下载
 

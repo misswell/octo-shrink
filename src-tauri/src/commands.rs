@@ -1,9 +1,9 @@
 // OctoShrink - Tauri command handlers (replaces Electron IPC)
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -15,6 +15,7 @@ use tauri_plugin_dialog::DialogExt;
 use crate::app_settings::{effective_cpu_limit, AppSettings, SettingsStore};
 use crate::engine::{self, CompressOptions, CompressResult, EngineResult};
 use crate::history::{HistoryEntry, HistoryStore, RestoreError};
+use crate::memory_budget;
 use crate::output_transaction::{self, ReplaceTransaction, StagedOutput, TransactionStore};
 use crate::sandbox_access::FileAccess;
 use crate::system_info::{CpuInfo, CpuStatus};
@@ -57,7 +58,7 @@ pub enum CompressionState {
     Stopping,
 }
 
-/// 压缩调度器：暂停 / 停止与 CPU 使用上限共用一个闸门。
+/// 压缩调度器：暂停 / 停止、CPU 上限与估算内存预算共用一个闸门。
 ///
 /// 三者语义相同 —— 只决定"要不要再启动新任务"，绝不干预已经在跑的子进程或线程：
 /// 暂停或停止时正在压的那张继续跑完；上限从 8 调到 2 时已有的 8 个也允许跑完，
@@ -74,12 +75,17 @@ pub struct CompressionScheduler {
     active_batch: AtomicBool,
     max_parallelism: AtomicUsize,
     active: AtomicUsize,
+    memory_budget_bytes: u64,
+    active_memory_bytes: AtomicU64,
+    /// Serializes paired CPU/memory reservations so concurrent waiters cannot overbook RAM.
+    admission: Mutex<()>,
     notify: tokio::sync::Notify,
 }
 
-/// 一份 CPU 并行预算。Drop 即归还，因此提前 return、panic 都不会把闸门卡死。
+/// 一份 CPU 与估算内存预算。Drop 即归还，因此提前 return、panic 都不会把闸门卡死。
 pub struct ParallelPermit {
     scheduler: std::sync::Arc<CompressionScheduler>,
+    memory_cost_bytes: u64,
 }
 
 /// 等闸门等的三种结局。**必须分开**，不能再像老实现那样用 `Option` 一个 `None`
@@ -101,12 +107,19 @@ pub const MIN_PARALLELISM: usize = 1;
 
 impl CompressionScheduler {
     pub fn new(max_parallelism: usize) -> Self {
+        Self::with_memory_budget(max_parallelism, memory_budget::budget_bytes())
+    }
+
+    fn with_memory_budget(max_parallelism: usize, memory_budget_bytes: u64) -> Self {
         Self {
             paused: AtomicBool::new(false),
             stopping: AtomicBool::new(false),
             active_batch: AtomicBool::new(false),
             max_parallelism: AtomicUsize::new(max_parallelism.max(MIN_PARALLELISM)),
             active: AtomicUsize::new(0),
+            memory_budget_bytes,
+            active_memory_bytes: AtomicU64::new(0),
+            admission: Mutex::new(()),
             notify: tokio::sync::Notify::new(),
         }
     }
@@ -125,7 +138,7 @@ impl CompressionScheduler {
     ///
     /// 与"取消某个文件"是两件事：`cancel_file` 要逐条记账（`cancel_queue`），
     /// 停止只是把闸门焊死 —— 后来者不需要谁替它记账，自己就会在
-    /// `acquire` 里看见 `stopping` 并拿到 `AcquireOutcome::Stopped`。
+    /// `acquire_with_memory` 里看见 `stopping` 并拿到 `AcquireOutcome::Stopped`。
     ///
     /// 绝不 kill 正在跑的进程：那会留下写了一半的临时文件、悬空的覆盖事务和
     /// 对不上账的历史，正是「宁可慢一点也不能弄丢原图」要避免的。
@@ -168,6 +181,11 @@ impl CompressionScheduler {
         self.max_parallelism.load(Ordering::Acquire).max(MIN_PARALLELISM)
     }
 
+    #[cfg(test)]
+    pub(crate) fn active_memory_bytes(&self) -> u64 {
+        self.active_memory_bytes.load(Ordering::Acquire)
+    }
+
     /// 当前正在占用的 CPU 并行份数。UI 展示的是"上限/核数"而不是这个瞬时值，
     /// 所以只有调度器测试会读它 —— 事件里也不带它：快照在下一次事件之前不会更新，
     /// 显示出去就是一句很快就会变假的话。
@@ -184,10 +202,12 @@ impl CompressionScheduler {
     }
 
     pub fn end_batch(&self) {
+        let _admission = self.admission.lock().unwrap();
         self.paused.store(false, Ordering::Release);
         self.stopping.store(false, Ordering::Release);
         self.active_batch.store(false, Ordering::Release);
         self.active.store(0, Ordering::Release);
+        self.active_memory_bytes.store(0, Ordering::Release);
         self.notify.notify_waiters();
     }
 
@@ -210,7 +230,7 @@ impl CompressionScheduler {
     /// 拿一份 CPU 预算：暂停中或名额已满就等，拿到时闸门是开着的。
     ///
     /// 老实现是"等信号量 → 再查一次暂停"两步，因为信号量不知道暂停。
-    /// 现在两者在同一次 CAS 里判断，拿到 permit 的那一刻必然既没暂停也没超载。
+    /// 现在在同一次 admission lock 下判断 CPU 和内存预算，拿到 permit 的那一刻闸门必然是开的。
     /// 测试专用：先拿一份预算，不关心演出条件（闸门一定是开的）。
     #[cfg(test)]
     pub async fn acquire_permit(self: &std::sync::Arc<Self>) -> ParallelPermit {
@@ -234,7 +254,23 @@ impl CompressionScheduler {
     ///
     /// 三种结局必须分开回给调用方（`AcquireOutcome`）：取消是"这个文件不再参与队列"，
     /// 停止是"这一轮没轮到它，队列里它还是 pending"，两者的收尾动作完全相反。
-    pub async fn acquire<F>(self: &std::sync::Arc<Self>, mut cancelled: F) -> AcquireOutcome
+    ///
+    /// 测试专用入口：按零内存成本走同一道闸门；真实压缩一律走带估算的 `acquire_with_memory`。
+    #[cfg(test)]
+    pub async fn acquire<F>(self: &std::sync::Arc<Self>, cancelled: F) -> AcquireOutcome
+    where
+        F: FnMut() -> bool,
+    {
+        self.acquire_with_memory(0, cancelled).await
+    }
+
+    /// Wait for both CPU capacity and the conservative image working-memory estimate.
+    /// An estimate larger than the whole budget is allowed only when it can run alone.
+    pub async fn acquire_with_memory<F>(
+        self: &std::sync::Arc<Self>,
+        memory_cost_bytes: u64,
+        mut cancelled: F,
+    ) -> AcquireOutcome
     where
         F: FnMut() -> bool,
     {
@@ -245,7 +281,7 @@ impl CompressionScheduler {
             if self.is_stopping() {
                 return AcquireOutcome::Stopped;
             }
-            if let Some(permit) = self.try_acquire() {
+            if let Some(permit) = self.try_acquire_with_memory(memory_cost_bytes) {
                 // 拿到的这一刻才被取消 / 才点了停止：还回预算，这个文件不压。
                 if cancelled() {
                     drop(permit);
@@ -262,7 +298,16 @@ impl CompressionScheduler {
         }
     }
 
+    #[cfg(test)]
     pub fn try_acquire(self: &std::sync::Arc<Self>) -> Option<ParallelPermit> {
+        self.try_acquire_with_memory(0)
+    }
+
+    fn try_acquire_with_memory(
+        self: &std::sync::Arc<Self>,
+        memory_cost_bytes: u64,
+    ) -> Option<ParallelPermit> {
+        let _admission = self.admission.lock().unwrap();
         if self.is_paused() {
             return None;
         }
@@ -270,24 +315,39 @@ impl CompressionScheduler {
         if current >= self.max_parallelism() {
             return None;
         }
-        self.active
-            .compare_exchange(
-                current,
-                current + 1,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .ok()
-            .map(|_| ParallelPermit { scheduler: self.clone() })
+        let active_memory = self.active_memory_bytes.load(Ordering::Acquire);
+        let memory_fits = if current == 0 && memory_cost_bytes > self.memory_budget_bytes {
+            true
+        } else {
+            active_memory.saturating_add(memory_cost_bytes) <= self.memory_budget_bytes
+        };
+        if !memory_fits {
+            return None;
+        }
+        self.active.store(current + 1, Ordering::Release);
+        self.active_memory_bytes.store(
+            active_memory.saturating_add(memory_cost_bytes),
+            Ordering::Release,
+        );
+        Some(ParallelPermit {
+            scheduler: self.clone(),
+            memory_cost_bytes,
+        })
     }
 }
 
 impl Drop for ParallelPermit {
     fn drop(&mut self) {
+        let _admission = self.scheduler.admission.lock().unwrap();
         // saturating：end_batch 会把计数归零，迟到的 Drop 不能减成天文数字。
         self.scheduler.active.fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
             Some(current.saturating_sub(1))
         }).ok();
+        self.scheduler.active_memory_bytes.fetch_update(
+            Ordering::AcqRel,
+            Ordering::Acquire,
+            |current| Some(current.saturating_sub(self.memory_cost_bytes)),
+        ).ok();
         self.scheduler.notify.notify_waiters();
     }
 }
@@ -777,8 +837,8 @@ fn take_cancelled(cancel_queue: &Mutex<HashSet<String>>, file_path: &str) -> boo
     cancel_queue.lock().unwrap().remove(file_path)
 }
 
-// 启动下一个文件前的闸门就是 `CompressionScheduler::acquire`：暂停与 CPU 上限在同一次
-// CAS 里判断，拿到 permit 的那一刻闸门必然是开的。老实现要"等信号量 → 再查一次暂停"，
+// 启动下一个文件前的闸门就是 `CompressionScheduler::acquire_with_memory`：暂停、CPU 上限与
+// 内存预算在同一次 admission lock 下判断，拿到 permit 的那一刻闸门必然是开的。老实现要"等信号量 → 再查一次暂停"，
 // 因为信号量不知道暂停这回事。
 
 /// 跑一轮执行会话：只处理传进来的这些文件（前端的「继续压缩」只提交 pending）。
@@ -839,7 +899,6 @@ async fn compress_batch(
 
     // 并发度由 CPU 上限决定（不再是写死的 3）
     use std::sync::Arc;
-    use tokio::sync::Mutex;
 
     let options = Arc::new(options);
     let file_paths_arc = Arc::new(file_paths);
@@ -848,7 +907,6 @@ async fn compress_batch(
     let control = state.compression.clone();
     let history = state.history_store.clone();
     let transactions = state.transactions.clone();
-    let results_arc = Arc::new(Mutex::new(Vec::<CompressResult>::new()));
     // 本轮真正处理完的数量 + 明确取消的数量。`deferred` 绝不加它：
     // 没执行过的文件不算处理过，否则"停止后继续"的进度会凭空多出一截。
     let processed_arc = Arc::new(AtomicUsize::new(0));
@@ -856,12 +914,17 @@ async fn compress_batch(
     let cancelled_count = Arc::new(AtomicUsize::new(0));
     let session_id_arc = Arc::new(session_id.clone());
 
-    let mut handles: Vec<(tokio::task::JoinHandle<()>, String)> = Vec::new();
+    let mut tasks = tokio::task::JoinSet::<CompressResult>::new();
+    let mut task_paths = HashMap::new();
+    let mut results = Vec::<CompressResult>::new();
     for file_path in all_files {
         // 闸门：暂停或名额满了就在这里等，拿到的瞬间两者都已满足。
         // 等待期间这个文件被取消就直接退出，**绝不因此解除暂停**。
         let outcome = control
-            .acquire(|| take_cancelled(cancel_queue, &file_path))
+            .acquire_with_memory(
+                memory_budget::estimate_working_set(Path::new(&file_path)),
+                || take_cancelled(cancel_queue, &file_path),
+            )
             .await;
         let permit = match outcome {
             AcquireOutcome::Acquired(permit) => permit,
@@ -929,13 +992,32 @@ async fn compress_batch(
         let app_c = app_arc.clone();
         let history_c = history.clone();
         let transactions_c = transactions.clone();
-        let results_c = results_arc.clone();
         let processed_c = processed_arc.clone();
         let session_id_c = session_id_arc.clone();
         let fp = file_path.clone();
-
         let fp_for_track = fp.clone();
-        handles.push((tokio::spawn(async move {
+
+        let max_in_flight = control.max_parallelism();
+        while tasks.len() >= max_in_flight {
+            reap_compression_task(
+                &mut tasks,
+                &mut task_paths,
+                &mut results,
+                |result| {
+                    report_compression_task_panic(
+                        &app_arc,
+                        &processed_arc,
+                        &session_id_arc,
+                        queue_revision,
+                        session_total,
+                        result,
+                    )
+                },
+            )
+            .await;
+        }
+
+        let abort_handle = tasks.spawn(async move {
             let _permit = permit; // 持有信号量直到压缩完成
 
             let path = PathBuf::from(&fp);
@@ -985,48 +1067,104 @@ async fn compress_batch(
                 );
             }
 
-            let mut res = results_c.lock().await;
-            res.push(result);
-        }), fp_for_track));
+            result
+        });
+        task_paths.insert(abort_handle.id(), fp_for_track);
     }
 
-    // 等待所有任务完成
-    for (handle, fp) in handles {
-        if let Err(e) = handle.await {
-            eprintln!("[ERROR] compression task panicked for {}: {:?}", fp, e);
-            let done = processed_arc.fetch_add(1, Ordering::SeqCst) + 1;
-            let _ = app_arc.emit(
-                "compress-progress",
-                ProgressPayload {
-                    session_id: session_id_arc.to_string(),
+    while !tasks.is_empty() {
+        reap_compression_task(
+            &mut tasks,
+            &mut task_paths,
+            &mut results,
+            |result| {
+                report_compression_task_panic(
+                    &app_arc,
+                    &processed_arc,
+                    &session_id_arc,
                     queue_revision,
-                    file: fp.clone(),
-                    status: ProgressStatus::Failed,
-                    timestamp: event_timestamp(),
                     session_total,
-                    session_processed: done,
-                    result: Some(failed_result(fp)),
-                },
-            );
-        }
+                    result,
+                )
+            },
+        )
+        .await;
     }
 
     state.cancel_queue.lock().unwrap().clear();
     // 批次结束必须清暂停与停止，否则下一批继承上一批的状态。
     state.compression.end_batch();
     emit_compression_state(app, &state.compression);
-    let final_results = results_arc.lock().await.clone();
-    let completed = final_results.iter().filter(|r| r.success).count();
-    let failed = final_results.len() - completed;
+    let completed = results.iter().filter(|r| r.success).count();
+    let failed = results.len() - completed;
     CompressionSessionResult {
         session_id,
-        attempted: final_results.len(),
+        attempted: results.len(),
         completed,
         failed,
         deferred: deferred.load(Ordering::SeqCst),
         cancelled: cancelled_count.load(Ordering::SeqCst),
-        results: final_results,
+        results,
     }
+}
+
+/// Collect a finished worker promptly so the task set retains only a CPU-sized window of
+/// task futures and their captured paths. The task id map is bounded by the same window and
+/// lets the caller report the right file if a worker panics before returning its result.
+async fn reap_compression_task<F>(
+    tasks: &mut tokio::task::JoinSet<CompressResult>,
+    task_paths: &mut HashMap<tokio::task::Id, String>,
+    results: &mut Vec<CompressResult>,
+    mut on_panic: F,
+)
+where
+    F: FnMut(&CompressResult),
+{
+    let Some(joined) = tasks.join_next_with_id().await else {
+        return;
+    };
+    match joined {
+        Ok((id, result)) => {
+            task_paths.remove(&id);
+            results.push(result);
+        }
+        Err(error) => {
+            let file = task_paths
+                .remove(&error.id())
+                .unwrap_or_else(|| "<unknown file>".to_string());
+            eprintln!(
+                "[ERROR] compression task panicked for {}: {:?}",
+                file, error
+            );
+            let result = failed_result(file.clone());
+            on_panic(&result);
+            results.push(result);
+        }
+    }
+}
+
+fn report_compression_task_panic(
+    app: &AppHandle,
+    processed: &AtomicUsize,
+    session_id: &str,
+    queue_revision: u64,
+    session_total: usize,
+    result: &CompressResult,
+) {
+    let done = processed.fetch_add(1, Ordering::SeqCst) + 1;
+    let _ = app.emit(
+        "compress-progress",
+        ProgressPayload {
+            session_id: session_id.to_string(),
+            queue_revision,
+            file: result.file.clone(),
+            status: ProgressStatus::Failed,
+            timestamp: event_timestamp(),
+            session_total,
+            session_processed: done,
+            result: Some(result.clone()),
+        },
+    );
 }
 
 fn failed_result(file: String) -> CompressResult {
@@ -1296,7 +1434,7 @@ pub fn resume_compression(app: AppHandle, state: State<'_, AppState>) -> Compres
 /// 用户点「继续压缩」时新一轮会把它们带上（见 `AcquireOutcome`）。
 ///
 /// 不需要前端把路径传进来 —— 闸门自己认得 `stopping`，排在后面的文件
-/// 一个个在 `acquire` 里自行退出。这也是"停止"比"逐个取消"更可靠的地方：
+/// 一个个在 `acquire_with_memory` 里自行退出。这也是"停止"比"逐个取消"更可靠的地方：
 /// 不存在"部分已停、部分还在排队"的中间态。
 #[tauri::command]
 pub fn stop_compression(app: AppHandle, state: State<'_, AppState>) -> CompressionState {
@@ -1857,6 +1995,185 @@ mod tests {
             AcquireOutcome::Cancelled => "cancelled",
             AcquireOutcome::Stopped => "stopped",
         }
+    }
+
+    #[tokio::test]
+    async fn memory_budget_reservations_block_and_release_with_the_permit() {
+        let scheduler = std::sync::Arc::new(CompressionScheduler::with_memory_budget(3, 100));
+        scheduler.begin_batch();
+        let first = match scheduler.acquire_with_memory(70, || false).await {
+            AcquireOutcome::Acquired(permit) => permit,
+            _ => panic!("first image should fit the budget"),
+        };
+        assert_eq!(scheduler.active_memory_bytes(), 70);
+
+        let waiter = {
+            let scheduler = scheduler.clone();
+            tokio::spawn(async move {
+                match scheduler.acquire_with_memory(50, || false).await {
+                    AcquireOutcome::Acquired(permit) => permit,
+                    _ => panic!("waiter should eventually acquire memory"),
+                }
+            })
+        };
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished(), "CPU is available, but RAM budget is not");
+
+        drop(first);
+        assert!(wait_until(|| scheduler.active_memory_bytes() == 50).await);
+        drop(waiter.await.unwrap());
+        assert_eq!(scheduler.active_memory_bytes(), 0);
+        scheduler.end_batch();
+    }
+
+    #[tokio::test]
+    async fn memory_weighted_waiters_follow_dynamic_cpu_limits() {
+        let scheduler = std::sync::Arc::new(CompressionScheduler::with_memory_budget(2, 100));
+        scheduler.begin_batch();
+        let first = match scheduler.acquire_with_memory(40, || false).await {
+            AcquireOutcome::Acquired(permit) => permit,
+            _ => panic!("first image should fit the budget"),
+        };
+        scheduler.set_max_parallelism(1);
+        let waiter = {
+            let scheduler = scheduler.clone();
+            tokio::spawn(async move {
+                match scheduler.acquire_with_memory(10, || false).await {
+                    AcquireOutcome::Acquired(permit) => permit,
+                    _ => panic!("waiter should acquire after CPU capacity returns"),
+                }
+            })
+        };
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished(), "the reduced CPU limit must block new work");
+        drop(first);
+        let second = waiter.await.unwrap();
+        assert_eq!(scheduler.active(), 1);
+        assert_eq!(scheduler.active_memory_bytes(), 10);
+        drop(second);
+        assert_eq!(scheduler.active_memory_bytes(), 0);
+        scheduler.end_batch();
+    }
+
+    #[tokio::test]
+    async fn a_single_image_larger_than_the_budget_runs_exclusively() {
+        let scheduler = std::sync::Arc::new(CompressionScheduler::with_memory_budget(4, 100));
+        scheduler.begin_batch();
+        let oversized = match scheduler.acquire_with_memory(150, || false).await {
+            AcquireOutcome::Acquired(permit) => permit,
+            _ => panic!("an oversized image must be allowed to run alone"),
+        };
+        assert_eq!(scheduler.active_memory_bytes(), 150);
+
+        let waiter = {
+            let scheduler = scheduler.clone();
+            tokio::spawn(async move {
+                match scheduler.acquire_with_memory(1, || false).await {
+                    AcquireOutcome::Acquired(permit) => permit,
+                    _ => panic!("waiter should acquire after the oversized image exits"),
+                }
+            })
+        };
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished(), "oversized work must be exclusive");
+        drop(oversized);
+        assert!(wait_until(|| scheduler.active_memory_bytes() == 1).await);
+        drop(waiter.await.unwrap());
+        assert_eq!(scheduler.active_memory_bytes(), 0);
+        scheduler.end_batch();
+    }
+
+    #[tokio::test]
+    async fn memory_waiting_preserves_cancel_pause_and_stop_outcomes() {
+        let scheduler = std::sync::Arc::new(CompressionScheduler::with_memory_budget(2, 10));
+        scheduler.begin_batch();
+        let held = scheduler.acquire_with_memory(8, || false).await;
+        scheduler.pause();
+        assert_eq!(
+            outcome_name(scheduler.acquire_with_memory(4, || true).await),
+            "cancelled"
+        );
+        assert!(scheduler.is_paused(), "cancellation must not resume the batch");
+
+        let waiting = {
+            let scheduler = scheduler.clone();
+            tokio::spawn(async move {
+                outcome_name(scheduler.acquire_with_memory(4, || false).await)
+            })
+        };
+        tokio::task::yield_now().await;
+        scheduler.stop();
+        assert_eq!(waiting.await.unwrap(), "stopped");
+        assert_eq!(scheduler.active_memory_bytes(), 8);
+        drop(held);
+        assert_eq!(scheduler.active_memory_bytes(), 0);
+        scheduler.end_batch();
+    }
+
+    /// A large batch must retain only the bounded JoinSet window, and a panic must still
+    /// become a failed result associated with the correct path.
+    #[tokio::test]
+    async fn large_task_batches_reap_promptly_and_report_panics() {
+        const TOTAL: usize = 10_000;
+        const LIMIT: usize = 8;
+        let mut tasks = tokio::task::JoinSet::<CompressResult>::new();
+        let mut task_paths = HashMap::new();
+        let mut results = Vec::with_capacity(TOTAL);
+        let panic_count = AtomicUsize::new(0);
+        let mut peak_tasks = 0;
+
+        for index in 0..TOTAL {
+            while tasks.len() >= LIMIT {
+                reap_compression_task(
+                    &mut tasks,
+                    &mut task_paths,
+                    &mut results,
+                    |_| {
+                        panic_count.fetch_add(1, Ordering::SeqCst);
+                    },
+                )
+                .await;
+            }
+
+            let file = format!("/photos/{index}.png");
+            let task_file = file.clone();
+            let abort_handle = tasks.spawn(async move {
+                if index == 1234 {
+                    panic!("simulated worker failure");
+                }
+                let mut result = failed_result(task_file);
+                result.success = true;
+                result.error = None;
+                result
+            });
+            task_paths.insert(abort_handle.id(), file);
+            peak_tasks = peak_tasks.max(tasks.len());
+        }
+
+        while !tasks.is_empty() {
+            reap_compression_task(
+                &mut tasks,
+                &mut task_paths,
+                &mut results,
+                |_| {
+                    panic_count.fetch_add(1, Ordering::SeqCst);
+                },
+            )
+            .await;
+        }
+
+        assert_eq!(peak_tasks, LIMIT);
+        assert!(task_paths.is_empty());
+        assert_eq!(results.len(), TOTAL);
+        assert_eq!(results.iter().filter(|result| !result.success).count(), 1);
+        assert_eq!(panic_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            results
+                .iter()
+                .find(|result| !result.success)
+                .map(|result| result.file.as_str()),
+            Some("/photos/1234.png")
+        );
     }
 
     /// 上限就是上限：limit=3 时任何时刻最多 3 份在跑；暂停只拦新任务，不 interrupt 已开跑的。

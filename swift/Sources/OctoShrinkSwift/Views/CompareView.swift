@@ -2,10 +2,10 @@ import AppKit
 import SwiftUI
 
 final class CompareWindowController {
-    private static var window: NSWindow?
+    private static let lifetime = CompareWindowLifetime()
 
     static func show(appState: AppState, originalPath: String, result: CompressResult, allResults: [CompressResult]) {
-        window?.close()
+        lifetime.close()
         let okResults = allResults.filter { $0.success }
         let list = okResults.isEmpty ? [result] : okResults
         let startIndex = list.firstIndex(where: { $0.file == result.file }) ?? 0
@@ -19,14 +19,13 @@ final class CompareWindowController {
         win.minSize = NSSize(width: 560, height: 440)
         win.center()
         win.isReleasedWhenClosed = false
+        lifetime.retain(win)
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        window = win
     }
 
     static func close() {
-        window?.close()
-        window = nil
+        lifetime.close()
     }
 }
 
@@ -63,6 +62,8 @@ struct CompareView: View {
     @State private var isRecompressing = false
     @State private var toastMessage: String?
     @State private var eventMonitor: Any?
+    @State private var viewIsActive = false
+    @State private var recompressRequestID: UUID?
 
     init(appState: AppState, results: [CompressResult], startIndex: Int) {
         self.appState = appState
@@ -108,14 +109,23 @@ struct CompareView: View {
         }
         .frame(minWidth: 560, minHeight: 440)
         .onAppear {
+            viewIsActive = true
             installEventMonitor()
             loadImages()
         }
         .onDisappear {
+            viewIsActive = false
+            recompressRequestID = nil
+            isRecompressing = false
             removeEventMonitor()
+            originalImage = nil
+            compressedImage = nil
+            results.removeAll(keepingCapacity: false)
             NSCursor.arrow.set()
         }
         .onChange(of: currentIndex) { _ in
+            recompressRequestID = nil
+            isRecompressing = false
             splitPercent = 50
             loadImages()
         }
@@ -517,16 +527,29 @@ struct CompareView: View {
 
     private func recompress() {
         guard let result = currentResult else { return }
+        let requestID = UUID()
+        recompressRequestID = requestID
         isRecompressing = true
         let quality = Int(recompressQuality)
         Task { @MainActor in
-            defer { isRecompressing = false }
+            guard viewIsActive, recompressRequestID == requestID,
+                  currentResult?.file == result.file else { return }
+            defer {
+                if recompressRequestID == requestID {
+                    isRecompressing = false
+                    recompressRequestID = nil
+                }
+            }
             guard let updated = appState.recompressForCompare(path: result.file, quality: quality) else {
                 showCompareToast("重新压缩失败")
                 return
             }
+            guard viewIsActive, recompressRequestID == requestID,
+                  currentResult?.file == result.file else { return }
             // 预览输出为临时文件，仅刷新对比图与新尺寸
             if let preview = Self.loadImage(updated.outputPath ?? "") {
+                guard viewIsActive, recompressRequestID == requestID,
+                      currentResult?.file == result.file else { return }
                 compressedImage = preview
             } else {
                 showCompareToast("重新压缩预览加载失败")

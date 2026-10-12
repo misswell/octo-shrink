@@ -13,7 +13,7 @@ enum CompressionPhase: String {
     case stopping
 }
 
-// MARK: - 压缩调度器（暂停 / 停止 + CPU 使用上限，同一套闸门）
+// MARK: - 压缩调度器（暂停 / 停止 + CPU / 图片工作内存预算，同一套闸门）
 //
 // 三件事语义相同 —— 只决定「要不要再启动新任务」，绝不干预已经在跑的子进程：
 // 暂停或停止时正在压的那张继续跑完；上限从 8 调到 2 时已有的 8 个也允许跑完，
@@ -30,11 +30,14 @@ final class CompressionScheduler: @unchecked Sendable {
     private var batchRunning = false
     private var maxParallelism: Int
     private var active = 0
+    private let memoryLimitBytes: UInt64
+    private var reservedMemoryBytes: UInt64 = 0
 
     static let minParallelism = CPULimit.minParallelism
 
-    init(maxParallelism: Int) {
+    init(maxParallelism: Int, memoryLimitBytes: UInt64 = ImageMemoryBudget.systemLimit) {
         self.maxParallelism = max(Self.minParallelism, maxParallelism)
+        self.memoryLimitBytes = memoryLimitBytes
     }
 
     var isPaused: Bool {
@@ -69,6 +72,14 @@ final class CompressionScheduler: @unchecked Sendable {
         condition.lock()
         defer { condition.unlock() }
         return active
+    }
+
+    var currentMemoryLimitBytes: UInt64 { memoryLimitBytes }
+
+    var reservedMemory: UInt64 {
+        condition.lock()
+        defer { condition.unlock() }
+        return reservedMemoryBytes
     }
 
     /// 是否有批次在跑 —— 清空历史这类破坏性操作的判据（与 Rust `is_batch_active` 一致）。
@@ -130,6 +141,7 @@ final class CompressionScheduler: @unchecked Sendable {
         stopping = false
         batchRunning = false
         active = 0
+        reservedMemoryBytes = 0
         condition.broadcast()
         condition.unlock()
     }
@@ -147,7 +159,7 @@ final class CompressionScheduler: @unchecked Sendable {
     /// 条件变量 + 250ms 超时兜底：即使漏掉一次唤醒，最坏情况只是延迟几百毫秒，
     /// 而不是永久卡住整个批次。
     func acquire() -> Permit {
-        if case .acquired(let permit) = acquireOutcome(cancelled: { false }) {
+        if case .acquired(let permit) = acquireOutcome(memoryCost: 0, cancelled: { false }) {
             return permit
         }
         // 调用点都保证闸门开着；真走到这里说明调度器状态坏了，不能假装拿到了名额。
@@ -172,7 +184,7 @@ final class CompressionScheduler: @unchecked Sendable {
     /// 取消 → 停止 → 暂停/名额。取消排最前，是为了让"暂停中被取消的文件"能立刻退出；
     /// 停止排在暂停之前，是为了让"暂停中按停止"能真的结束整批，而不是继续堵在
     /// 关着的闸门上等用户点「继续」（那正是「停止」的反面）。
-    func acquireOutcome(cancelled: () -> Bool) -> AcquireOutcome {
+    func acquireOutcome(memoryCost: UInt64 = 0, cancelled: () -> Bool) -> AcquireOutcome {
         condition.lock()
         while true {
             if cancelled() {
@@ -183,17 +195,26 @@ final class CompressionScheduler: @unchecked Sendable {
                 condition.unlock()
                 return .stopped
             }
-            if !paused && active < maxParallelism { break }
+            let fitsMemoryBudget = memoryCost > memoryLimitBytes
+                ? active == 0
+                : reservedMemoryBytes <= memoryLimitBytes - memoryCost
+            if !paused && active < maxParallelism && fitsMemoryBudget { break }
             _ = condition.wait(until: Date(timeIntervalSinceNow: 0.25))
         }
         active += 1
+        reservedMemoryBytes = reservedMemoryBytes > UInt64.max - memoryCost
+            ? UInt64.max
+            : reservedMemoryBytes + memoryCost
         condition.unlock()
-        return .acquired(Permit(scheduler: self))
+        return .acquired(Permit(scheduler: self, memoryCost: memoryCost))
     }
 
-    fileprivate func release() {
+    fileprivate func release(memoryCost: UInt64) {
         condition.lock()
         active = max(0, active - 1)
+        reservedMemoryBytes = reservedMemoryBytes >= memoryCost
+            ? reservedMemoryBytes - memoryCost
+            : 0
         condition.broadcast()
         condition.unlock()
     }
@@ -201,13 +222,15 @@ final class CompressionScheduler: @unchecked Sendable {
     /// 一份 CPU 并行预算。忘记 release 也不会永久泄漏 —— deinit 兜底归还。
     final class Permit: @unchecked Sendable {
         private var scheduler: CompressionScheduler?
+        private let memoryCost: UInt64
 
-        init(scheduler: CompressionScheduler) {
+        init(scheduler: CompressionScheduler, memoryCost: UInt64) {
             self.scheduler = scheduler
+            self.memoryCost = memoryCost
         }
 
         func release() {
-            scheduler?.release()
+            scheduler?.release(memoryCost: memoryCost)
             scheduler = nil
         }
 

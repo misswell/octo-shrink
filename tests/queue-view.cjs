@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
 const { installQueueCore } = require('./app-slices.cjs');
+const { queueDOM } = require('./queue-dom.cjs');
 const source = fs.readFileSync('frontend/app.js', 'utf8');
 const files = ['/image10.png', '/image2.png', '/image1.png', '/pending.png'];
 const states = ['done', 'failed', 'done', 'pending'];
@@ -16,29 +17,20 @@ const queueItems = new Map(files.map((file, i) => [file, {
   ][i],
   originalSize: [100, 2000, 300, undefined][i],
 }]));
-const rows = Object.fromEntries(files.map(file => [file, {
-  file, originalSize: 0,
-  classList: { contains: () => false },
-}]));
-const list = { children: Object.values(rows), insertBefore(row, before) {
-  this.children = this.children.filter(item => item !== row);
-  const index = before ? this.children.indexOf(before) : this.children.length;
-  this.children.splice(index, 0, row);
-}};
-const controls = {
-  fileQueueList: list, queueFailedOnly: {checked:false}, queueSortKey: {value:'import'},
-  queueSortDirection: {setAttribute() {}}, queueFilterEmpty: {},
-};
+const { controls, document } = queueDOM();
+const list = controls.fileQueueList;
 const context = vm.createContext({
-  files, fileRows: rows, queueItems, queueSortDescending: false,
+  files, fileRows: {}, queueItems, queueSortDescending: false,
   basename: file => file.split('/').pop(),
   iconMarkup: name => '<svg>' + name + '</svg>',
-  document: {getElementById: id => controls[id]},
+  document,
+  createQueueRow(file) { const row = document.createElement('div'); row.file = file; return row; },
+  paintQueueRow() {},
 });
 // applyQueueView 自己只读 queueItems（排序键 + 只看失败筛子），DOM class 已经不参与判断。
 installQueueCore(context);
 vm.runInContext(source.slice(source.indexOf('function toggleQueueSortDirection('), source.indexOf('async function renderFileQueue(')), context);
-const order = () => list.children.filter(row => !row.hidden).map(row => row.file);
+const order = () => list.children.filter(row => row.file).map(row => row.file);
 const sort = (key, descending = false) => {
   controls.queueSortKey.value = key;
   context.queueSortDescending = descending;

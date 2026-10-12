@@ -124,6 +124,9 @@ final class AppState: ObservableObject {
     @Published private(set) var compressionPhase: CompressionPhase = .idle
     /// 清空队列后递增；旧 worker 的回调不能写入重新导入的同名文件。
     private var queueRevision = 0
+    /// Rebuilt once after structural edits; workers and queue actions resolve rows in O(1).
+    private var itemIndexByID: [UUID: Int] = [:]
+    private var itemIndexByPath: [String: Int] = [:]
     private var activeSessionID: UUID?
     var compressionPaused: Bool { compressionPhase == .paused }
     var compressionStopping: Bool { compressionPhase == .stopping }
@@ -347,13 +350,16 @@ final class AppState: ObservableObject {
         if onlyShowFailed {
             list = list.filter { $0.status == .failed }
         }
+        // `filter` preserves import order, so don't run a comparator that searches
+        // the full queue for both items on every comparison (O(n²) at scale).
+        if sortKey == .importOrder {
+            return sortAscending ? list : Array(list.reversed())
+        }
         list.sort { a, b in
             let result: Bool
             switch sortKey {
             case .importOrder:
-                let ai = items.firstIndex(where: { $0.id == a.id }) ?? 0
-                let bi = items.firstIndex(where: { $0.id == b.id }) ?? 0
-                return sortAscending ? ai < bi : ai > bi
+                return false
             case .name:
                 result = a.fileName.localizedCompare(b.fileName) == .orderedAscending
             case .originalSize:
@@ -568,20 +574,36 @@ final class AppState: ObservableObject {
             showToast("文件夹中没有找到可压缩的图片")
             return
         }
-        let existing = Set(items.filter { $0.status != .removed && $0.status != .restored }.map(\.path))
-        var added = 0
-        for path in expanded where !existing.contains(path) {
-            // 已移除 / 已恢复的行只是历史展示，重新加入时创建全新的 pending 行
-            if let idx = items.firstIndex(where: { $0.path == path && ($0.status == .removed || $0.status == .restored) }) {
-                items.remove(at: idx)
+        var activePaths = Set(items.lazy
+            .filter { $0.status != .removed && $0.status != .restored }
+            .map(\.path))
+        var pathsToAppend: [String] = []
+        var staleIndices = Set<Int>()
+        for path in expanded where activePaths.insert(path).inserted {
+            // 已移除 / 已恢复的行只是历史展示，重新加入时删除旧行并在队尾创建新行。
+            if let index = itemIndexByPath[path],
+               (items[index].status == .removed || items[index].status == .restored) {
+                staleIndices.insert(index)
             }
+            pathsToAppend.append(path)
+        }
+        if !staleIndices.isEmpty {
+            items = items.enumerated().compactMap { index, item in
+                staleIndices.contains(index) ? nil : item
+            }
+            rebuildItemIndices()
+        }
+
+        for path in pathsToAppend {
             let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64) ?? 0
-            items.append(QueueItem(
+            let item = QueueItem(
                 path: path,
                 fileName: (path as NSString).lastPathComponent,
                 fileSize: size
-            ))
-            added += 1
+            )
+            itemIndexByID[item.id] = items.count
+            itemIndexByPath[path] = items.count
+            items.append(item)
         }
         // 记录来源根目录（用于「输出到指定文件夹」保留相对路径）
         for root in incoming {
@@ -592,7 +614,7 @@ final class AppState: ObservableObject {
                 options.sourceRoots.append(root)
             }
         }
-        if added == 0 {
+        if pathsToAppend.isEmpty {
             hasImported = true
             showToast("所选图片已在队列中")
             return
@@ -608,6 +630,20 @@ final class AppState: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Called once after queue rows are removed/replaced as a group.
+    private func rebuildItemIndices() {
+        var byID: [UUID: Int] = [:]
+        var byPath: [String: Int] = [:]
+        byID.reserveCapacity(items.count)
+        byPath.reserveCapacity(items.count)
+        for (index, item) in items.enumerated() {
+            byID[item.id] = index
+            byPath[item.path] = index
+        }
+        itemIndexByID = byID
+        itemIndexByPath = byPath
     }
 
     func addFilesPanel() {
@@ -657,6 +693,7 @@ final class AppState: ObservableObject {
             scheduler.wakeWaiters()
         }
         items.removeAll()
+        rebuildItemIndices()
         options.sourceRoots.removeAll()
         pendingAutoCompress = false
     }
@@ -666,7 +703,7 @@ final class AppState: ObservableObject {
         cancelBox.insert(path)
         // 堵在闸门上的 worker 得被叫醒才会发现"自己要处理的文件已经不在队列里"。
         scheduler.wakeWaiters()
-        if let idx = items.firstIndex(where: { $0.path == path }) {
+        if let idx = itemIndexByPath[path] {
             if items[idx].status == .pending || items[idx].status == .running {
                 items[idx].status = .removed
             }
@@ -686,9 +723,9 @@ final class AppState: ObservableObject {
             showToast("请先选择输出目录")
             return
         }
-        let pending = items.filter { $0.status == .pending }
-        guard !pending.isEmpty else { return }
-        runBatch(paths: pending.map(\.path))
+        let targets = pendingWorkItems()
+        guard !targets.isEmpty else { return }
+        runBatch(targets: targets)
     }
 
     /// 重试单个文件（与 Tauri compressOneFile 对齐：只处理该文件）。
@@ -699,10 +736,11 @@ final class AppState: ObservableObject {
             showToast("请先选择输出目录")
             return
         }
-        guard let idx = items.firstIndex(where: { $0.path == path && ($0.status == .failed || $0.status == .restored) }) else { return }
+        guard let idx = itemIndexByPath[path],
+              (items[idx].status == .failed || items[idx].status == .restored) else { return }
         items[idx].status = .pending
         items[idx].result = nil
-        runBatch(paths: [path])
+        runBatch(targets: [CompressionWorkItem(id: items[idx].id, path: path)])
     }
 
     /// 摘要里跟着阶段走的那一小段（与 Tauri 的 compressionStateSuffix 逐字一致）。
@@ -729,18 +767,19 @@ final class AppState: ObservableObject {
     /// 停止 / 继续都不会把它清零 —— 老实现每次进这里都写一遍
     /// `compressTotal = paths.count; compressCurrent = 0`，于是"停止后继续"
     /// 会把 40/100 变成 0/60，那是用户最直接能看到的那种错。
-    private func runBatch(paths: [String]) {
-        guard !paths.isEmpty else { return }
+    private func pendingWorkItems() -> [CompressionWorkItem] {
+        items.enumerated().compactMap { index, item in
+            guard item.status == .pending else { return nil }
+            return CompressionWorkItem(id: item.id, path: item.path)
+        }
+    }
+
+    private func runBatch(targets: [CompressionWorkItem]) {
+        guard !targets.isEmpty else { return }
 
         let sessionID = UUID()
         let revision = queueRevision
         activeSessionID = sessionID
-        let targets = paths.compactMap { path -> (path: String, itemID: UUID)? in
-            guard let item = items.first(where: { $0.path == path && $0.status == .pending }) else { return nil }
-            return (path, item.id)
-        }
-        guard !targets.isEmpty else { activeSessionID = nil; return }
-
         setCompressionPhase(.running)
         compressButtonText = ""
         cancelBox.removeAll()
@@ -751,46 +790,55 @@ final class AppState: ObservableObject {
             && (options.smartMode || effectiveOutputFormat != .original)
 
         let group = DispatchGroup()
-        let queue = DispatchQueue(label: "octoshrink.compress", attributes: .concurrent)
         // 新批次从未暂停、未停止开始，不继承上一批的状态；上限取设置页当前值。
         scheduler.beginBatch(maxParallelism: effectiveCpuThreadLimit)
         let gate = scheduler
         let store = history
         let journal = transactions
         let retention = retentionDays
-
-        for (path, itemID) in targets {
+        let worklist = CompressionWorklist(targets)
+        // Keep a small fixed set of pull workers. A 100,000-file batch therefore
+        // has at most one hundred thousand compact targets and at most one worker
+        // per available CPU, instead of one blocked closure per file. Using the
+        // hardware ceiling (rather than today's selected limit) lets a live CPU
+        // limit increase take effect in this session.
+        let workerCount = min(max(1, cpuInfo.budgetCeiling), targets.count)
+        for _ in 0..<workerCount {
             group.enter()
-            queue.async { [self] in
-                // 每条出口都必须 leave 一次，否则被取消的文件会把整批吊住。
+            DispatchQueue.global(qos: .userInitiated).async { [self] in
                 defer { group.leave() }
-                // 暂停中或 CPU 名额已满就堵在这里；拿到名额的一刻闸门一定是开着的。
-                // 已经在跑的文件会正常完成（不 kill、不 SIGSTOP）。
-                // 被取消的文件在闸门**之前**就自己退出，不需要谁替它开门。
-                switch gate.acquireOutcome(cancelled: { [self] in self.isCancelled(path) }) {
-                case .cancelled:
-                    // 用户明确把它移出了队列：它本轮到此为止，不回到 pending。
-                    DispatchQueue.main.async { self.updateStatus(path, itemID: itemID, revision: revision, sessionID: sessionID, .removed) }
-                    return
-                case .stopped:
-                    // 整批被停止，这一轮没轮到它：**什么都不做**，队列里它仍然是 pending，
-                    // 下一次「继续压缩」自然带上。绝不写成 .cancelled（那就是"再也压不动"）。
-                    return
-                case .acquired(let permit):
-                    defer { permit.release() }
-                    // 「压缩中」只在真正开工这一刻标记，等待中的行保持「等待」。
-                    DispatchQueue.main.async {
-                        if self.queueRevision == revision, self.activeSessionID == sessionID,
-                           let idx = self.items.firstIndex(where: { $0.id == itemID && $0.path == path }),
-                           self.items[idx].status == .pending {
-                            self.items[idx].status = .running
+                while let target = worklist.takeNext() {
+                    // Estimate one file only after a worker has pulled it. ImageIO reads
+                    // dimensions from the header and does not decode/store queue pixels.
+                    let memoryCost = ImageMemoryBudget.estimate(fileAtPath: target.path)
+                    switch gate.acquireOutcome(memoryCost: memoryCost, cancelled: { [self] in self.isCancelled(target.path) }) {
+                    case .cancelled:
+                        // 移除动作已同步更新 UI 行状态，这里只需丢弃此任务。
+                        continue
+                    case .stopped:
+                        // 未开工任务保持 pending，下一轮会从队列重新生成工作清单。
+                        return
+                    case .acquired(let permit):
+                        // 「压缩中」只在真正开工这一刻标记，等待中的行保持「等待」。
+                        DispatchQueue.main.async {
+                            if self.queueRevision == revision, self.activeSessionID == sessionID,
+                               let index = self.itemIndexByID[target.id],
+                               self.items[index].path == target.path,
+                               self.items[index].status == .pending {
+                                self.items[index].status = .running
+                            }
                         }
+                        let result = autoreleasepool {
+                            Self.compressOneStatic(
+                                path: target.path, options: opts, useSmart: useSmart,
+                                history: store, transactions: journal, retentionDays: retention
+                            )
+                        }
+                        DispatchQueue.main.async {
+                            self.applyResult(target, revision: revision, sessionID: sessionID, result: result)
+                        }
+                        permit.release()
                     }
-                    let result = Self.compressOneStatic(
-                        path: path, options: opts, useSmart: useSmart,
-                        history: store, transactions: journal, retentionDays: retention
-                    )
-                    DispatchQueue.main.async { self.applyResult(path, itemID: itemID, revision: revision, sessionID: sessionID, result: result) }
                 }
             }
         }
@@ -893,7 +941,7 @@ final class AppState: ObservableObject {
 
     func cancelFile(path: String) {
         cancelBox.insert(path)
-        if let idx = items.firstIndex(where: { $0.path == path }),
+        if let idx = itemIndexByPath[path],
            items[idx].status == .running || items[idx].status == .pending {
             items[idx].status = .removed
         }
@@ -904,18 +952,12 @@ final class AppState: ObservableObject {
         cancelBox.contains(path)
     }
 
-    private func updateStatus(_ path: String, itemID: UUID, revision: Int, sessionID: UUID, _ status: QueueStatus) {
-        guard queueRevision == revision, activeSessionID == sessionID else { return }
-        if let idx = items.firstIndex(where: { $0.id == itemID && $0.path == path && $0.status == .pending }) {
-            items[idx].status = status
-        }
-    }
-
-    private func applyResult(_ path: String, itemID: UUID, revision: Int, sessionID: UUID, result: CompressResult) {
+    private func applyResult(_ target: CompressionWorkItem, revision: Int, sessionID: UUID, result: CompressResult) {
         guard queueRevision == revision, activeSessionID == sessionID,
-              let idx = items.firstIndex(where: { $0.id == itemID && $0.path == path && $0.status == .running }) else { return }
-        items[idx].result = result
-        items[idx].status = result.success ? .done : .failed
+              let index = itemIndexByID[target.id], items[index].path == target.path,
+              items[index].status == .running else { return }
+        items[index].result = result
+        items[index].status = result.success ? .done : .failed
     }
 
     // MARK: - Single compress
