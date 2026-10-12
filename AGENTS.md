@@ -151,7 +151,7 @@ bash scripts/test_swift_history.sh             # Swift 线历史·备份·暂停
 - ✅ 大队列内存调度与估算内存预算（三条线一致，v2.5.57）：Tauri 队列仅保留视口与缓冲行，元数据读取每批最多 256 个路径，进度刷新合并；Rust 及时收割有界任务，Swift 固定 worker 拉取任务并逐图 `autoreleasepool`。三线以相同公式估算图片工作集，在 CPU 闸门内同时预留内存预算（见「大队列与估算内存预算」）。
 - ✅ Swift 原生线（`swift/`）与两条 Tauri 线功能对齐，历史/备份/覆盖事务/暂停语义一致，但存储根目录独立且少一层 `history/`（`~/Library/Application Support/com.misswell.octoshrink.swift`），三条线互不读写对方的 history.json
 - ✅ 压缩设置有三线回归守卫：默认质量、Smart Mode 与输出模式保持一致；Swift 与 Direct 共用 CLI 编码器时逐项核对参数，App Store 进程内编码器映射同一质量档位。改动这些设置、编码器或 fallback 时必须同步更新 `tests/compression-parity.cjs`，由前端测试、全量构建和 Release 门禁运行
-- ✅ App Store：**线上 2.5.56**（版本记录 `a952dcd8`，READY_FOR_SALE + phased release；submission `bc46677a` 2026-10-01 提交、review COMPLETE），已追上 Direct。上一份草稿 2.5.24 曾因新构建没设 `usesNonExemptEncryption` 在 ASC 里躺了一个月没法提交（`asc validate` 会报 `build.encryption.missing`）—— 不是有人故意压着不发，流程见 §6.5。本次 v2.5.57 随发版同步构建提审。
+- ✅ App Store：线上 **2.5.56**（版本记录 `a952dcd8`，READY_FOR_SALE + phased release；submission `bc46677a` 2026-10-01 提交、review COMPLETE）。**v2.5.57 已于 2026-10-12 提交审核**（版本 `81fcec8d`，build `328dc021`，submission `d1a29b97`，WAITING_FOR_REVIEW，AFTER_APPROVAL + 7 天分阶段发布）。当日重建了整条 App Store 签名链（installer 证书 `LPS45AT6A9` + 专用签名钥匙串 + profile `KPC6PUTLM9`；首传曾因旧 profile 绑死证书报 90284）—— 恢复步骤见 §11 与 `~/.appstoreconnect/octoshrink-installer/README.md`。上一份草稿 2.5.24 曾因新构建没设 `usesNonExemptEncryption` 在 ASC 里躺了一个月没法提交（`asc validate` 会报 `build.encryption.missing`）—— 不是有人故意压着不发，流程见 §6.5。
 - ⬜ 引擎迁移后续：JXL（未来接入 jpegxl-sys 后可恢复 UI 选项）；GIF 减色优化（未来可用 imagequant 逐帧量化，当前有帧间闪烁风险暂不做）
 
 ### 8. 每次全量编译必须同时构建两条 Tauri 产物线和 Swift 原生版（强制）
@@ -648,16 +648,17 @@ asc review submit --app $APP --version-id <版本ID> --build <构建ID> --confir
 
 **何时需要 profile**：仅当要 TestFlight 内测分发给测试者时才嵌入。过审上架直接上传 + 提交审核即可，不必等 profile。**但从 2026-09-24 起 `build_appstore.sh` 默认就嵌**（profile 在 `src-tauri/OctoShrink_AppStore.provisionprofile`，被 .gitignore 忽略）：这样每次投递都干净、不会再收到 ITMS-90889 那封信，TestFlight 也随时可用。文件不存在时脚本只警告不报错 —— 没有它照样能提交审核。
 
-profile 重建（会过期；`L4SC3D834Q` 是本机签名用的那张 Apple Distribution 证书，序列号 `49C2…` 与钥匙串里的身份一一对应，**别绑错**）：
+profile 重建（会过期；**`--certificate` 必须是当次实际签名用的那张 Apple Distribution**，绑错直接上传失败，见下）：
 
 ```bash
+security find-identity -v | grep "Apple Distribution"   # 先查本机真正带私钥的那张（id 在 asc certificates list 里对照）
 asc profiles create --name "OctoShrink macOS AppStore" --profile-type MAC_APP_STORE \
-  --bundle 9G3X34F4VY --certificate L4SC3D834Q     # 9G3X34F4VY = bundle id 的**资源 id**，不是 com.misswell... 字符串
+  --bundle 9G3X34F4VY --certificate <CERT_ID>     # 9G3X34F4VY = bundle id 的**资源 id**，不是 com.misswell... 字符串
 asc profiles download --id <PROFILE_ID> --output src-tauri/OctoShrink_AppStore.provisionprofile
 asc profiles inspect --path src-tauri/OctoShrink_AppStore.provisionprofile   # 核对 appId/证书再签
 ```
 
-两处易错：① `--bundle` 要的是 bundle id 的**资源 id**（`asc bundle-ids list` 查），传 bundle 标识符字符串会报 `There is no App ID with ID ... on this team`；② profile 里必须包含**实际签名的证书**，绑到另一张 Apple Distribution 上会在安装/TestFlight 阶段验签失败。当前 profile id：`H5A5VPGK86`（2026-09-24 建，MAC_APP_STORE，ACTIVE）。
+三处易错：① `--bundle` 要的是 bundle id 的**资源 id**（`asc bundle-ids list` 查），传 bundle 标识符字符串会报 `There is no App ID with ID ... on this team`；② profile 里必须包含**实际签名的证书** —— 对不上 ASC 拒收，报 **ITMS/asset error 90284**（"must be signed with the certificate that is contained in the provisioning profile"）。⚠️ **90284 不是签名坏了，是 profile 与证书不同步**：2026-10-12 本机钥匙串的 Apple Distribution 实际是 `J4Z29X3RMS`（序列号 `7A60…`），而旧 profile 还绑着早就丢了私钥的 `L4SC3D834Q`（`49C2…`），拿旧 profile 签的 PKG 上传必 90284 —— 修法是出新 profile 后**重跑 `build_appstore.sh` 重签**（换 profile 文件不重签没用，证书签在包上、profile 嵌在包里，两者必须配套）；③ `asc profiles download` 目标路径已存在会报 `output file already exists` 直接拒绝（不会覆盖）—— 先 `rm src-tauri/OctoShrink_AppStore.provisionprofile` 再下载（.gitignore 忽略，可随时重下）。**当前 profile id：`KPC6PUTLM9`**（2026-10-12 建，uuid `8a3821cb-b353-4809-8589-c96f86530cac`，绑 `J4Z29X3RMS`；旧 `H5A5VPGK86` 绑死证书，已弃用）。上传前核对包内 profile：`security cms -D -i <app>/Contents/embedded.provisionprofile | plutil -extract UUID raw -o - -` 应得 `8a3821cb-b353-4809-8589-c96f86530cac`。
 
 ⚠️ 别为 `._` 文件折腾：这台机器给每个新建文件打 `com.apple.provenance`（`xattr -d/-c` 都清不掉），productbuild 因此会在载荷里生成 19 个配对的 AppleDouble `._xxx` 条目（主程序、CodeResources 都有）。2.4.3 就是这么上架的，属既有现象。
 
@@ -681,15 +682,17 @@ asc profiles inspect --path src-tauri/OctoShrink_AppStore.provisionprofile   # �
 | 凭据 | 存储位置 | 使用方式 | 是否需要用户输入 |
 |------|---------|---------|:---:|
 | Apple 公证凭据 | 钥匙串 profile `octoshrink-notary`（**2026-09-24 复测可用**：`notarytool history --keychain-profile octoshrink-notary` 返回提交历史。⚠️ 用 `security find-generic-password -s` 探会假报不存在） | `xcrun notarytool ... --keychain-profile octoshrink-notary` | ❌ 自动（本机已就绪）；CI 用 Secrets，与本机钥匙串无关 |
-| Developer ID 签名身份 | 钥匙串（自动检测） | `security find-identity -v -p codesigning` 自动取 `Developer ID Application: Guofeng Liu (U8U443D7ZL)` | ❌ 自动检测 |
-| Apple Distribution 证书 | 钥匙串 | App Store 版签名，`scripts/build_appstore.sh` 自动引用 | ❌ 自动检测 |
-| 3rd Party Mac Developer Installer | 钥匙串 | `productbuild` 打 PKG，`scripts/build_appstore.sh` 自动引用 | ❌ 自动检测 |
+| Developer ID 签名身份 | ⚠️ **2026-10-12 实测本机钥匙串已无此身份**（`security find-identity -v` 只有 Apple Development / Apple Distribution / 3rd Party Mac Developer Installer 三条），常见位置也无 p12 备份 → 本机 `scripts/notarize.sh` 会在签名身份自检处按设计停下；**发版走 CI**（`APPLE_DEVELOPER_ID_P12_*` Secrets 自带 p12，不受影响）。要恢复本机签名：从有私钥的机器导出 p12 → `security import` | `security find-identity -v -p codesigning` 自动取 `Developer ID Application: Guofeng Liu (U8U443D7ZL)` | ❌ 自动检测 |
+| Apple Distribution 证书 | 钥匙串 = **`J4Z29X3RMS`**（序列号 `7A60…`，2027-09-06 到期，identity hash `1F09B93C`）；portal 里的 `L4SC3D834Q`（`49C2…`，2027-07-20 到期）私钥已丢、是死身份，**重建 profile 时别绑它** | App Store 版签名，`scripts/build_appstore.sh` 自动按名字引用（本机同名只此一张带私钥，不会拿错） | ❌ 自动检测 |
+| 3rd Party Mac Developer Installer | 2026-10-12 重建：**`LPS45AT6A9`**（序列号 `53F9B467…`，2027-10-12 到期）在专用钥匙串 `~/Library/Keychains/octoshrink-signing.keychain-db`（已加入用户搜索列表；密码在 `~/.appstoreconnect/octoshrink-installer/keychain-password.txt`）；私钥与 p12 备份同目录（`installer.p12` + `p12-password.txt`，0600）。旧 `DRQNZ2FTK4` 私钥已丢。**重启/重新登录后**先 `security unlock-keychain -p "$(cat ~/.appstoreconnect/octoshrink-installer/keychain-password.txt)" ~/Library/Keychains/octoshrink-signing.keychain-db` 再跑 productbuild（钥匙串锁着会弹 GUI 密码框，headless 必卡死）。为什么单开一个钥匙串：login 钥匙串密码未知、partition-list 没法非交互维护，productbuild 一律触发 SecurityAgent 弹窗 | `productbuild` 打 PKG，`scripts/build_appstore.sh` 自动引用 | ❌ 自动检测 |
 | Tauri updater 私钥 | `src-tauri/.tauri/octoshrink-updater.key` | `cargo tauri signer sign`（设置 `TAURI_SIGNING_PRIVATE_KEY` 环境变量） | ❌ 本地文件 |
 | Tauri updater 密码 | `src-tauri/.tauri/octoshrink-updater.password` | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 环境变量 | ❌ 本地文件 |
 | GitHub Secrets（Developer ID） | `APPLE_DEVELOPER_ID_P12_BASE64` / `APPLE_DEVELOPER_ID_P12_PASSWORD` | CI 导入临时钥匙串，仅包含 Developer ID Application 身份 | ❌ 已配置 |
 | GitHub Secrets（Apple 公证） | `APPLE_ID` / `APPLE_TEAM_ID` / `APPLE_APP_SPECIFIC_PASSWORD` | CI 用 `notarytool` 公证三个 macOS DMG | ❌ 已配置 |
 | GitHub Secrets（更新签名） | `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | CI 签 Universal 在线更新包 | ❌ 已配置 |
 | GitHub 推送 | SSH key（`git@github.com:misswell/octo-shrink.git`） | `git push origin master` | ❌ SSH 自动认证 |
+
+> 📌 **2026-10-12 App Store 签名链重建记录**（下次遇到 90284 / productbuild 弹窗先读这段）：login 钥匙串里的旧 installer 私钥（`DRQNZ2FTK4`）与旧 Apple Distribution 私钥（`L4SC3D834Q`）都已丢失（证书还在 portal、keychain 里查不到可用私钥），而 keychain 里可签名的 Apple Distribution 实际是另一张 `J4Z29X3RMS` —— 旧 profile 绑的还是死证书，于是上传 90284。当次处置：① 用 `asc certificates create --generate-csr` 重建 installer 证书 `LPS45AT6A9`，私钥/CSR/cert/p12 全部备份到 `~/.appstoreconnect/octoshrink-installer/`（p12 用 `openssl pkcs12 -export -legacy` 导出，OpenSSL 3 新版 PBE 老 `security import` 读不了）；② 新建专用签名钥匙串 `octoshrink-signing.keychain-db`（`security import -A -T /usr/bin/codesign -T /usr/bin/productbuild` + `set-key-partition-list -S apple-tool:,apple:,codesign:` + 加进 `security list-keychains -d user`），绕开 login 钥匙串的 GUI 授权死结；③ 新建 profile `KPC6PUTLM9` 绑 `J4Z29X3RMS` 重签重传。恢复一条链的完整命令见 `~/.appstoreconnect/octoshrink-installer/README.md`。**Apple Distribution（J4Z29X3RMS）的私钥目前仍只存在于 login 钥匙串、没有 p12 备份** —— 有条件时在图形界面导出备份（`security export` 会弹 GUI 授权框、headless 卡死，实测），否则丢了要重建证书 + 全部 profile。
 
 #### 发布新版本完整流程（无密码）
 
